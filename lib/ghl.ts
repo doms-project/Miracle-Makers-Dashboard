@@ -21,8 +21,11 @@ export class GhlError extends Error {
 }
 
 function requireEnv(): { token: string; locationId: string } {
-  const token = process.env.GHL_PIT;
-  const locationId = process.env.GHL_LOCATION_ID;
+  // Trim to defend against a trailing space / newline pasted into the env var,
+  // which GHL rejects as "invalid jwt". Also strip an accidental "Bearer "
+  // prefix baked into the value so the scheme is controlled in one place below.
+  const token = process.env.GHL_PIT?.trim().replace(/^Bearer\s+/i, "");
+  const locationId = process.env.GHL_LOCATION_ID?.trim();
   if (!token) {
     throw new GhlError(
       "Server is not configured: GHL_PIT is missing.",
@@ -42,9 +45,13 @@ function requireEnv(): { token: string; locationId: string } {
 
 function headers(): HeadersInit {
   const { token } = requireEnv();
+  // By default the GHL Private Integration Token is sent raw, NO "Bearer"
+  // prefix (a GHL quirk). If GHL rejects it with "invalid jwt", some v2
+  // endpoints expect a scheme instead — set GHL_AUTH_SCHEME=Bearer to prefix
+  // it, without touching code.
+  const scheme = process.env.GHL_AUTH_SCHEME?.trim();
   return {
-    // GHL Private Integration Token quirk: raw token, NO "Bearer" prefix.
-    Authorization: token,
+    Authorization: scheme ? `${scheme} ${token}` : token,
     Version: process.env.GHL_API_VERSION || "2021-07-28",
     Accept: "application/json",
   };
@@ -69,10 +76,22 @@ async function ghlGet<T>(path: string): Promise<T> {
     } catch {
       /* ignore */
     }
+    detail = detail.slice(0, 500);
+    if (res.status === 401) {
+      const scheme = process.env.GHL_AUTH_SCHEME?.trim();
+      detail =
+        `GHL rejected the token (auth scheme currently: ${
+          scheme ? `"${scheme} <token>"` : "raw token, no prefix"
+        }). ` +
+        `Check for: a trailing space/newline in GHL_PIT, the wrong token/sub-account, ` +
+        `or that the Private Integration has the "opportunities" scope. If a raw token ` +
+        `fails, try setting GHL_AUTH_SCHEME=Bearer (or vice-versa). ` +
+        `GHL said: ${detail}`;
+    }
     throw new GhlError(
       `GoHighLevel returned ${res.status} for ${new URL(url).pathname}.`,
       res.status,
-      detail.slice(0, 500),
+      detail,
     );
   }
   return (await res.json()) as T;
