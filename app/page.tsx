@@ -7,6 +7,7 @@ import type {
   ApiError,
   Note,
 } from "@/lib/types";
+import { useGhlSession } from "@/lib/useGhlSession";
 
 const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
 
@@ -66,6 +67,11 @@ const BlockPill = ({ b }: { b: string }) => (
 );
 
 export default function Dashboard() {
+  // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
+  // (or "none" when not embedded / not configured). Filtering is NOT wired yet
+  // — this proves the handshake returns a real user before the filter is built.
+  const sso = useGhlSession();
+
   const [data, setData] = useState<OpportunityRecord[]>([]);
   const [pipelineName, setPipelineName] = useState<string>("OLTL Enrollments");
   const [loading, setLoading] = useState(true);
@@ -221,12 +227,21 @@ export default function Dashboard() {
             </small>
           </div>
           <div className="spacer" />
-          <div className="viewas" title="Per-user / per-office filtering arrives in Phase 3 (SSO).">
-            <label htmlFor="who">Viewing as</label>
-            <select id="who" disabled defaultValue="admin">
-              <option value="admin">Admin — all offices</option>
-            </select>
-            <span className="soon">Phase 3</span>
+          <div
+            className="viewas"
+            title="Signed-in GHL user (from the SSO handshake). Role-based filtering is the next step."
+          >
+            <label>Signed in</label>
+            {sso.status === "loading" ? (
+              <span>Checking session…</span>
+            ) : sso.status === "ready" ? (
+              <span>
+                {sso.session.userName || sso.session.userId}
+                {sso.session.role ? ` · ${sso.session.role}` : ""}
+              </span>
+            ) : (
+              <span title={sso.reason}>No SSO session</span>
+            )}
           </div>
           <div className="seg">
             <button
@@ -282,9 +297,23 @@ export default function Dashboard() {
         </div>
 
         <div className="scope admin">
-          <span className="tag">Admin</span>{" "}
-          <b>All data.</b> Every record in the {pipelineName} pipeline (
-          {data.length}). Per-user and per-office filtering arrives in Phase 3.
+          <span className="tag">All data</span>{" "}
+          <b>Showing every record</b> in the {pipelineName} pipeline (
+          {data.length}).{" "}
+          {sso.status === "ready" ? (
+            <>
+              Signed in as <b>{sso.session.userName || sso.session.userId}</b>
+              {sso.session.role ? ` (role: ${sso.session.role})` : ""}
+              {sso.session.activeLocation
+                ? ` · location ${sso.session.activeLocation}`
+                : ""}
+              . Role-based filtering is not applied yet — that is the next step.
+            </>
+          ) : sso.status === "loading" ? (
+            <>Checking the GHL session…</>
+          ) : (
+            <>No GHL SSO session detected — admin/testing view.</>
+          )}
         </div>
 
         <div className="toolbar">
