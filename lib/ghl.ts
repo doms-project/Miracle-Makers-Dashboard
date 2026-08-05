@@ -43,13 +43,21 @@ function requireEnv(): { token: string; locationId: string } {
   return { token, locationId };
 }
 
+// The effective auth scheme for the Authorization header. GHL's v2
+// (LeadConnector) endpoints expect the Private Integration Token as a Bearer
+// credential — verified against /opportunities/pipelines (raw -> 401,
+// Bearer -> 200). Default to "Bearer"; override with GHL_AUTH_SCHEME for a
+// different scheme, or set it to "none"/"raw" to send the bare token.
+function effectiveScheme(): string {
+  const override = process.env.GHL_AUTH_SCHEME?.trim();
+  if (override === undefined || override === "") return "Bearer";
+  if (/^(none|raw)$/i.test(override)) return "";
+  return override;
+}
+
 function headers(): HeadersInit {
   const { token } = requireEnv();
-  // By default the GHL Private Integration Token is sent raw, NO "Bearer"
-  // prefix (a GHL quirk). If GHL rejects it with "invalid jwt", some v2
-  // endpoints expect a scheme instead — set GHL_AUTH_SCHEME=Bearer to prefix
-  // it, without touching code.
-  const scheme = process.env.GHL_AUTH_SCHEME?.trim();
+  const scheme = effectiveScheme();
   return {
     Authorization: scheme ? `${scheme} ${token}` : token,
     Version: process.env.GHL_API_VERSION || "2021-07-28",
@@ -78,14 +86,14 @@ async function ghlGet<T>(path: string): Promise<T> {
     }
     detail = detail.slice(0, 500);
     if (res.status === 401) {
-      const scheme = process.env.GHL_AUTH_SCHEME?.trim();
+      const scheme = effectiveScheme();
       detail =
         `GHL rejected the token (auth scheme currently: ${
           scheme ? `"${scheme} <token>"` : "raw token, no prefix"
         }). ` +
         `Check for: a trailing space/newline in GHL_PIT, the wrong token/sub-account, ` +
-        `or that the Private Integration has the "opportunities" scope. If a raw token ` +
-        `fails, try setting GHL_AUTH_SCHEME=Bearer (or vice-versa). ` +
+        `or that the Private Integration has the "opportunities" scope. Flip the scheme ` +
+        `with GHL_AUTH_SCHEME (Bearer, or none/raw) if needed. ` +
         `GHL said: ${detail}`;
     }
     throw new GhlError(
