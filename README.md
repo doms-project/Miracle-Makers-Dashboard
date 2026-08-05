@@ -29,10 +29,11 @@ Variables**) and, for local dev, in a `.env.local` file. See `.env.example`.
 
 | Variable           | Required | Description                                                                                                  |
 | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------ |
-| `GHL_PIT`          | yes      | GHL Private Integration Token. Sent as a raw `Authorization` header — **no `Bearer` prefix** (a GHL quirk).   |
+| `GHL_PIT`          | yes      | GHL Private Integration Token (`pit-...`). Sent as `Authorization: Bearer <token>` (verified against the v2 API). |
 | `GHL_LOCATION_ID`  | yes      | GHL sub-account (location) ID. Defaults to `YVPhIAECw9q1M9Jw6A8L` in `.env.example`.                          |
 | `OLTL_PIPELINE_ID` | no       | The OLTL Enrollments pipeline ID. **If blank, the route finds the pipeline by name** (matches `/oltl/i`).     |
 | `GHL_API_VERSION`  | no       | GHL API version header. Defaults to `2021-07-28`.                                                             |
+| `GHL_AUTH_SCHEME`  | no       | Auth scheme for the token. Defaults to `Bearer`. Set to `none`/`raw` for a bare token, or another scheme.     |
 
 ### About the OLTL pipeline ID and custom fields
 
