@@ -1,7 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  closestCorners,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import type {
   OpportunityRecord,
   OpportunitiesResponse,
@@ -113,6 +124,55 @@ const asDate = (v: unknown): string => {
   const d = new Date(s);
   return isNaN(d.getTime()) ? s.slice(0, 10) : d.toISOString().slice(0, 10);
 };
+
+// ---- Sort / group dimensions (dynamic + permission-aware) ----
+type DimKind =
+  | "single"
+  | "multi"
+  | "text"
+  | "date"
+  | "number"
+  | "stage"
+  | "owner";
+interface Dim {
+  key: string; // "native:stage" | "native:owner" | "cf:<fieldId>" | column key
+  label: string;
+  kind: DimKind;
+  sortable: boolean;
+  groupable: boolean;
+}
+
+// A record's value for a dimension, as a display string (used for grouping and
+// string sorts). Native + custom-field + existing-column keys all resolve here.
+function recordStr(r: OpportunityRecord, key: string): string {
+  if (key.startsWith("cf:")) return asStr(r.cf[key.slice(3)]);
+  switch (key) {
+    case "native:stage":
+    case "stage":
+      return r.stage;
+    case "native:owner":
+    case "rep":
+      return r.rep;
+    case "client":
+      return `${r.first} ${r.last}`.trim();
+    case "harmony":
+      return r.harmony;
+    case "office":
+      return r.office;
+    case "county":
+      return r.county;
+    case "block":
+      return r.block;
+    case "src":
+      return r.src;
+    case "cm":
+      return r.cm;
+    case "checked":
+      return r.checked ? "Checked" : "";
+    default:
+      return "";
+  }
+}
 
 // Save-on-blur text / number / date input (local state so typing is smooth).
 function TextControl({
@@ -274,6 +334,87 @@ function FieldControl({
   );
 }
 
+// ---- Board (Kanban) drag-and-drop ----
+function BoardColumn({
+  stage,
+  count,
+  children,
+}: {
+  stage: string;
+  count: number;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `col:${stage}` });
+  return (
+    <div ref={setNodeRef} className={`col${isOver ? " dropover" : ""}`}>
+      <div className="colhead">
+        <span>{stage}</span>
+        <span className="pill">{count}</span>
+      </div>
+      <div className="colbody">{children}</div>
+    </div>
+  );
+}
+
+function BoardCard({
+  r,
+  canDrag,
+  following,
+  saving,
+  onOpen,
+}: {
+  r: OpportunityRecord;
+  canDrag: boolean;
+  following: boolean;
+  saving?: "saving" | "error";
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({ id: r.id, disabled: !canDrag });
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        zIndex: 50,
+      }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`card${isDragging ? " dragging" : ""}${
+        canDrag ? " draggable" : " nodrag"
+      }`}
+      onClick={onOpen}
+      {...(canDrag ? listeners : {})}
+      {...attributes}
+    >
+      <div className="cn">
+        {`${r.first} ${r.last}`.trim() || "—"}
+        {following ? (
+          <span
+            className="follow-tag"
+            title="You follow this record (you're not the owner)"
+          >
+            Following
+          </span>
+        ) : null}
+      </div>
+      <div className="cm">
+        {r.office || "—"} · {r.rep}
+      </div>
+      <div className="cf">
+        <BlockPill b={r.block} />
+        {r.src ? <span className="pill src">{r.src}</span> : null}
+      </div>
+      {saving === "saving" ? (
+        <div className="savemsg">Saving…</div>
+      ) : saving === "error" ? (
+        <div className="savemsg err">✗ didn&apos;t save — reverted</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
   // (or "none" when not embedded / not configured). Filtering is NOT wired yet
@@ -296,8 +437,9 @@ export default function Dashboard() {
   const [stage, setStage] = useState<string>("all");
   const [office, setOffice] = useState<string>("all"); // office filter (client req)
   const [q, setQ] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [groupKey, setGroupKey] = useState<string | null>(null);
   const [view, setView] = useState<"list" | "board">("list");
   const [selId, setSelId] = useState<string | null>(null);
   // Persistent notes (stored on the contact, scoped to the opportunity).
@@ -407,6 +549,26 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selId, sso.status]);
 
+  // Admin (or the open no-SSO setup view) sees everything; a restricted signed-in
+  // user sees only their assigned records. ROLE-ONLY, mirroring the server rule
+  // (GHL `type` is account context, not permission).
+  const isAdminViewer =
+    sso.status === "none" ||
+    (sso.status === "ready" && sso.session.role === "admin");
+
+  // Current viewer's user id (when signed in) — used to show why a record is
+  // visible: "Following" when the viewer is a follower but not the owner.
+  const viewerId = sso.status === "ready" ? sso.session.userId : null;
+  const followsNotOwns = (r: OpportunityRecord) =>
+    !!viewerId && r.ownerId !== viewerId && r.followerIds.includes(viewerId);
+  // Same permission rule as the edit panel / save route: admins edit all; others
+  // only records they own or follow. Used to gate Kanban dragging client-side
+  // (the save route's 403 is the server-side backstop).
+  const canEdit = (r: OpportunityRecord) =>
+    isAdminViewer ||
+    (!!viewerId &&
+      (r.ownerId === viewerId || r.followerIds.includes(viewerId)));
+
   // Stage list derived from data, preferred order first.
   const stages = useMemo(() => {
     const present: string[] = [];
@@ -443,26 +605,120 @@ export default function Dashboard() {
     );
   }, [data, stage, office, q]);
 
-  // Sorted view for the list (client-requested: sortable by name/stage/office…).
+  const stageIndex = useCallback(
+    (name: string) => {
+      const i = stages.indexOf(name);
+      return i === -1 ? 999 : i;
+    },
+    [stages],
+  );
+
+  // All sort/group dimensions, derived from the field definitions + natives.
+  // Owner is offered only to admins (for a rep it's a constant, degenerate dim).
+  const dimensions = useMemo<Dim[]>(() => {
+    const out: Dim[] = [
+      { key: "native:stage", label: "Stage", kind: "stage", sortable: true, groupable: true },
+    ];
+    if (isAdminViewer)
+      out.push({ key: "native:owner", label: "Sales Rep (Owner)", kind: "owner", sortable: true, groupable: true });
+    for (const def of fieldDefs) {
+      const t = (def.dataType || "").toUpperCase();
+      let kind: DimKind = "text";
+      let groupable = false;
+      if (t === "SINGLE_OPTIONS") {
+        kind = "single";
+        groupable = true;
+      } else if (t === "MULTIPLE_OPTIONS") {
+        kind = "multi";
+        groupable = true;
+      } else if (t === "DATE") {
+        kind = "date";
+      } else if (t === "MONETORY" || t === "NUMERICAL" || t === "NUMBER") {
+        kind = "number";
+      }
+      out.push({ key: `cf:${def.id}`, label: def.name, kind, sortable: true, groupable });
+    }
+    return out;
+  }, [fieldDefs, isAdminViewer]);
+
+  const dimByKey = useMemo(
+    () => new Map(dimensions.map((d) => [d.key, d])),
+    [dimensions],
+  );
+
+  // Only offer a dimension when it produces meaningful variation across the
+  // records THIS viewer can see (data = the server-filtered set). Constant
+  // fields (e.g. Owner for a rep) are hidden; all-unique fields aren't groupable.
+  const distinctCount = useCallback(
+    (key: string) => {
+      const s = new Set<string>();
+      for (const r of data) s.add(recordStr(r, key) || "—");
+      return s.size;
+    },
+    [data],
+  );
+  const sortDims = useMemo(
+    () => dimensions.filter((d) => d.sortable && distinctCount(d.key) >= 2),
+    [dimensions, distinctCount],
+  );
+  const groupDims = useMemo(
+    () =>
+      dimensions.filter((d) => {
+        if (!d.groupable) return false;
+        const n = distinctCount(d.key);
+        return n >= 2 && n < data.length; // not constant, not all-unique
+      }),
+    [dimensions, distinctCount, data.length],
+  );
+
+  const cmpBy = useCallback(
+    (a: OpportunityRecord, b: OpportunityRecord, key: string): number => {
+      if (key === "native:stage" || key === "stage")
+        return stageIndex(a.stage) - stageIndex(b.stage);
+      if (key === "checked") return (a.checked ? 1 : 0) - (b.checked ? 1 : 0);
+      const kind = dimByKey.get(key)?.kind;
+      if (kind === "date")
+        return (
+          (Date.parse(recordStr(a, key)) || 0) -
+          (Date.parse(recordStr(b, key)) || 0)
+        );
+      if (kind === "number")
+        return (
+          (parseFloat(recordStr(a, key)) || 0) -
+          (parseFloat(recordStr(b, key)) || 0)
+        );
+      return recordStr(a, key).localeCompare(recordStr(b, key));
+    },
+    [dimByKey, stageIndex],
+  );
+
+  // Filtered + sorted list.
   const visible = useMemo(() => {
     if (!sortKey) return filtered;
     const dir = sortDir === "asc" ? 1 : -1;
-    const stageIndex = (s: string) => {
-      const i = stages.indexOf(s);
-      return i === -1 ? 999 : i;
-    };
-    const cmp = (a: OpportunityRecord, b: OpportunityRecord): number => {
-      if (sortKey === "client")
-        return clientName(a).localeCompare(clientName(b));
-      if (sortKey === "stage") return stageIndex(a.stage) - stageIndex(b.stage);
-      if (sortKey === "checked")
-        return (a.checked ? 1 : 0) - (b.checked ? 1 : 0);
-      return String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? ""));
-    };
-    return [...filtered].sort((a, b) => dir * cmp(a, b));
-  }, [filtered, sortKey, sortDir, stages]);
+    return [...filtered].sort((a, b) => dir * cmpBy(a, b, sortKey));
+  }, [filtered, sortKey, sortDir, cmpBy]);
 
-  const toggleSort = (key: SortKey) => {
+  // Group the (already sorted) list by the chosen dimension.
+  const grouped = useMemo(() => {
+    if (!groupKey) return null;
+    const m = new Map<string, OpportunityRecord[]>();
+    for (const r of visible) {
+      const v = recordStr(r, groupKey) || "—";
+      const arr = m.get(v);
+      if (arr) arr.push(r);
+      else m.set(v, [r]);
+    }
+    const g = [...m.entries()].map(([value, rows]) => ({ value, rows }));
+    if (groupKey === "native:stage" || groupKey === "stage")
+      g.sort((a, b) => stageIndex(a.value) - stageIndex(b.value));
+    else g.sort((a, b) => b.rows.length - a.rows.length || a.value.localeCompare(b.value));
+    return g;
+  }, [visible, groupKey, stageIndex]);
+
+  const groupLabel = groupKey ? dimByKey.get(groupKey)?.label || "" : "";
+
+  const toggleSort = (key: string) => {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
@@ -470,6 +726,61 @@ export default function Dashboard() {
       setSortDir("asc");
     }
   };
+
+  const renderRow = (r: OpportunityRecord) => (
+    <tr
+      key={r.id}
+      className={r.id === selId ? "sel" : ""}
+      onClick={() => setSelId(r.id)}
+    >
+      <td className="strong">
+        {clientName(r) || "—"}
+        {followsNotOwns(r) ? (
+          <span
+            className="follow-tag"
+            title="You follow this record (you're not the owner)"
+          >
+            Following
+          </span>
+        ) : null}
+      </td>
+      <td>
+        {r.stage ? (
+          <span className="pill stage">{r.stage}</span>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td className={r.harmony ? "" : "muted"}>{r.harmony || "—"}</td>
+      <td>
+        {r.office ? (
+          <span className="pill office">{r.office}</span>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td>{r.county || <span className="muted">—</span>}</td>
+      <td>
+        <BlockPill b={r.block} />
+      </td>
+      <td>
+        {r.src ? (
+          <span className="pill src">{r.src}</span>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td>{r.rep}</td>
+      <td>{r.cm}</td>
+      <td>
+        {r.checked ? (
+          <span className="tick">✓</span>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+    </tr>
+  );
 
   const boardVisible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -610,6 +921,31 @@ export default function Dashboard() {
       (r) => ({ ...r, cf: { ...r.cf, [def.id]: value } }),
     );
 
+  // Kanban drag: 6px activation so a click still opens the record; keyboard too.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  );
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over) return;
+    const overId = String(over.id);
+    if (!overId.startsWith("col:")) return;
+    const targetStage = overId.slice(4);
+    const rec = data.find((x) => x.id === active.id);
+    if (!rec || rec.stage === targetStage || !canEdit(rec)) return;
+    const target = pipelineStages.find((s) => s.name === targetStage);
+    if (!target) return;
+    // Reuse the proven save path: optimistic move + PATCH (pipelineStageId) +
+    // revert-on-error. Save by stage ID, never name.
+    saveField(
+      rec,
+      "stage",
+      { stageId: target.id },
+      (r) => ({ ...r, stage: targetStage, stageId: target.id }),
+    );
+  };
+
   const saveMsgFor = (id: string, fk: string): ReactNode => {
     const s = saveState[skey(id, fk)];
     if (s?.status === "saving") return <div className="savemsg">Saving…</div>;
@@ -644,19 +980,6 @@ export default function Dashboard() {
         </div>
       );
     });
-
-  // Admin/agency (or the open no-SSO setup view) see everything; a restricted
-  // signed-in user sees only their assigned records. Mirrors the server rule.
-  const isAdminViewer =
-    sso.status === "none" ||
-    (sso.status === "ready" &&
-      (sso.session.role === "admin" || sso.session.type === "agency"));
-
-  // Current viewer's user id (when signed in) — used to show why a record is
-  // visible: "Following" when the viewer is a follower but not the owner.
-  const viewerId = sso.status === "ready" ? sso.session.userId : null;
-  const followsNotOwns = (r: OpportunityRecord) =>
-    !!viewerId && r.ownerId !== viewerId && r.followerIds.includes(viewerId);
 
   return (
     <div className="app">
@@ -843,6 +1166,47 @@ export default function Dashboard() {
               ))}
             </select>
           </div>
+          <div className="officefilter">
+            <label htmlFor="sortSel">Sort</label>
+            <select
+              id="sortSel"
+              value={sortKey ?? ""}
+              onChange={(e) => setSortKey(e.target.value || null)}
+            >
+              <option value="">Default order</option>
+              {sortDims.map((d) => (
+                <option key={d.key} value={d.key}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="dirbtn"
+              title={sortDir === "asc" ? "Ascending" : "Descending"}
+              disabled={!sortKey}
+              onClick={() =>
+                setSortDir((dd) => (dd === "asc" ? "desc" : "asc"))
+              }
+            >
+              {sortDir === "asc" ? "▲" : "▼"}
+            </button>
+          </div>
+          <div className="officefilter">
+            <label htmlFor="groupSel">Group</label>
+            <select
+              id="groupSel"
+              value={groupKey ?? ""}
+              onChange={(e) => setGroupKey(e.target.value || null)}
+            >
+              <option value="">No grouping</option>
+              {groupDims.map((d) => (
+                <option key={d.key} value={d.key}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <span className="count">
             {visible.length} shown · {data.length} in pipeline
           </span>
@@ -921,62 +1285,20 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {visible.map((r) => (
-                  <tr
-                    key={r.id}
-                    className={r.id === selId ? "sel" : ""}
-                    onClick={() => setSelId(r.id)}
-                  >
-                    <td className="strong">
-                      {clientName(r) || "—"}
-                      {followsNotOwns(r) ? (
-                        <span
-                          className="follow-tag"
-                          title="You follow this record (you're not the owner)"
-                        >
-                          Following
-                        </span>
-                      ) : null}
-                    </td>
-                    <td>
-                      {r.stage ? (
-                        <span className="pill stage">{r.stage}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className={r.harmony ? "" : "muted"}>
-                      {r.harmony || "—"}
-                    </td>
-                    <td>
-                      {r.office ? (
-                        <span className="pill office">{r.office}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>{r.county || <span className="muted">—</span>}</td>
-                    <td>
-                      <BlockPill b={r.block} />
-                    </td>
-                    <td>
-                      {r.src ? (
-                        <span className="pill src">{r.src}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>{r.rep}</td>
-                    <td>{r.cm}</td>
-                    <td>
-                      {r.checked ? (
-                        <span className="tick">✓</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {grouped
+                  ? grouped.map((g) => (
+                      <Fragment key={g.value}>
+                        <tr className="grouprow">
+                          <td colSpan={COLUMNS.length}>
+                            <span className="glabel">{groupLabel}</span>
+                            <span className="gvalue">{g.value}</span>
+                            <span className="gcount">{g.rows.length}</span>
+                          </td>
+                        </tr>
+                        {g.rows.map((r) => renderRow(r))}
+                      </Fragment>
+                    ))
+                  : visible.map((r) => renderRow(r))}
               </tbody>
             </table>
             {visible.length === 0 ? (
@@ -984,44 +1306,26 @@ export default function Dashboard() {
             ) : null}
           </div>
         ) : (
-          <div className="board">
-            {stages.map((st) => {
-              const inCol = boardVisible.filter((r) => r.stage === st);
-              return (
-                <div className="col" key={st}>
-                  <div className="colhead">
-                    <span>{st}</span>
-                    <span className="pill">{inCol.length}</span>
-                  </div>
-                  <div className="colbody">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragEnd={onDragEnd}
+          >
+            <div className="board">
+              {stages.map((st) => {
+                const inCol = boardVisible.filter((r) => r.stage === st);
+                return (
+                  <BoardColumn key={st} stage={st} count={inCol.length}>
                     {inCol.length ? (
                       inCol.map((r) => (
-                        <div
-                          className="card"
+                        <BoardCard
                           key={r.id}
-                          onClick={() => setSelId(r.id)}
-                        >
-                          <div className="cn">
-                            {clientName(r) || "—"}
-                            {followsNotOwns(r) ? (
-                              <span
-                                className="follow-tag"
-                                title="You follow this record (you're not the owner)"
-                              >
-                                Following
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="cm">
-                            {r.office || "—"} · {r.rep}
-                          </div>
-                          <div className="cf">
-                            <BlockPill b={r.block} />
-                            {r.src ? (
-                              <span className="pill src">{r.src}</span>
-                            ) : null}
-                          </div>
-                        </div>
+                          r={r}
+                          canDrag={canEdit(r)}
+                          following={followsNotOwns(r)}
+                          saving={saveState[skey(r.id, "stage")]?.status}
+                          onOpen={() => setSelId(r.id)}
+                        />
                       ))
                     ) : (
                       <div
@@ -1031,11 +1335,11 @@ export default function Dashboard() {
                         Empty
                       </div>
                     )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                  </BoardColumn>
+                );
+              })}
+            </div>
+          </DndContext>
         )}
       </div>
 
