@@ -328,21 +328,7 @@ export default function Dashboard() {
       const body = (await res.json()) as OpportunitiesResponse;
       setData(body.records || []);
       if (body.pipeline?.name) setPipelineName(body.pipeline.name);
-      if (body.fieldDefs) {
-        setFieldDefs(body.fieldDefs);
-        // Diagnostic: confirm each option field carries a non-empty options array.
-        if (typeof console !== "undefined") {
-          console.log(
-            "[fieldDefs]",
-            body.fieldDefs.map((f) => ({
-              name: f.name,
-              dataType: f.dataType,
-              options: f.options,
-              editable: f.editable,
-            })),
-          );
-        }
-      }
+      if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
     } catch (e) {
