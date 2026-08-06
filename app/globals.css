@@ -106,6 +106,16 @@ thead th.sortable:hover{color:var(--plum);background:var(--plum-soft);}
 thead th.sorted{color:var(--plum);}
 .sortcaret{margin-left:5px;font-size:9px;color:var(--ink-3);}
 thead th.sorted .sortcaret{color:var(--plum);}
+.officefilter .dirbtn{border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--plum);font-size:11px;padding:7px 9px;line-height:1;box-shadow:var(--shadow-sm);}
+.officefilter .dirbtn:hover{background:var(--plum-soft);}
+.officefilter .dirbtn:disabled{color:var(--ink-3);cursor:not-allowed;background:var(--line-soft);}
+/* group-by section rows */
+tbody tr.grouprow td{position:sticky;top:37px;background:var(--plum-soft);border-top:1px solid var(--plum-line);border-bottom:1px solid var(--plum-line);padding:8px 14px;z-index:1;}
+tbody tr.grouprow{cursor:default;}
+tbody tr.grouprow:hover td{background:var(--plum-soft);}
+.grouprow .glabel{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);margin-right:8px;}
+.grouprow .gvalue{font-size:12.5px;font-weight:700;color:var(--plum-deep);}
+.grouprow .gcount{margin-left:9px;background:var(--plum);color:#fff;border-radius:20px;padding:1px 8px;font-size:10.5px;font-weight:700;}
 tbody td{padding:11px 14px;border-bottom:1px solid var(--line-soft);white-space:nowrap;color:var(--ink);}
 tbody tr{cursor:pointer;transition:background .1s;}
 tbody tr:hover td{background:var(--row-hover);}
@@ -134,6 +144,13 @@ tbody tr:last-child td{border-bottom:0;}
 .card .cn{font-weight:600;font-size:12.5px;margin-bottom:3px;}
 .card .cm{font-size:11px;color:var(--ink-3);margin-bottom:9px;}
 .card .cf{display:flex;gap:5px;flex-wrap:wrap;}
+.card.draggable{cursor:grab;touch-action:none;}
+.card.draggable:active{cursor:grabbing;}
+.card.dragging{cursor:grabbing;box-shadow:0 10px 26px rgba(91,42,134,.28);border-color:var(--plum);opacity:.96;}
+.card.nodrag{cursor:pointer;}
+.col.dropover{background:var(--plum-soft);outline:2px dashed var(--plum-line);outline-offset:-4px;}
+.col.dropover .colbody{background:var(--plum-soft);}
+.card .savemsg{margin-top:6px;}
 
 /* record panel */
 .scrim{position:fixed;inset:0;background:rgba(30,15,45,.42);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .18s;z-index:4;}
