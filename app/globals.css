@@ -83,6 +83,10 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 .search input{border:0;outline:0;font:inherit;font-size:12.5px;width:100%;background:none;color:var(--ink);}
 .search svg{width:15px;height:15px;color:var(--ink-3);flex:none;}
 .count{font-size:11.5px;color:var(--ink-3);margin-left:auto;}
+.officefilter{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-2);}
+.officefilter label{font-weight:600;color:var(--ink-2);}
+.officefilter select{font:inherit;font-size:12.5px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;}
+.officefilter select:focus{border-color:var(--plum);outline:none;box-shadow:0 0 0 3px var(--plum-soft);}
 
 /* stage chips */
 .stages{display:flex;gap:7px;padding:12px 22px;border-bottom:1px solid var(--line);overflow-x:auto;flex:none;}
@@ -97,6 +101,11 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;}
 thead th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:600;color:var(--ink-2);font-size:10.5px;
   padding:11px 14px;border-bottom:1.5px solid var(--line);white-space:nowrap;z-index:2;text-transform:uppercase;letter-spacing:.04em;}
+thead th.sortable{cursor:pointer;user-select:none;}
+thead th.sortable:hover{color:var(--plum);background:var(--plum-soft);}
+thead th.sorted{color:var(--plum);}
+.sortcaret{margin-left:5px;font-size:9px;color:var(--ink-3);}
+thead th.sorted .sortcaret{color:var(--plum);}
 tbody td{padding:11px 14px;border-bottom:1px solid var(--line-soft);white-space:nowrap;color:var(--ink);}
 tbody tr{cursor:pointer;transition:background .1s;}
 tbody tr:hover td{background:var(--row-hover);}
@@ -146,6 +155,21 @@ tbody tr:last-child td{border-bottom:0;}
 .f label{display:block;font-size:11px;color:var(--ink-2);margin-bottom:5px;font-weight:600;}
 .f .v{border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:12.5px;background:var(--bg);min-height:36px;display:flex;align-items:center;}
 .readonly-note{font-size:10px;color:var(--ink-3);background:var(--line-soft);border-radius:5px;padding:2px 7px;font-weight:700;}
+.f .v.ro{background:var(--canvas);color:var(--ink-2);justify-content:space-between;}
+.f .v.edit{width:100%;font:inherit;font-size:12.5px;cursor:pointer;color:var(--ink);}
+.f select.v.edit{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23948aa6' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:28px;}
+.f textarea.v.edit{min-height:64px;resize:vertical;cursor:text;line-height:1.5;}
+.f input.v.edit{cursor:text;}
+.f .v.edit:focus{border-color:var(--plum);outline:none;box-shadow:0 0 0 3px var(--plum-soft);}
+.f .v.edit:disabled{opacity:.6;cursor:progress;}
+.f .multi{display:flex;flex-wrap:wrap;gap:6px;}
+.chipbox{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:20px;padding:5px 10px;font-size:11.5px;color:var(--ink-2);cursor:pointer;background:var(--bg);transition:all .12s;}
+.chipbox input{margin:0;accent-color:var(--plum);}
+.chipbox.on{background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum);font-weight:600;}
+.savemsg{font-size:10.5px;color:var(--ink-3);margin-top:4px;}
+.savemsg.err{color:var(--blk);font-weight:600;}
+.editbanner{font-size:11px;color:var(--gold-ink);background:var(--gold-soft);border:1px solid #f3e2c4;border-radius:8px;padding:8px 11px;margin-bottom:4px;}
+.follow-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;vertical-align:middle;}
 
 .note{border:1px solid var(--line);border-radius:9px;padding:12px 13px;margin-bottom:10px;background:var(--canvas);}
 .note .nh{font-size:11px;color:var(--ink-3);margin-bottom:5px;}
