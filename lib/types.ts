@@ -17,6 +17,24 @@ export interface OpportunityRecord {
   onb: string; // Onboarding Rep (custom field)
   cg: string; // Caregiver (custom field)
   checked: boolean; // "Checked this week" (custom field)
+  // Identity fields used for the Phase 3 visibility filter (assignment-only).
+  ownerId: string; // GHL opportunity `assignedTo` user id ("" when unassigned)
+  followerIds: string[]; // GHL opportunity `followers` (array of user ids)
+  followerNames: string[]; // follower ids resolved to names via the users lookup
+  // Phase 2 editing — native fields + raw custom-field values keyed by field id.
+  stageId: string; // native pipelineStageId (the stable key; `stage` is the name)
+  status: string; // native opportunity status (open/won/lost/abandoned)
+  monetaryValue: number; // native value
+  cf: Record<string, unknown>; // fieldId -> current raw value (arrays preserved)
+}
+
+// Custom-field definition sent to the client to drive the dynamic editors.
+export interface EditableFieldDef {
+  id: string;
+  name: string;
+  dataType: string; // TEXT | LARGE_TEXT | SINGLE_OPTIONS | MULTIPLE_OPTIONS | DATE | NUMERICAL | MONETORY | CHECKBOX
+  options: string[]; // option strings for *_OPTIONS / CHECKBOX
+  editable: boolean; // false for the read-only blocklist
 }
 
 export interface Note {
@@ -25,10 +43,23 @@ export interface Note {
   txt: string;
 }
 
+export interface Viewer {
+  authenticated: boolean; // false when SSO isn't configured (open/setup mode)
+  isAdmin: boolean; // role === "admin" || type === "agency"
+  userName: string | null;
+  role: string | null;
+  total: number; // total records before the visibility filter
+}
+
 export interface OpportunitiesResponse {
   records: OpportunityRecord[];
   pipeline: { id: string; name: string } | null;
   count: number;
+  viewer?: Viewer;
+  // Metadata for the Phase 2 editors (same for all records).
+  fieldDefs?: EditableFieldDef[]; // OLTL opportunity custom-field definitions
+  stages?: { id: string; name: string }[]; // OLTL pipeline stages (name→id)
+  users?: { id: string; name: string }[]; // location users (owner picker)
 }
 
 export interface ApiError {

@@ -1,4 +1,5 @@
-import type { OpportunityRecord } from "./types";
+import type { OpportunityRecord, EditableFieldDef } from "./types";
+import { isFieldEditable } from "./editable";
 
 // ---------------------------------------------------------------------------
 // Server-only GoHighLevel client.
@@ -105,6 +106,53 @@ async function ghlGet<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function ghlSend<T>(
+  method: "PUT" | "POST" | "PATCH",
+  path: string,
+  body: unknown,
+): Promise<T> {
+  const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { ...headers(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 500);
+    } catch {
+      /* ignore */
+    }
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for ${method} ${new URL(url).pathname}.`,
+      res.status,
+      detail,
+    );
+  }
+  return (await res.json()) as T;
+}
+
+// PUT /opportunities/{id} with the confirmed body shape, then return the fresh
+// normalized record. `body` should already have values formatted per dataType.
+export async function updateOpportunity(
+  id: string,
+  body: Record<string, unknown>,
+): Promise<OpportunityRecord | null> {
+  await ghlSend("PUT", `/opportunities/${encodeURIComponent(id)}`, body);
+  return getOpportunityById(id);
+}
+
 // ---------------------------------------------------------------------------
 // Lookups (pipelines, custom fields, users). Cached per warm lambda instance.
 // ---------------------------------------------------------------------------
@@ -115,11 +163,41 @@ interface Pipeline {
   stages: { id: string; name: string }[];
 }
 
+// Full custom-field definition — the single source of truth for editing:
+// `id` for the write body, `dataType` for which input to render, `options`
+// for dropdowns. Automatically covers any field added in GHL later.
+export interface FieldDefinition {
+  id: string;
+  name: string;
+  dataType: string; // e.g. TEXT, LARGE_TEXT, SINGLE_OPTIONS, MULTIPLE_OPTIONS, DATE, NUMERICAL
+  fieldKey?: string;
+  options?: { name?: string; value?: string }[] | string[];
+}
+
 let cache: {
   pipelines?: Pipeline[];
+  fieldDefs?: FieldDefinition[]; // full opportunity custom-field definitions
   fieldMap?: Map<string, string>; // custom field id -> field name
   userMap?: Map<string, string>; // user id -> display name
 } = {};
+
+// Reused by both the read path (name resolution) and the future write path
+// (id + dataType + options). Fetched once per warm lambda.
+export async function getFieldDefinitions(): Promise<FieldDefinition[]> {
+  if (cache.fieldDefs) return cache.fieldDefs;
+  const { locationId } = requireEnv();
+  let defs: FieldDefinition[] = [];
+  try {
+    const data = await ghlGet<{ customFields?: FieldDefinition[] }>(
+      `/locations/${encodeURIComponent(locationId)}/customFields?model=opportunity`,
+    );
+    defs = data.customFields || [];
+  } catch {
+    // Non-fatal: leave empty (read path still resolves stage/owner/contact).
+  }
+  cache.fieldDefs = defs;
+  return defs;
+}
 
 async function getPipelines(): Promise<Pipeline[]> {
   if (cache.pipelines) return cache.pipelines;
@@ -157,20 +235,10 @@ export async function resolvePipeline(): Promise<Pipeline> {
 
 async function getFieldMap(): Promise<Map<string, string>> {
   if (cache.fieldMap) return cache.fieldMap;
-  const { locationId } = requireEnv();
   const map = new Map<string, string>();
-  try {
-    const data = await ghlGet<{
-      customFields?: { id: string; name?: string; fieldKey?: string }[];
-    }>(
-      `/locations/${encodeURIComponent(locationId)}/customFields?model=opportunity`,
-    );
-    for (const f of data.customFields || []) {
-      if (f.id) map.set(f.id, f.name || f.fieldKey || "");
-    }
-  } catch {
-    // Non-fatal: without the map we simply can't resolve custom-field names,
-    // but stage/owner/contact still populate. Leave the map empty.
+  // Built from the same definitions fetch used by the write path.
+  for (const f of await getFieldDefinitions()) {
+    if (f.id) map.set(f.id, f.name || f.fieldKey || "");
   }
   cache.fieldMap = map;
   return map;
@@ -216,7 +284,11 @@ interface RawOpportunity {
   pipelineId?: string;
   pipelineStageId?: string;
   stageId?: string;
-  assignedTo?: string;
+  assignedTo?: string | null; // owner user id (can be null)
+  followers?: string[]; // follower (co-rep) user ids — confirmed field name
+  source?: string; // native source field (Part A: the dashboard "Source" column)
+  status?: string; // native status (open/won/lost/abandoned)
+  monetaryValue?: number; // native value
   contactId?: string;
   contact?: {
     id?: string;
@@ -225,6 +297,17 @@ interface RawOpportunity {
     lastName?: string;
   };
   customFields?: RawCustomField[];
+}
+
+// Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
+function cfRaw(cf: RawCustomField): unknown {
+  return (
+    cf.fieldValueArray ??
+    cf.fieldValueString ??
+    cf.fieldValue ??
+    cf.value ??
+    ""
+  );
 }
 
 interface SearchResponse {
@@ -286,12 +369,12 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   office: ["office"],
   county: ["county"],
   block: ["roadblocker", "roadblock", "blocker", "roadblockers"],
-  ref: ["referralsource", "referral"],
-  src: ["source", "leadsource"],
+  ref: ["referralsourcetype", "referralsource", "referral"], // fix: "Referral Source Type"
+  src: [], // native `source` field, not a custom field — read directly (Part A)
   asst: ["salesrepassistant", "repassistant", "assistant", "salesassistant"],
   cm: ["casemanager", "casemgr"],
   onb: ["onboardingrep", "onboarding", "onboardingrepresentative"],
-  cg: ["caregiver"],
+  cg: ["caregivername", "caregiver"], // fix: "Caregiver Name"
   checked: ["checkedthisweek", "checked", "checkedweek"],
   // Fields below are not sourced from custom fields; listed for completeness.
   id: [],
@@ -299,6 +382,13 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   last: [],
   stage: [],
   rep: [],
+  ownerId: [],
+  followerIds: [],
+  followerNames: [],
+  stageId: [],
+  status: [],
+  monetaryValue: [],
+  cf: [],
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -348,7 +438,26 @@ function normalizeOpportunity(
     onb: "—",
     cg: "—",
     checked: false,
+    ownerId: typeof opp.assignedTo === "string" ? opp.assignedTo : "",
+    followerIds: Array.isArray(opp.followers)
+      ? opp.followers.filter((x): x is string => typeof x === "string")
+      : [],
+    followerNames: [],
+    stageId: opp.pipelineStageId || opp.stageId || "",
+    status: opp.status || "",
+    monetaryValue: typeof opp.monetaryValue === "number" ? opp.monetaryValue : 0,
+    cf: {},
   };
+  // Resolve follower ids -> names via the same users lookup used for the owner.
+  rec.followerNames = rec.followerIds.map((id) => userMap.get(id) || id);
+
+  // Part A: the dashboard "Source" column is the native `source` field.
+  rec.src = opp.source || "";
+
+  // Raw custom-field values keyed by field id — drives the Phase 2 editors.
+  for (const cf of opp.customFields || []) {
+    if (cf.id) rec.cf[cf.id] = cfRaw(cf);
+  }
 
   // Contact name -> first / last.
   const c = opp.contact;
@@ -392,26 +501,80 @@ function normalizeOpportunity(
   return rec;
 }
 
+// Normalize GHL option definitions (array of strings OR {name,value}) to strings.
+function optionStrings(
+  options?: { name?: string; value?: string }[] | string[],
+): string[] {
+  if (!Array.isArray(options)) return [];
+  return options
+    .map((o) => (typeof o === "string" ? o : o?.value ?? o?.name ?? ""))
+    .filter(Boolean) as string[];
+}
+
+// Editable field definitions for the client (id, dataType, options, editable).
+export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
+  const defs = await getFieldDefinitions();
+  return defs.map((d) => ({
+    id: d.id,
+    name: d.name,
+    dataType: d.dataType,
+    options: optionStrings(d.options),
+    editable: isFieldEditable(d.name),
+  }));
+}
+
 export async function getOltlOpportunities(): Promise<{
   records: OpportunityRecord[];
   pipeline: { id: string; name: string };
+  stages: { id: string; name: string }[];
+  users: { id: string; name: string }[];
+  fieldDefs: EditableFieldDef[];
 }> {
   const pipeline = await resolvePipeline();
   const stageMap = new Map<string, string>();
   for (const s of pipeline.stages || []) stageMap.set(s.id, s.name);
 
-  const [fieldMap, userMap, raw] = await Promise.all([
+  const [fieldMap, userMap, raw, fieldDefs] = await Promise.all([
     getFieldMap(),
     getUserMap(),
     searchAll(pipeline.id),
+    getEditableFieldDefs(),
   ]);
 
   const records = raw.map((o) =>
     normalizeOpportunity(o, fieldMap, userMap, stageMap),
   );
 
+  const users = [...userMap.entries()].map(([id, name]) => ({ id, name }));
+
   return {
     records,
     pipeline: { id: pipeline.id, name: pipeline.name },
+    stages: (pipeline.stages || []).map((s) => ({ id: s.id, name: s.name })),
+    users,
+    fieldDefs,
   };
+}
+
+// Fetch + normalize a single opportunity (used by the save route to re-check
+// permissions and to return a fresh record after a write).
+export async function getOpportunityById(
+  id: string,
+): Promise<OpportunityRecord | null> {
+  let data: { opportunity?: RawOpportunity };
+  try {
+    data = await ghlGet<{ opportunity?: RawOpportunity }>(
+      `/opportunities/${encodeURIComponent(id)}`,
+    );
+  } catch (e) {
+    if (e instanceof GhlError && e.status === 404) return null;
+    throw e;
+  }
+  const opp = data.opportunity;
+  if (!opp) return null;
+  const pipeline = await resolvePipeline();
+  const stageMap = new Map<string, string>();
+  for (const s of pipeline.stages || []) stageMap.set(s.id, s.name);
+  const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
+  return normalizeOpportunity(opp, fieldMap, userMap, stageMap);
 }
