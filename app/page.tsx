@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -356,38 +357,18 @@ function BoardColumn({
   );
 }
 
-function BoardCard({
+// Presentational card content (used by both the in-column card and the overlay).
+function CardBody({
   r,
-  canDrag,
   following,
   saving,
-  onOpen,
 }: {
   r: OpportunityRecord;
-  canDrag: boolean;
   following: boolean;
   saving?: "saving" | "error";
-  onOpen: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({ id: r.id, disabled: !canDrag });
-  const style = transform
-    ? {
-        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-        zIndex: 50,
-      }
-    : undefined;
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`card${isDragging ? " dragging" : ""}${
-        canDrag ? " draggable" : " nodrag"
-      }`}
-      onClick={onOpen}
-      {...(canDrag ? listeners : {})}
-      {...attributes}
-    >
+    <>
       <div className="cn">
         {`${r.first} ${r.last}`.trim() || "—"}
         {following ? (
@@ -411,6 +392,40 @@ function BoardCard({
       ) : saving === "error" ? (
         <div className="savemsg err">✗ didn&apos;t save — reverted</div>
       ) : null}
+    </>
+  );
+}
+
+function BoardCard({
+  r,
+  canDrag,
+  following,
+  saving,
+  onOpen,
+}: {
+  r: OpportunityRecord;
+  canDrag: boolean;
+  following: boolean;
+  saving?: "saving" | "error";
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: r.id,
+    disabled: !canDrag,
+  });
+  // No transform here — the DragOverlay renders the moving copy (unclipped by the
+  // column's overflow). The source card just dims to a placeholder while dragging.
+  return (
+    <div
+      ref={setNodeRef}
+      className={`card${canDrag ? " draggable" : " nodrag"}${
+        isDragging ? " ghost" : ""
+      }`}
+      onClick={onOpen}
+      {...(canDrag ? listeners : {})}
+      {...attributes}
+    >
+      <CardBody r={r} following={following} saving={saving} />
     </div>
   );
 }
@@ -922,11 +937,13 @@ export default function Dashboard() {
     );
 
   // Kanban drag: 6px activation so a click still opens the record; keyboard too.
+  const [dragId, setDragId] = useState<string | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   );
   const onDragEnd = (e: DragEndEvent) => {
+    setDragId(null);
     const { active, over } = e;
     if (!over) return;
     const overId = String(over.id);
@@ -945,6 +962,21 @@ export default function Dashboard() {
       (r) => ({ ...r, stage: targetStage, stageId: target.id }),
     );
   };
+
+  // Board columns = the FULL OLTL pipeline (every stage, incl. empty ones) so you
+  // can drag into an empty stage. Falls back to data-derived stages pre-load, and
+  // appends any stray stage present in data but not in the pipeline list.
+  const boardStages = useMemo(() => {
+    if (!pipelineStages.length) return stages;
+    const names = pipelineStages.map((s) => s.name);
+    const set = new Set(names);
+    for (const r of data)
+      if (r.stage && !set.has(r.stage)) {
+        set.add(r.stage);
+        names.push(r.stage);
+      }
+    return names;
+  }, [pipelineStages, data, stages]);
 
   const saveMsgFor = (id: string, fk: string): ReactNode => {
     const s = saveState[skey(id, fk)];
@@ -1309,10 +1341,12 @@ export default function Dashboard() {
           <DndContext
             sensors={sensors}
             collisionDetection={closestCorners}
+            onDragStart={(e) => setDragId(String(e.active.id))}
+            onDragCancel={() => setDragId(null)}
             onDragEnd={onDragEnd}
           >
             <div className="board">
-              {stages.map((st) => {
+              {boardStages.map((st) => {
                 const inCol = boardVisible.filter((r) => r.stage === st);
                 return (
                   <BoardColumn key={st} stage={st} count={inCol.length}>
@@ -1339,6 +1373,18 @@ export default function Dashboard() {
                 );
               })}
             </div>
+            <DragOverlay dropAnimation={null}>
+              {(() => {
+                const r = dragId
+                  ? data.find((x) => x.id === dragId)
+                  : null;
+                return r ? (
+                  <div className="card dragging" style={{ width: 242 }}>
+                    <CardBody r={r} following={followsNotOwns(r)} />
+                  </div>
+                ) : null;
+              })()}
+            </DragOverlay>
           </DndContext>
         )}
       </div>
