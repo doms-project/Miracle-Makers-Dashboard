@@ -26,6 +26,7 @@ export interface OpportunityRecord {
   status: string; // native opportunity status (open/won/lost/abandoned)
   monetaryValue: number; // native value
   cf: Record<string, unknown>; // fieldId -> current raw value (arrays preserved)
+  contactId: string; // linked contact — notes are stored on the contact
 }
 
 // Custom-field definition sent to the client to drive the dynamic editors.

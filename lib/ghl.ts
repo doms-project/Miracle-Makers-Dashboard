@@ -393,6 +393,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   status: [],
   monetaryValue: [],
   cf: [],
+  contactId: [],
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -451,6 +452,7 @@ function normalizeOpportunity(
     status: opp.status || "",
     monetaryValue: typeof opp.monetaryValue === "number" ? opp.monetaryValue : 0,
     cf: {},
+    contactId: opp.contactId || opp.contact?.id || "",
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
   rec.followerNames = rec.followerIds.map((id) => userMap.get(id) || id);
@@ -580,6 +582,97 @@ export async function getOltlOpportunities(): Promise<{
     stages: (pipeline.stages || []).map((s) => ({ id: s.id, name: s.name })),
     users,
     fieldDefs,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Contact notes — scoped to an opportunity via the note `relations` array.
+// ---------------------------------------------------------------------------
+
+interface RawNote {
+  id?: string;
+  body?: string;
+  userId?: string;
+  dateAdded?: string;
+  relations?: { objectKey?: string; recordId?: string }[];
+}
+
+export interface OppNote {
+  id: string;
+  who: string; // author name
+  when: string; // formatted date
+  txt: string; // body text
+}
+
+function fmtNoteDate(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function noteBelongsToOpp(n: RawNote, oppId: string): boolean {
+  return (n.relations || []).some(
+    (r) => r.objectKey === "opportunity" && r.recordId === oppId,
+  );
+}
+
+// List a contact's notes, filtered to just this opportunity's, newest first.
+export async function listOpportunityNotes(
+  contactId: string,
+  oppId: string,
+): Promise<OppNote[]> {
+  const data = await ghlGet<{ notes?: RawNote[] }>(
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+  );
+  const userMap = await getUserMap();
+  return (data.notes || [])
+    .filter((n) => noteBelongsToOpp(n, oppId))
+    .sort(
+      (a, b) =>
+        new Date(b.dateAdded || 0).getTime() -
+        new Date(a.dateAdded || 0).getTime(),
+    )
+    .map((n) => ({
+      id: n.id || "",
+      who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
+      when: fmtNoteDate(n.dateAdded),
+      txt: n.body || "",
+    }));
+}
+
+// Add a note on the contact, related to both the opportunity and the contact so
+// it appears under the opportunity's Notes/Associated objects in native GHL.
+export async function addOpportunityNote(
+  contactId: string,
+  oppId: string,
+  body: string,
+  userId: string,
+): Promise<OppNote> {
+  const res = await ghlSend<{ note?: RawNote }>(
+    "POST",
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+    {
+      body,
+      userId,
+      relations: [
+        { objectKey: "opportunity", recordId: oppId },
+        { objectKey: "contact", recordId: contactId },
+      ],
+    },
+  );
+  const userMap = await getUserMap();
+  const n = res.note || {};
+  return {
+    id: n.id || "",
+    who: (userId && userMap.get(userId)) || "You",
+    when: fmtNoteDate(n.dateAdded) || "just now",
+    txt: n.body || body,
   };
 }
 

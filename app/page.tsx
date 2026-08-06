@@ -97,6 +97,12 @@ const BlockPill = ({ b }: { b: string }) => (
 // ---- Phase 2 field editors ----
 type SaveState = { status: "saving" | "error"; msg?: string } | undefined;
 
+const normName = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9]/g, "");
+// Multi-select / long-text fields get a full-width row.
+const isWideField = (dt: string): boolean =>
+  ["MULTIPLE_OPTIONS", "LARGE_TEXT"].includes((dt || "").toUpperCase());
+
 const asStr = (v: unknown): string =>
   Array.isArray(v) ? v.map(String).join(", ") : v == null ? "" : String(v);
 const asArr = (v: unknown): string[] =>
@@ -294,9 +300,13 @@ export default function Dashboard() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [view, setView] = useState<"list" | "board">("list");
   const [selId, setSelId] = useState<string | null>(null);
-  // Ephemeral, in-memory only. Notes are a display-only stub until Phase 2.
+  // Persistent notes (stored on the contact, scoped to the opportunity).
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [noteDraft, setNoteDraft] = useState("");
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesErr, setNotesErr] = useState<string | null>(null);
+  const [noteBusy, setNoteBusy] = useState(false);
+  const [noteErr, setNoteErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -357,6 +367,45 @@ export default function Dashboard() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  // Load this opportunity's notes when the panel opens (server re-checks access).
+  useEffect(() => {
+    if (!selId || sso.status === "loading") return;
+    let cancelled = false;
+    setNotesLoading(true);
+    setNotesErr(null);
+    setNoteErr(null);
+    const headers: Record<string, string> = {};
+    if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+    fetch(`/api/opportunities/${selId}/notes`, { headers, cache: "no-store" })
+      .then(async (res) => {
+        const j = (await res.json().catch(() => ({}))) as {
+          notes?: Note[];
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!cancelled)
+          setNotes((prev) => ({
+            ...prev,
+            [selId]: (j.notes || []).map((n) => ({
+              who: n.who,
+              when: n.when,
+              txt: n.txt,
+            })),
+          }));
+      })
+      .catch((e) => {
+        if (!cancelled) setNotesErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setNotesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selId, sso.status]);
 
   // Stage list derived from data, preferred order first.
   const stages = useMemo(() => {
@@ -467,14 +516,42 @@ export default function Dashboard() {
     [data, selId],
   );
 
-  const addNote = () => {
+  const ssoHeader = (): Record<string, string> =>
+    sso.status === "ready" ? { "x-ghl-sso-key": sso.blob } : {};
+
+  const addNote = async () => {
     const v = noteDraft.trim();
-    if (!v || !selId) return;
-    setNotes((prev) => ({
-      ...prev,
-      [selId]: [{ who: "You", when: "just now", txt: v }, ...(prev[selId] || [])],
-    }));
-    setNoteDraft("");
+    if (!v || !selId || noteBusy) return;
+    setNoteBusy(true);
+    setNoteErr(null);
+    try {
+      const res = await fetch(`/api/opportunities/${selId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ssoKey: sso.status === "ready" ? sso.blob : undefined,
+          body: v,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        note?: Note;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok || !j.ok || !j.note)
+        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      const n = j.note;
+      setNotes((prev) => ({
+        ...prev,
+        [selId]: [{ who: n.who, when: n.when, txt: n.txt }, ...(prev[selId] || [])],
+      }));
+      setNoteDraft(""); // clear only on success — never lose typed input
+    } catch (e) {
+      setNoteErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNoteBusy(false);
+    }
   };
 
   const selNotes = (selId && notes[selId]) || [];
@@ -542,6 +619,31 @@ export default function Dashboard() {
   };
   const savingFk = (id: string, fk: string) =>
     saveState[skey(id, fk)]?.status === "saving";
+
+  // Look up a field definition by (fuzzy) name, and render its editor cell.
+  const fieldByName = (name: string) =>
+    fieldDefs.find((d) => normName(d.name) === normName(name));
+
+  // Render a set of custom fields by name (skips any not present here).
+  const renderCFs = (rec: OpportunityRecord, names: string[]): ReactNode =>
+    names.map((name) => {
+      const def = fieldByName(name);
+      if (!def) return null;
+      return (
+        <div
+          className={`f${isWideField(def.dataType) ? " wide" : ""}`}
+          key={`${rec.id}:${def.id}`}
+        >
+          <label>{def.name}</label>
+          <FieldControl
+            def={def}
+            value={rec.cf[def.id]}
+            save={saveState[skey(rec.id, def.id)]}
+            onSave={(val) => saveCustomField(rec, def, val)}
+          />
+        </div>
+      );
+    });
 
   // Admin/agency (or the open no-SSO setup view) see everything; a restricted
   // signed-in user sees only their assigned records. Mirrors the server rule.
@@ -971,7 +1073,8 @@ export default function Dashboard() {
                 compliance field are read-only.
               </div>
 
-              <div className="sechead">Record</div>
+              {/* 1 — Status & Workflow (most-used, top) */}
+              <div className="sechead">Status &amp; Workflow</div>
               <div className="grid">
                 <div className="f">
                   <label>Stage</label>
@@ -1002,6 +1105,40 @@ export default function Dashboard() {
                   </select>
                   {saveMsgFor(selected.id, "stage")}
                 </div>
+                {renderCFs(selected, ["Road Blocker"])}
+                <div className="f">
+                  <label>Status</label>
+                  <select
+                    className="v edit"
+                    value={selected.status || "open"}
+                    disabled={savingFk(selected.id, "status")}
+                    onChange={(e) =>
+                      saveField(
+                        selected,
+                        "status",
+                        { status: e.target.value },
+                        (r) => ({ ...r, status: e.target.value }),
+                      )
+                    }
+                  >
+                    {["open", "won", "lost", "abandoned"].map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                  {saveMsgFor(selected.id, "status")}
+                </div>
+                {renderCFs(selected, [
+                  "Checked This Week",
+                  "Appeal",
+                  "Waiting",
+                ])}
+              </div>
+
+              {/* 2 — Assignment */}
+              <div className="sechead">Assignment</div>
+              <div className="grid">
                 <div className="f">
                   <label>Sales Rep (Owner)</label>
                   <select
@@ -1048,53 +1185,54 @@ export default function Dashboard() {
                     <span className="readonly-note">native GHL</span>
                   </div>
                 </div>
-                <div className="f">
-                  <label>Status</label>
-                  <select
-                    className="v edit"
-                    value={selected.status || "open"}
-                    disabled={savingFk(selected.id, "status")}
-                    onChange={(e) =>
-                      saveField(
-                        selected,
-                        "status",
-                        { status: e.target.value },
-                        (r) => ({ ...r, status: e.target.value }),
-                      )
-                    }
-                  >
-                    {["open", "won", "lost", "abandoned"].map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  {saveMsgFor(selected.id, "status")}
-                </div>
+                {renderCFs(selected, [
+                  "Case Manager",
+                  "Sales Rep Assistant",
+                  "Onboarding Rep",
+                  "HR / Assigned Team",
+                ])}
               </div>
 
-              <div className="sechead">Fields</div>
+              {/* 3 — Location */}
+              <div className="sechead">Location</div>
               <div className="grid">
-                {fieldDefs.map((def) => (
-                  <div className="f" key={`${selected.id}:${def.id}`}>
-                    <label>{def.name}</label>
-                    <FieldControl
-                      def={def}
-                      value={selected.cf[def.id]}
-                      save={saveState[skey(selected.id, def.id)]}
-                      onSave={(val) => saveCustomField(selected, def, val)}
-                    />
-                  </div>
-                ))}
-                {fieldDefs.length === 0 ? (
-                  <div className="f">
-                    <div className="v ro">No editable fields loaded.</div>
-                  </div>
-                ) : null}
+                {renderCFs(selected, ["Office", "County"])}
               </div>
-              <div className="sechead">Notes — display-only stub (Phase 2)</div>
+
+              {/* 4 — Enrollment Details */}
+              <div className="sechead">Enrollment Details</div>
+              <div className="grid">
+                {renderCFs(selected, [
+                  "Division",
+                  "Type",
+                  "Referral Source Type",
+                  "Caregiver Name",
+                ])}
+              </div>
+
+              {/* 5 — System info (read-only, collapsed) */}
+              <details className="sysinfo">
+                <summary>System info · read-only</summary>
+                <div className="grid">
+                  {renderCFs(selected, [
+                    "Harmony ID",
+                    "County ID",
+                    "Airtable Record ID",
+                    "APP - Compliance Cleared",
+                  ])}
+                </div>
+              </details>
+              <div className="sechead">Notes</div>
               <div>
-                {selNotes.length ? (
+                {notesLoading ? (
+                  <div className="note">
+                    <p className="muted">Loading notes…</p>
+                  </div>
+                ) : notesErr ? (
+                  <div className="note">
+                    <p className="savemsg err">✗ {notesErr}</p>
+                  </div>
+                ) : selNotes.length ? (
                   selNotes.map((n, i) => (
                     <div className="note" key={i}>
                       <div className="nh">
@@ -1105,27 +1243,29 @@ export default function Dashboard() {
                   ))
                 ) : (
                   <div className="note">
-                    <p className="muted">
-                      No notes yet. Notes aren&apos;t saved back to GoHighLevel
-                      yet — that arrives in Phase 2. Anything added here is
-                      temporary and clears on refresh.
-                    </p>
+                    <p className="muted">No notes yet.</p>
                   </div>
                 )}
               </div>
               <div className="addnote">
                 <input
-                  placeholder="Add a note… (temporary — not saved yet)"
+                  placeholder="Add a note…"
                   value={noteDraft}
+                  disabled={noteBusy}
                   onChange={(e) => setNoteDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") addNote();
                   }}
                 />
-                <button onClick={addNote} type="button">
-                  Add
+                <button onClick={addNote} type="button" disabled={noteBusy}>
+                  {noteBusy ? "Adding…" : "Add"}
                 </button>
               </div>
+              {noteErr ? (
+                <div className="savemsg err" style={{ marginTop: 6 }}>
+                  ✗ {noteErr}
+                </div>
+              ) : null}
             </div>
             <div className="panelfoot">
               <span className="hint">
