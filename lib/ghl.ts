@@ -171,7 +171,11 @@ export interface FieldDefinition {
   name: string;
   dataType: string; // e.g. TEXT, LARGE_TEXT, SINGLE_OPTIONS, MULTIPLE_OPTIONS, DATE, NUMERICAL
   fieldKey?: string;
-  options?: { name?: string; value?: string }[] | string[];
+  // GHL returns option lists under varying keys across API versions
+  // (options / picklistOptions / picklistOptionsV2), and each element may be a
+  // plain string OR an object ({ value, label, name, key }). Keep it permissive
+  // and normalize downstream via optionStrings().
+  [key: string]: unknown;
 }
 
 let cache: {
@@ -501,14 +505,37 @@ function normalizeOpportunity(
   return rec;
 }
 
-// Normalize GHL option definitions (array of strings OR {name,value}) to strings.
-function optionStrings(
-  options?: { name?: string; value?: string }[] | string[],
-): string[] {
-  if (!Array.isArray(options)) return [];
-  return options
-    .map((o) => (typeof o === "string" ? o : o?.value ?? o?.name ?? ""))
-    .filter(Boolean) as string[];
+// Normalize a single option element (string OR object) to its stored string.
+function optionToString(o: unknown): string {
+  if (o == null) return "";
+  if (typeof o === "string") return o;
+  if (typeof o === "object") {
+    const r = o as Record<string, unknown>;
+    // Prefer the value GHL actually stores; fall back to a human label.
+    const v = r.value ?? r.name ?? r.label ?? r.key ?? r.option ?? "";
+    return typeof v === "string" ? v : String(v ?? "");
+  }
+  return String(o);
+}
+
+// Pull option strings out of a field definition, tolerant of GHL's varying
+// shapes: any property whose name contains "option" and holds an array is
+// treated as the option list (options, picklistOptions, picklistOptionsV2, …).
+function optionStrings(def: FieldDefinition): string[] {
+  const collected: unknown[] = [];
+  for (const [k, v] of Object.entries(def)) {
+    if (/option/i.test(k) && Array.isArray(v)) collected.push(...v);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const el of collected) {
+    const s = optionToString(el).trim();
+    if (s && !seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 // Editable field definitions for the client (id, dataType, options, editable).
@@ -518,7 +545,7 @@ export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
     id: d.id,
     name: d.name,
     dataType: d.dataType,
-    options: optionStrings(d.options),
+    options: optionStrings(d),
     editable: isFieldEditable(d.name),
   }));
 }
