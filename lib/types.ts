@@ -49,7 +49,23 @@ export interface Viewer {
   isAdmin: boolean; // role === "admin" || type === "agency"
   userName: string | null;
   role: string | null;
+  type?: string | null; // GHL session `type` (agency/location) — diagnostic
   total: number; // total records before the visibility filter
+}
+
+// TEMPORARY diagnostic block surfaced in the /api/opportunities response so the
+// visibility path can be inspected in the browser Network tab. Remove after the
+// filter is confirmed.
+export interface VisibilityDebug {
+  ssoConfigured: boolean;
+  branch: "open-no-sso" | "admin" | "restricted";
+  userId: string | null;
+  role: string | null;
+  type: string | null;
+  preFilterCount: number;
+  postFilterCount: number;
+  sampleAssignedTo: unknown; // raw shape of one opp's owner
+  sampleFollowers: unknown; // raw shape of one opp's followers
 }
 
 export interface OpportunitiesResponse {
@@ -61,6 +77,7 @@ export interface OpportunitiesResponse {
   fieldDefs?: EditableFieldDef[]; // OLTL opportunity custom-field definitions
   stages?: { id: string; name: string }[]; // OLTL pipeline stages (name→id)
   users?: { id: string; name: string }[]; // location users (owner picker)
+  debug?: VisibilityDebug; // TEMPORARY — visibility diagnostic
 }
 
 export interface ApiError {

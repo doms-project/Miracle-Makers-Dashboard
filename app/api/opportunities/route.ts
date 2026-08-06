@@ -29,7 +29,7 @@ function visibleTo(
 }
 
 async function buildResponse(blob: string | null): Promise<Response> {
-  const { records, pipeline, stages, users, fieldDefs } =
+  const { records, pipeline, stages, users, fieldDefs, rawSample } =
     await getOltlOpportunities();
   const meta = { stages, users, fieldDefs };
 
@@ -37,6 +37,11 @@ async function buildResponse(blob: string | null): Promise<Response> {
   // (initial setup / local dev without GHL_SSO_SECRET) the route runs "open"
   // so the dashboard is usable; the UI still shows it as an unauthenticated view.
   if (!ssoConfigured()) {
+    // eslint-disable-next-line no-console
+    console.log("[visibility]", {
+      branch: "open-no-sso",
+      preFilterCount: records.length,
+    });
     const body: OpportunitiesResponse = {
       records,
       pipeline,
@@ -47,6 +52,17 @@ async function buildResponse(blob: string | null): Promise<Response> {
         userName: null,
         role: null,
         total: records.length,
+      },
+      debug: {
+        ssoConfigured: false,
+        branch: "open-no-sso",
+        userId: null,
+        role: null,
+        type: null,
+        preFilterCount: records.length,
+        postFilterCount: records.length,
+        sampleAssignedTo: rawSample.assignedTo,
+        sampleFollowers: rawSample.followers,
       },
       ...meta,
     };
@@ -69,6 +85,19 @@ async function buildResponse(blob: string | null): Promise<Response> {
   const admin = isAdminSession(session.role, session.type);
   const visible = admin ? records : visibleTo(records, session.userId);
 
+  // TEMPORARY diagnostic — which branch ran + pre/post counts + session id/role/type.
+  // eslint-disable-next-line no-console
+  console.log("[visibility]", {
+    branch: admin ? "admin" : "restricted",
+    userId: session.userId,
+    role: session.role ?? null,
+    type: session.type ?? null,
+    preFilterCount: records.length,
+    postFilterCount: visible.length,
+    sampleAssignedTo: rawSample.assignedTo,
+    sampleFollowers: rawSample.followers,
+  });
+
   const body: OpportunitiesResponse = {
     records: visible,
     pipeline,
@@ -78,7 +107,19 @@ async function buildResponse(blob: string | null): Promise<Response> {
       isAdmin: admin,
       userName: session.userName ?? null,
       role: session.role ?? null,
+      type: session.type ?? null,
       total: records.length,
+    },
+    debug: {
+      ssoConfigured: true,
+      branch: admin ? "admin" : "restricted",
+      userId: session.userId,
+      role: session.role ?? null,
+      type: session.type ?? null,
+      preFilterCount: records.length,
+      postFilterCount: visible.length,
+      sampleAssignedTo: rawSample.assignedTo,
+      sampleFollowers: rawSample.followers,
     },
     ...meta,
   };

@@ -558,6 +558,7 @@ export async function getOltlOpportunities(): Promise<{
   stages: { id: string; name: string }[];
   users: { id: string; name: string }[];
   fieldDefs: EditableFieldDef[];
+  rawSample: { assignedTo: unknown; followers: unknown };
 }> {
   const pipeline = await resolvePipeline();
   const stageMap = new Map<string, string>();
@@ -582,6 +583,10 @@ export async function getOltlOpportunities(): Promise<{
     stages: (pipeline.stages || []).map((s) => ({ id: s.id, name: s.name })),
     users,
     fieldDefs,
+    rawSample: {
+      assignedTo: raw[0]?.assignedTo ?? null,
+      followers: raw[0]?.followers ?? null,
+    },
   };
 }
 
