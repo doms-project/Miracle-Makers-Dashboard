@@ -85,3 +85,38 @@ export interface ApiError {
   detail?: string;
   status?: number;
 }
+
+// Resources tab — a file in the OLTL Resources media folder.
+export interface ResourceFile {
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+}
+
+export interface ResourcesResponse {
+  resources: ResourceFile[];
+  folderId: string;
+  count: number;
+}
+
+// Bulk import — metadata for the wizard (all dynamic, nothing hardcoded).
+export interface ImportPipeline {
+  id: string;
+  name: string;
+  stages: { id: string; name: string }[];
+}
+export interface ImportMeta {
+  pipelines: ImportPipeline[];
+  fieldDefs: EditableFieldDef[]; // opportunity custom fields (map targets)
+}
+export interface ImportRowError {
+  row: number; // 1-based row index within the file
+  error: string;
+}
+export interface ImportSummary {
+  created: number;
+  skipped: number; // existing contact (deduped)
+  failed: number;
+  errors: ImportRowError[];
+}

@@ -22,6 +22,7 @@ import type {
   EditableFieldDef,
 } from "@/lib/types";
 import { useGhlSession } from "@/lib/useGhlSession";
+import ImportWizard from "@/components/ImportWizard";
 
 const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
 
@@ -89,6 +90,24 @@ const IconBoard = () => (
     <rect x="17" y="4" width="4" height="13" rx="1" />
   </svg>
 );
+const IconDoc = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <path d="M14 2v6h6M9 13h6M9 17h6" />
+  </svg>
+);
+const IconUpload = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <path d="M17 8l-5-5-5 5M12 3v12" />
+  </svg>
+);
+const fmtSize = (bytes: number): string => {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
 const IconSearch = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <circle cx="11" cy="11" r="7" />
@@ -455,8 +474,17 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [groupKey, setGroupKey] = useState<string | null>(null);
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<
+    "list" | "board" | "resources" | "import"
+  >("list");
   const [selId, setSelId] = useState<string | null>(null);
+  // Resources tab (folder-scoped GHL media).
+  const [resources, setResources] = useState<
+    { name: string; url: string; type: string; size: number }[]
+  >([]);
+  const [resLoading, setResLoading] = useState(false);
+  const [resErr, setResErr] = useState<string | null>(null);
+  const [resLoaded, setResLoaded] = useState(false);
   // Persistent notes (stored on the contact, scoped to the opportunity).
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [noteDraft, setNoteDraft] = useState("");
@@ -524,6 +552,35 @@ export default function Dashboard() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  // Fetch the folder-scoped resources fresh (signed URLs are TTL'd).
+  const loadResources = useCallback(async () => {
+    setResLoading(true);
+    setResErr(null);
+    try {
+      const headers: Record<string, string> = {};
+      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      const res = await fetch("/api/resources", { headers, cache: "no-store" });
+      const j = (await res.json().catch(() => ({}))) as {
+        resources?: { name: string; url: string; type: string; size: number }[];
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setResources(j.resources || []);
+      setResLoaded(true);
+    } catch (e) {
+      setResErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResLoading(false);
+    }
+  }, [sso]);
+
+  // Load the Resources tab once, when first opened.
+  useEffect(() => {
+    if (view === "resources" && !resLoaded && sso.status !== "loading")
+      loadResources();
+  }, [view, resLoaded, sso.status, loadResources]);
 
   // Load this opportunity's notes when the panel opens (server re-checks access).
   useEffect(() => {
@@ -1077,10 +1134,30 @@ export default function Dashboard() {
               <IconBoard />
               Board
             </button>
+            <button
+              className={view === "resources" ? "on" : ""}
+              onClick={() => setView("resources")}
+              type="button"
+            >
+              <IconDoc />
+              Resources
+            </button>
+            {isAdminViewer && (
+              <button
+                className={view === "import" ? "on" : ""}
+                onClick={() => setView("import")}
+                type="button"
+              >
+                <IconUpload />
+                Import
+              </button>
+            )}
           </div>
         </div>
 
-        {/* stats */}
+        {/* opportunity-only controls (hidden on the Resources / Import tabs) */}
+        {view !== "resources" && view !== "import" && (
+        <>
         <div className="stats">
           <div className="stat">
             <div className="k">In pipeline</div>
@@ -1266,9 +1343,79 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+        </>
+        )}
 
-        {/* content: loading / error / list / board */}
-        {loading ? (
+        {/* content: Import tab (admin), Resources tab, else loading / error / list / board */}
+        {view === "import" ? (
+          isAdminViewer ? (
+            <ImportWizard ssoBlob={sso.status === "ready" ? sso.blob : null} />
+          ) : (
+            <div className="empty">
+              <b>Admins only</b>
+              <br />
+              The bulk import tool is restricted to admin users.
+            </div>
+          )
+        ) : view === "resources" ? (
+          <div className="scroll reswrap">
+            {resLoading ? (
+              <div className="statewrap">
+                <div className="statecard">
+                  <div className="spinner" />
+                  <h3>Loading resources…</h3>
+                  <p>Fetching documents from the OLTL Resources folder.</p>
+                </div>
+              </div>
+            ) : resErr ? (
+              <div className="statewrap">
+                <div className="statecard">
+                  <h3>
+                    <span className="errdot">●</span> Couldn&apos;t load resources
+                  </h3>
+                  <p>{resErr}</p>
+                  <button
+                    className="retry"
+                    onClick={loadResources}
+                    type="button"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : resources.length === 0 ? (
+              <div className="empty">
+                <b>No resources yet</b>
+                <br />
+                Add documents to the OLTL Resources folder in GoHighLevel.
+              </div>
+            ) : (
+              <div className="resgrid">
+                {resources.map((f, i) => (
+                  <a
+                    key={`${f.url}-${i}`}
+                    className="rescard"
+                    href={f.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="ricon">
+                      <IconDoc />
+                    </span>
+                    <span className="rbody">
+                      <span className="rname">{f.name}</span>
+                      <span className="rmeta">
+                        {(f.type || "file")}
+                        {f.size ? ` · ${fmtSize(f.size)}` : ""}
+                      </span>
+                    </span>
+                    <span className="ropen">Open ↗</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : loading ? (
           <div className="statewrap">
             <div className="statecard">
               <div className="spinner" />
