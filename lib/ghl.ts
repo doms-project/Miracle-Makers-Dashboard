@@ -1,5 +1,13 @@
-import type { OpportunityRecord, EditableFieldDef } from "./types";
+import type {
+  OpportunityRecord,
+  EditableFieldDef,
+  ResourceFile,
+} from "./types";
 import { isFieldEditable } from "./editable";
+
+export const RESOURCES_FOLDER_ID = (
+  process.env.RESOURCES_FOLDER_ID || "6a75ea609994d35aa0c66e9a"
+).trim();
 
 // ---------------------------------------------------------------------------
 // Server-only GoHighLevel client.
@@ -702,4 +710,132 @@ export async function getOpportunityById(
   for (const s of pipeline.stages || []) stageMap.set(s.id, s.name);
   const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
   return normalizeOpportunity(opp, fieldMap, userMap, stageMap);
+}
+
+// ---------------------------------------------------------------------------
+// Resources — files in the OLTL Resources media folder only.
+//
+// The Media Library is shared across the whole sub-account, so we scope BOTH at
+// the API (parentId param) AND again in code (belt-and-suspenders) to the
+// RESOURCES_FOLDER_ID. Media URLs are signed with a TTL, so we always LIST fresh
+// (never store a URL). Field names vary across GHL versions — read defensively.
+// ---------------------------------------------------------------------------
+
+interface RawMedia {
+  _id?: string;
+  id?: string;
+  name?: string;
+  fileName?: string;
+  originalName?: string;
+  url?: string;
+  fileUrl?: string;
+  link?: string;
+  parentId?: string;
+  folderId?: string;
+  type?: string;
+  mimeType?: string;
+  contentType?: string;
+  size?: number;
+  fileSize?: number;
+}
+
+export async function listResources(): Promise<ResourceFile[]> {
+  const { locationId } = requireEnv();
+  const folderId = RESOURCES_FOLDER_ID;
+  const limit = 100;
+  const all: RawMedia[] = [];
+  for (let page = 0, offset = 0; page < 50; page++, offset += limit) {
+    const params = new URLSearchParams({
+      altType: "location",
+      altId: locationId,
+      type: "file",
+      sortBy: "createdAt",
+      sortOrder: "desc",
+      parentId: folderId, // scope at the API when supported…
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const data = await ghlGet<{ files?: RawMedia[]; medias?: RawMedia[] }>(
+      `/medias/files?${params.toString()}`,
+    );
+    const batch = data.files || data.medias || [];
+    all.push(...batch);
+    if (batch.length < limit) break;
+  }
+  // …and filter again in code so a mis-supported param can never leak the library.
+  return all
+    .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
+    .map((f) => ({
+      name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
+      url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
+      type: String(f.type ?? f.mimeType ?? f.contentType ?? ""),
+      size: Number(f.size ?? f.fileSize ?? 0) || 0,
+    }))
+    .filter((f) => f.url);
+}
+
+// ---------------------------------------------------------------------------
+// Bulk import — list all pipelines, upsert contacts (dedupe), create opps.
+// ---------------------------------------------------------------------------
+
+export async function listPipelines(): Promise<
+  { id: string; name: string; stages: { id: string; name: string }[] }[]
+> {
+  const ps = await getPipelines();
+  return ps.map((p) => ({
+    id: p.id,
+    name: p.name,
+    stages: (p.stages || []).map((s) => ({ id: s.id, name: s.name })),
+  }));
+}
+
+// Upsert dedupes by email/phone at GHL; `isNew` distinguishes created vs matched.
+export async function upsertContact(fields: {
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  source?: string;
+  customFields?: { id: string; value: unknown }[];
+}): Promise<{ id: string; isNew: boolean }> {
+  const { locationId } = requireEnv();
+  const body: Record<string, unknown> = { locationId };
+  for (const k of ["firstName", "lastName", "name", "email", "phone", "source"] as const)
+    if (fields[k]) body[k] = fields[k];
+  if (fields.customFields?.length) body.customFields = fields.customFields;
+  const res = await ghlSend<{ contact?: { id?: string }; new?: boolean }>(
+    "POST",
+    "/contacts/upsert",
+    body,
+  );
+  return { id: res.contact?.id || "", isNew: res.new !== false };
+}
+
+export async function createOpportunity(o: {
+  pipelineId: string;
+  stageId: string;
+  contactId: string;
+  name: string;
+  source?: string;
+  status?: string;
+  customFields?: { id: string; value: unknown }[];
+}): Promise<string> {
+  const { locationId } = requireEnv();
+  const body: Record<string, unknown> = {
+    pipelineId: o.pipelineId,
+    locationId,
+    pipelineStageId: o.stageId,
+    contactId: o.contactId,
+    name: o.name,
+    status: o.status || "open",
+  };
+  if (o.source) body.source = o.source;
+  if (o.customFields?.length) body.customFields = o.customFields;
+  const res = await ghlSend<{ opportunity?: { id?: string }; id?: string }>(
+    "POST",
+    "/opportunities/",
+    body,
+  );
+  return res.opportunity?.id || res.id || "";
 }
