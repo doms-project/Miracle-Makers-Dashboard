@@ -64,12 +64,12 @@ function effectiveScheme(): string {
   return override;
 }
 
-function headers(): HeadersInit {
+function headers(version?: string): HeadersInit {
   const { token } = requireEnv();
   const scheme = effectiveScheme();
   return {
     Authorization: scheme ? `${scheme} ${token}` : token,
-    Version: process.env.GHL_API_VERSION || "2021-07-28",
+    Version: version || process.env.GHL_API_VERSION || "2021-07-28",
     Accept: "application/json",
   };
 }
@@ -838,4 +838,439 @@ export async function createOpportunity(o: {
     body,
   );
   return res.opportunity?.id || res.id || "";
+}
+
+// ---------------------------------------------------------------------------
+// Resources upload (Task 1) — multipart to the GHL Media Library.
+// Server-only; the token never leaves this module. `parentId` targets the
+// OLTL Resources folder so uploads don't pollute the media root. NOTE: some
+// GHL tenants ignore parentId on upload and drop the file at root — the
+// probe (scripts/resources-upload-probe.mjs) verifies this live. If it lands
+// at root, listResources() (which filters by parentId) simply won't show it.
+// ---------------------------------------------------------------------------
+export async function uploadResource(file: {
+  buffer: ArrayBuffer;
+  filename: string;
+  contentType: string;
+}): Promise<{ id: string; url: string; name: string }> {
+  const { locationId } = requireEnv();
+  const form = new FormData();
+  const blob = new Blob([file.buffer], {
+    type: file.contentType || "application/octet-stream",
+  });
+  // GHL /medias/upload-file form fields.
+  form.append("file", blob, file.filename);
+  form.append("hosted", "false");
+  form.append("name", file.filename);
+  form.append("parentId", RESOURCES_FOLDER_ID);
+
+  const url = `${BASE_URL}/medias/upload-file`;
+  // IMPORTANT: do NOT set Content-Type here — fetch derives the multipart
+  // boundary from the FormData automatically. `headers()` only sets auth +
+  // Version + Accept, which is exactly what we want.
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers: headers(), body: form });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 500);
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401)
+      detail = `${detail} (The PIT likely needs the medias/media WRITE scope — add it to the Private Integration.)`;
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for POST /medias/upload-file.`,
+      res.status,
+      detail,
+    );
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    id?: string;
+    fileId?: string;
+    url?: string;
+    fileUrl?: string;
+    name?: string;
+  };
+  return {
+    id: String(j.id ?? j.fileId ?? ""),
+    url: String(j.url ?? j.fileUrl ?? ""),
+    name: String(j.name ?? file.filename),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Associations / relations (Task 4) — caregiver <-> client links.
+// The many-to-many association id is fixed for this tenant. Endpoint shapes
+// follow GHL v2; the probe (scripts/associations-probe.mjs) confirms the exact
+// query params + delete shape live. Every helper surfaces a clear GhlError so a
+// PIT that lacks associations access fails loudly, not silently.
+// ---------------------------------------------------------------------------
+export const CAREGIVER_CLIENT_ASSOCIATION_ID = (
+  process.env.CAREGIVER_ASSOCIATION_ID || "6a6e26c9884def7a1438b965"
+).trim();
+
+export interface CaregiverRelation {
+  relationId: string; // used to DELETE the link
+  contactId: string; // the caregiver contact
+  name: string;
+}
+
+interface RawRelation {
+  id?: string;
+  _id?: string;
+  relationId?: string;
+  associationId?: string;
+  firstRecordId?: string;
+  secondRecordId?: string;
+  firstObjectKey?: string;
+  secondObjectKey?: string;
+  [key: string]: unknown;
+}
+
+interface RawContact {
+  id?: string;
+  contactId?: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+  contactName?: string;
+  email?: string;
+  [key: string]: unknown;
+}
+
+const contactDisplay = (c: RawContact): string =>
+  (c.name || c.contactName || [c.firstName, c.lastName].filter(Boolean).join(" "))
+    ?.toString()
+    .trim() ||
+  c.email?.toString().trim() ||
+  "Unnamed contact";
+
+// List the caregivers associated with a given client contact. `clientContactId`
+// is the opportunity's linked contact. Returns each relation's id (for removal)
+// and the caregiver contact id + name.
+export async function listCaregiverRelations(
+  clientContactId: string,
+): Promise<CaregiverRelation[]> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    locationId,
+    recordId: clientContactId,
+    associationId: CAREGIVER_CLIENT_ASSOCIATION_ID,
+  });
+  const data = await ghlGet<{ relations?: RawRelation[] }>(
+    `/associations/relations/${encodeURIComponent(clientContactId)}?${params.toString()}`,
+  ).catch(async (e) => {
+    // Fallback to the query-only form some tenants expose.
+    if (e instanceof GhlError && e.status === 404) {
+      return ghlGet<{ relations?: RawRelation[] }>(
+        `/associations/relations?${params.toString()}`,
+      );
+    }
+    throw e;
+  });
+  const relations = data.relations || [];
+  // The caregiver is whichever side of the relation is NOT the client contact.
+  const caregiverIds = relations.map((r) => {
+    const rid = String(r.id ?? r._id ?? r.relationId ?? "");
+    const other =
+      String(r.firstRecordId ?? "") === clientContactId
+        ? String(r.secondRecordId ?? "")
+        : String(r.firstRecordId ?? "");
+    return { relationId: rid, contactId: other };
+  });
+  // Resolve names (best-effort; a failed lookup still shows the id).
+  const out: CaregiverRelation[] = [];
+  for (const c of caregiverIds) {
+    if (!c.contactId) continue;
+    let name = c.contactId;
+    try {
+      const cd = await ghlGet<{ contact?: RawContact }>(
+        `/contacts/${encodeURIComponent(c.contactId)}`,
+      );
+      if (cd.contact) name = contactDisplay(cd.contact);
+    } catch {
+      /* keep id as name */
+    }
+    out.push({ relationId: c.relationId, contactId: c.contactId, name });
+  }
+  return out;
+}
+
+// Typeahead: search contacts filtered to Record Type = "Caregiver" so clients
+// never appear. Record Type on this tenant is a contact custom field; we filter
+// defensively both at the API (when supported) and in code.
+export async function searchCaregiverContacts(
+  query: string,
+): Promise<{ id: string; name: string; email: string }[]> {
+  const { locationId } = requireEnv();
+  if (!query.trim()) return [];
+  const body = {
+    locationId,
+    page: 1,
+    pageLimit: 20,
+    query: query.trim(),
+  };
+  const data = await ghlSend<{ contacts?: RawContact[] }>(
+    "POST",
+    "/contacts/search",
+    body,
+  );
+  const contacts = data.contacts || [];
+  const isCaregiver = (c: RawContact): boolean => {
+    // Look for a Record Type value of "Caregiver" anywhere obvious.
+    const rt =
+      (c.recordType as string) ??
+      (c.type as string) ??
+      (c.contactType as string) ??
+      "";
+    if (String(rt).toLowerCase().includes("caregiver")) return true;
+    // customFields may carry Record Type; scan permissively.
+    const cf = c.customFields;
+    if (Array.isArray(cf)) {
+      for (const f of cf as { value?: unknown }[]) {
+        if (String(f?.value ?? "").toLowerCase() === "caregiver") return true;
+      }
+    }
+    return false;
+  };
+  const filtered = contacts.filter(isCaregiver);
+  // If the tenant doesn't expose Record Type on search, fall back to all
+  // matches rather than showing nothing (the picker still assigns a real
+  // contact; the caller is warned in the UI note).
+  const list = filtered.length ? filtered : contacts;
+  return list.map((c) => ({
+    id: String(c.id ?? c.contactId ?? ""),
+    name: contactDisplay(c),
+    email: String(c.email ?? ""),
+  }));
+}
+
+export async function createCaregiverRelation(
+  clientContactId: string,
+  caregiverContactId: string,
+): Promise<string> {
+  const { locationId } = requireEnv();
+  const body = {
+    locationId,
+    associationId: CAREGIVER_CLIENT_ASSOCIATION_ID,
+    firstRecordId: clientContactId,
+    secondRecordId: caregiverContactId,
+  };
+  const res = await ghlSend<{ relation?: RawRelation; id?: string }>(
+    "POST",
+    "/associations/relations",
+    body,
+  );
+  return String(res.relation?.id ?? res.id ?? "");
+}
+
+// Fetch a contact's display name + email (for email recipients).
+export async function getContactBrief(
+  contactId: string,
+): Promise<{ id: string; name: string; email: string }> {
+  const data = await ghlGet<{ contact?: RawContact }>(
+    `/contacts/${encodeURIComponent(contactId)}`,
+  );
+  const c = data.contact || {};
+  return {
+    id: contactId,
+    name: contactDisplay(c),
+    email: String(c.email ?? ""),
+  };
+}
+
+// The Version header the email endpoints want. GHL's outbound-message +
+// templates endpoints are documented against 2021-04-15 (different from the
+// 2021-07-28 the rest of the v2 API uses). Overridable per tenant without a code
+// change; the probe confirms which this location accepts.
+const EMAIL_API_VERSION = (
+  process.env.GHL_EMAIL_API_VERSION || "2021-04-15"
+).trim();
+
+// A verified sending address is required by GHL for outbound email; it must
+// belong to the authenticated sub-account domain. Set once the domain is
+// authenticated (Jack/DNS). When blank we omit it and let GHL use the
+// sub-account default.
+const EMAIL_FROM = (process.env.GHL_EMAIL_FROM || "").trim();
+
+export interface EmailTemplateLite {
+  id: string;
+  name: string;
+  subject: string;
+  body: string; // HTML (GHL email-builder output) or plain text
+}
+
+interface RawTemplate {
+  id?: string;
+  _id?: string;
+  templateId?: string;
+  name?: string;
+  title?: string;
+  subject?: string;
+  body?: string;
+  html?: string;
+  template?: { html?: string; body?: string; subject?: string };
+  [key: string]: unknown;
+}
+
+// Step 1 — pull the sub-account's EMAIL templates from GHL so Jack's team can
+// manage them in the native builder (no code change to add/edit). Shape varies
+// across tenants; normalize permissively. Uses the email Version header.
+export async function listEmailTemplates(): Promise<EmailTemplateLite[]> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    locationId,
+    type: "email",
+    limit: "100",
+    offset: "0",
+  });
+  const url = `${BASE_URL}/locations/${encodeURIComponent(
+    locationId,
+  )}/templates?${params.toString()}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: headers(EMAIL_API_VERSION),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 400);
+    } catch {
+      /* ignore */
+    }
+    if (res.status === 401)
+      detail = `${detail} (The PIT likely needs the templates READ scope.)`;
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for GET /locations/{id}/templates.`,
+      res.status,
+      detail,
+    );
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    templates?: RawTemplate[];
+    data?: RawTemplate[];
+  };
+  const raw = j.templates || j.data || [];
+  return raw
+    .map((t) => ({
+      id: String(t.id ?? t._id ?? t.templateId ?? ""),
+      name: String(t.name ?? t.title ?? "Untitled template"),
+      subject: String(t.subject ?? t.template?.subject ?? ""),
+      body: String(t.html ?? t.body ?? t.template?.html ?? t.template?.body ?? ""),
+    }))
+    .filter((t) => t.id);
+}
+
+// Task 5 — send an email to a contact via the Conversations outbound endpoint.
+// Option B (default): send the composer's edited HTML as `emailBody`. Option A:
+// pass `templateId` to let GHL render a template directly. Confirm shape with
+// scripts/email-templates-probe.mjs. NOTE: deliverability depends on the sending
+// domain being authenticated + a verified emailFrom — until then messages may
+// land in spam even on a 2xx here.
+export async function sendEmail(args: {
+  contactId: string;
+  subject: string;
+  html?: string; // Option B — rendered/edited HTML body
+  templateId?: string; // Option A — send by GHL template id
+  cc?: string[];
+}): Promise<string> {
+  const body: Record<string, unknown> = {
+    type: "Email",
+    contactId: args.contactId,
+    emailSubject: args.subject,
+    subject: args.subject, // harmless duplicate for tenants reading `subject`
+  };
+  if (args.templateId) body.templateId = args.templateId;
+  if (args.html) {
+    body.emailBody = args.html;
+    body.html = args.html; // duplicate for tenants reading `html`
+  }
+  if (EMAIL_FROM) body.emailFrom = EMAIL_FROM;
+  if (args.cc?.length) body.emailCc = args.cc;
+
+  const url = `${BASE_URL}/conversations/messages/outbound`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { ...headers(EMAIL_API_VERSION), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 400);
+    } catch {
+      /* ignore */
+    }
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for POST /conversations/messages/outbound.`,
+      res.status,
+      detail,
+    );
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    messageId?: string;
+    id?: string;
+    conversationId?: string;
+  };
+  return String(j.messageId ?? j.id ?? j.conversationId ?? "");
+}
+
+export async function deleteCaregiverRelation(
+  relationId: string,
+): Promise<void> {
+  const { locationId } = requireEnv();
+  const url = `${BASE_URL}/associations/relations/${encodeURIComponent(
+    relationId,
+  )}?locationId=${encodeURIComponent(locationId)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "DELETE", headers: headers() });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 500);
+    } catch {
+      /* ignore */
+    }
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for DELETE /associations/relations.`,
+      res.status,
+      detail,
+    );
+  }
 }

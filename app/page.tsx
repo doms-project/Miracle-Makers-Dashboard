@@ -23,6 +23,8 @@ import type {
 } from "@/lib/types";
 import { useGhlSession } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
+import CaregiversSection from "@/components/CaregiversSection";
+import EmailComposer from "@/components/EmailComposer";
 
 const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
 
@@ -399,6 +401,11 @@ function CardBody({
           </span>
         ) : null}
       </div>
+      {r.cg && r.cg !== "—" ? (
+        <div className="ccg" title="Caregiver">
+          🧑‍⚕️ {r.cg}
+        </div>
+      ) : null}
       <div className="cm">
         {r.office || "—"} · {r.rep}
       </div>
@@ -485,6 +492,15 @@ export default function Dashboard() {
   const [resLoading, setResLoading] = useState(false);
   const [resErr, setResErr] = useState<string | null>(null);
   const [resLoaded, setResLoaded] = useState(false);
+  const [resQuery, setResQuery] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    name: string;
+    url: string;
+    kind: "pdf" | "image";
+  } | null>(null);
+  const [emailOpen, setEmailOpen] = useState(false);
   // Persistent notes (stored on the contact, scoped to the opportunity).
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [noteDraft, setNoteDraft] = useState("");
@@ -553,6 +569,11 @@ export default function Dashboard() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  // Close the email composer whenever the selected record changes/closes.
+  useEffect(() => {
+    setEmailOpen(false);
+  }, [selId]);
+
   // Fetch the folder-scoped resources fresh (signed URLs are TTL'd).
   const loadResources = useCallback(async () => {
     setResLoading(true);
@@ -581,6 +602,65 @@ export default function Dashboard() {
     if (view === "resources" && !resLoaded && sso.status !== "loading")
       loadResources();
   }, [view, resLoaded, sso.status, loadResources]);
+
+  // Admin upload → OLTL Resources folder (server-side; token never in browser).
+  const uploadResource = useCallback(
+    async (file: File) => {
+      setUploadMsg(null);
+      if (file.size > 4 * 1024 * 1024) {
+        setUploadMsg("✗ File too large — max 4 MB (Vercel serverless limit).");
+        return;
+      }
+      setUploading(true);
+      try {
+        const headers: Record<string, string> = {};
+        if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/resources/upload", {
+          method: "POST",
+          headers,
+          body: fd,
+        });
+        const j = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        setUploadMsg(`✓ Uploaded ${file.name}`);
+        setResLoaded(false); // force a fresh list on next tick
+        await loadResources();
+      } catch (e) {
+        setUploadMsg(`✗ ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [sso, loadResources],
+  );
+
+  // Classify a resource for preview vs download by extension/mime.
+  const previewKind = useCallback(
+    (f: { name: string; type: string }): "pdf" | "image" | null => {
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      const mime = (f.type || "").toLowerCase();
+      if (ext === "pdf" || mime.includes("pdf")) return "pdf";
+      if (
+        ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext) ||
+        mime.startsWith("image/")
+      )
+        return "image";
+      return null; // office docs & others → download only (signed-URL TTL)
+    },
+    [],
+  );
+
+  const visibleResources = useMemo(() => {
+    const t = resQuery.trim().toLowerCase();
+    if (!t) return resources;
+    return resources.filter((f) => f.name.toLowerCase().includes(t));
+  }, [resources, resQuery]);
 
   // Load this opportunity's notes when the panel opens (server re-checks access).
   useEffect(() => {
@@ -806,15 +886,22 @@ export default function Dashboard() {
       onClick={() => setSelId(r.id)}
     >
       <td className="strong">
-        {clientName(r) || "—"}
-        {followsNotOwns(r) ? (
-          <span
-            className="follow-tag"
-            title="You follow this record (you're not the owner)"
-          >
-            Following
-          </span>
-        ) : null}
+        <div className="clientcell">
+          <span className="clname">{clientName(r) || "—"}</span>
+          {followsNotOwns(r) ? (
+            <span
+              className="follow-tag"
+              title="You follow this record (you're not the owner)"
+            >
+              Following
+            </span>
+          ) : null}
+          {r.cg && r.cg !== "—" ? (
+            <span className="clcg" title="Caregiver">
+              {r.cg}
+            </span>
+          ) : null}
+        </div>
       </td>
       <td>
         {r.stage ? (
@@ -1359,6 +1446,40 @@ export default function Dashboard() {
           )
         ) : view === "resources" ? (
           <div className="scroll reswrap">
+            {/* toolbar: search + admin upload */}
+            <div className="restoolbar">
+              <div className="search">
+                <IconSearch />
+                <input
+                  placeholder="Search resources by name…"
+                  value={resQuery}
+                  onChange={(e) => setResQuery(e.target.value)}
+                />
+              </div>
+              {isAdminViewer ? (
+                <label className={`resupload ${uploading ? "busy" : ""}`}>
+                  <input
+                    type="file"
+                    hidden
+                    disabled={uploading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) uploadResource(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  {uploading ? "Uploading…" : "⬆ Upload"}
+                </label>
+              ) : null}
+            </div>
+            {uploadMsg ? (
+              <div
+                className={`resuploadmsg ${uploadMsg.startsWith("✗") ? "err" : "ok"}`}
+              >
+                {uploadMsg}
+              </div>
+            ) : null}
+
             {resLoading ? (
               <div className="statewrap">
                 <div className="statecard">
@@ -1387,31 +1508,60 @@ export default function Dashboard() {
               <div className="empty">
                 <b>No resources yet</b>
                 <br />
-                Add documents to the OLTL Resources folder in GoHighLevel.
+                {isAdminViewer
+                  ? "Upload a document above, or add files to the OLTL Resources folder in GoHighLevel."
+                  : "Add documents to the OLTL Resources folder in GoHighLevel."}
+              </div>
+            ) : visibleResources.length === 0 ? (
+              <div className="empty">
+                <b>No matches</b>
+                <br />
+                No resource name contains “{resQuery}”.
               </div>
             ) : (
               <div className="resgrid">
-                {resources.map((f, i) => (
-                  <a
-                    key={`${f.url}-${i}`}
-                    className="rescard"
-                    href={f.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <span className="ricon">
-                      <IconDoc />
-                    </span>
-                    <span className="rbody">
-                      <span className="rname">{f.name}</span>
-                      <span className="rmeta">
-                        {(f.type || "file")}
-                        {f.size ? ` · ${fmtSize(f.size)}` : ""}
+                {visibleResources.map((f, i) => {
+                  const kind = previewKind(f);
+                  const common = (
+                    <>
+                      <span className="ricon">
+                        <IconDoc />
                       </span>
-                    </span>
-                    <span className="ropen">Open ↗</span>
-                  </a>
-                ))}
+                      <span className="rbody">
+                        <span className="rname">{f.name}</span>
+                        <span className="rmeta">
+                          {f.type || "file"}
+                          {f.size ? ` · ${fmtSize(f.size)}` : ""}
+                        </span>
+                      </span>
+                      <span className="ropen">
+                        {kind ? "Preview" : "Download ↓"}
+                      </span>
+                    </>
+                  );
+                  return kind ? (
+                    <button
+                      key={`${f.url}-${i}`}
+                      type="button"
+                      className="rescard"
+                      onClick={() =>
+                        setPreview({ name: f.name, url: f.url, kind })
+                      }
+                    >
+                      {common}
+                    </button>
+                  ) : (
+                    <a
+                      key={`${f.url}-${i}`}
+                      className="rescard"
+                      href={f.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {common}
+                    </a>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1536,6 +1686,60 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* email composer (Task 5) */}
+      {selected && emailOpen ? (
+        <EmailComposer
+          key={selected.id}
+          opportunityId={selected.id}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          context={{
+            clientFirst: selected.first,
+            clientLast: selected.last,
+            office: selected.office,
+            stage: selected.stage,
+          }}
+          onClose={() => setEmailOpen(false)}
+        />
+      ) : null}
+
+      {/* resource preview modal (PDF / image) */}
+      {preview ? (
+        <div className="previewmodal" onClick={() => setPreview(null)}>
+          <div
+            className="previewbox"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="previewhead">
+              <span className="previewname">{preview.name}</span>
+              <a
+                className="previewopen"
+                href={preview.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open in new tab ↗
+              </a>
+              <button
+                className="x"
+                type="button"
+                onClick={() => setPreview(null)}
+                aria-label="Close preview"
+              >
+                ×
+              </button>
+            </div>
+            <div className="previewbody">
+              {preview.kind === "image" ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={preview.url} alt={preview.name} />
+              ) : (
+                <iframe title={preview.name} src={preview.url} />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* record panel */}
       <div
         className={`scrim ${selected ? "on" : ""}`}
@@ -1569,6 +1773,16 @@ export default function Dashboard() {
                 Edits save to GoHighLevel instantly. External IDs and the
                 compliance field are read-only.
               </div>
+
+              {canEdit(selected) ? (
+                <button
+                  type="button"
+                  className="emailbtn"
+                  onClick={() => setEmailOpen(true)}
+                >
+                  ✉ Send Email
+                </button>
+              ) : null}
 
               {/* 1 — Status & Workflow (most-used, top) */}
               <div className="sechead">Status &amp; Workflow</div>
@@ -1706,6 +1920,15 @@ export default function Dashboard() {
                   "Caregiver Name",
                 ])}
               </div>
+
+              {/* Caregivers (many-to-many association) */}
+              <div className="sechead">Caregivers</div>
+              <CaregiversSection
+                key={selected.id}
+                opportunityId={selected.id}
+                ssoBlob={sso.status === "ready" ? sso.blob : null}
+                canManage={canEdit(selected)}
+              />
 
               {/* 5 — System info (read-only, collapsed) */}
               <details className="sysinfo">

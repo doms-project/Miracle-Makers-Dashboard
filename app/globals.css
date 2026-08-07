@@ -269,3 +269,106 @@ tbody tr:last-child td{border-bottom:0;}
 .iresult .bad{color:var(--blk);font-weight:700;}
 .iresult .ierrs{flex-basis:100%;margin:8px 0 0;padding:10px 14px;list-style:none;background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:9px;max-height:200px;overflow:auto;}
 .iresult .ierrs li{font-size:11.5px;color:var(--blk);padding:2px 0;line-height:1.5;}
+
+/* ── Task 3: caregiver paired with client ─────────────────────── */
+.clientcell{display:flex;flex-direction:column;gap:1px;}
+.clientcell .clname{font-weight:700;}
+.clientcell .clcg{font-size:11px;color:var(--ink-3);font-weight:500;}
+.clientcell .clcg::before{content:"🧑‍⚕️ ";}
+.ccg{font-size:11px;color:var(--ink-2);margin-top:2px;}
+
+/* ── Task 1: resources toolbar / upload / preview ─────────────── */
+.restoolbar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
+.restoolbar .search{flex:1;min-width:200px;}
+.resupload{display:inline-flex;align-items:center;gap:7px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;white-space:nowrap;}
+.resupload:hover{background:var(--plum-mid);}
+.resupload.busy{background:var(--ink-3);cursor:progress;}
+.resuploadmsg{font-size:12px;margin-bottom:12px;padding:8px 12px;border-radius:8px;}
+.resuploadmsg.ok{color:var(--ok);background:var(--ok-soft);border:1px solid #bfe6d0;}
+.resuploadmsg.err{color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c2;}
+button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background:var(--bg);}
+.previewmodal{position:fixed;inset:0;z-index:60;background:rgba(31,23,41,.55);display:flex;align-items:center;justify-content:center;padding:28px;}
+.previewbox{background:var(--bg);border-radius:14px;width:min(920px,100%);height:min(90vh,900px);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
+.previewhead{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--canvas);}
+.previewname{flex:1;font-weight:700;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.previewopen{font-size:12px;font-weight:600;color:var(--plum);}
+.previewbody{flex:1;overflow:auto;background:#f0edf5;display:flex;align-items:center;justify-content:center;}
+.previewbody iframe{width:100%;height:100%;border:0;}
+.previewbody img{max-width:100%;max-height:100%;object-fit:contain;}
+
+/* ── Task 4: caregivers section (record panel) ────────────────── */
+.cgsec{display:flex;flex-direction:column;gap:10px;margin-bottom:8px;}
+.cgmuted{font-size:12px;color:var(--ink-3);}
+.cglist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.cgitem{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:var(--canvas);}
+.cgname{flex:1;font-size:12.5px;font-weight:600;color:var(--plum);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cgname:hover{text-decoration:underline;}
+.cgremove{width:22px;height:22px;border-radius:6px;font-size:16px;line-height:1;color:var(--ink-3);background:transparent;flex:none;}
+.cgremove:hover{background:var(--blk-soft);color:var(--blk);}
+.cgremove:disabled{opacity:.5;cursor:progress;}
+.cgadd{position:relative;}
+.cgsearch{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;font-size:12.5px;outline:none;transition:border-color .12s;}
+.cgsearch:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.cgsearch:disabled{background:var(--line-soft);cursor:progress;}
+.cgresults{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:5;background:var(--bg);border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 30px rgba(0,0,0,.14);max-height:240px;overflow:auto;}
+.cghit{display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;padding:8px 11px;font:inherit;background:transparent;cursor:pointer;border-bottom:1px solid var(--line-soft);}
+.cghit:last-child{border-bottom:0;}
+.cghit:hover:not(:disabled){background:var(--row-hover);}
+.cghit:disabled{opacity:.5;cursor:not-allowed;}
+.cghitname{font-size:12.5px;font-weight:600;color:var(--ink);}
+.cghitmeta{font-size:10.5px;color:var(--ink-3);}
+
+/* ── Task 2: import wizard stepper / drag-drop / progress ─────── */
+.istepper{display:flex;list-style:none;margin:0 0 18px;padding:0;gap:6px;flex-wrap:wrap;}
+.istepper-i button{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);cursor:pointer;}
+.istepper-i button:disabled{cursor:not-allowed;opacity:.7;}
+.istepper-i.on button{border-color:var(--plum);color:var(--plum);background:var(--plum-soft);}
+.istepper-i.done button{color:var(--ok);border-color:#bfe6d0;}
+.istepper-i .idot{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--line-soft);font-size:10.5px;font-weight:800;}
+.istepper-i.on .idot{background:var(--plum);color:#fff;}
+.istepper-i.done .idot{background:var(--ok);color:#fff;}
+.idrop{border:2px dashed var(--plum-line);border-radius:14px;padding:38px 20px;text-align:center;cursor:pointer;background:var(--plum-soft);transition:border-color .12s,background .12s;}
+.idrop:hover,.idrop.over{border-color:var(--plum);background:#efe6fb;}
+.idrop-i{font-size:26px;color:var(--plum);}
+.idrop-t{font-size:14px;font-weight:700;color:var(--ink);margin-top:8px;}
+.idrop-s{font-size:12px;color:var(--ink-3);margin-top:3px;}
+.imaprow.skip .icol{opacity:.6;}
+.iauto{margin-left:7px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);background:var(--ok-soft);border-radius:20px;padding:1px 6px;}
+.iskip{margin-left:7px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 6px;}
+.iprogwrap{margin-bottom:14px;}
+.iprogbar{height:9px;border-radius:6px;background:var(--line-soft);overflow:hidden;}
+.iprogfill{height:100%;background:linear-gradient(90deg,var(--plum),var(--plum-mid));transition:width .25s;}
+.iresult-nums{display:flex;flex-wrap:wrap;gap:4px 10px;margin-bottom:8px;}
+.idl,.ireset{display:inline-flex;margin-top:4px;border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;color:var(--ink-2);background:var(--bg);cursor:pointer;}
+.idl:hover,.ireset:hover{border-color:var(--plum);color:var(--plum);}
+.ireset{margin-top:12px;}
+.inav{display:flex;justify-content:space-between;gap:12px;margin-top:6px;}
+.ighost{border:1px solid var(--line);border-radius:9px;padding:11px 20px;font-size:13px;font-weight:600;color:var(--ink-2);background:var(--bg);cursor:pointer;}
+.ighost:hover:not(:disabled){border-color:var(--plum);color:var(--plum);}
+.ighost:disabled{opacity:.5;cursor:not-allowed;}
+
+/* ── Task 5: email composer ───────────────────────────────────── */
+.emailbtn{display:inline-flex;align-items:center;gap:7px;margin:2px 0 6px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;}
+.emailbtn:hover{background:var(--plum-mid);}
+.emailbox{background:var(--bg);border-radius:14px;width:min(640px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
+.emailbody{padding:16px 18px 20px;overflow:auto;}
+.emailcaveat{font-size:11.5px;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:9px 12px;margin-bottom:14px;line-height:1.5;}
+.emailrecips{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+.emailrecip{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;padding:8px 11px;cursor:pointer;background:var(--canvas);}
+.emailrecip input{margin:0;accent-color:var(--plum);}
+.emailrecip .errole{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;}
+.emailrecip .ername{font-weight:600;font-size:12.5px;color:var(--ink);}
+.emailrecip .eremail{margin-left:auto;font-size:11px;color:var(--ink-3);}
+.emaillbl{display:block;font-size:11px;color:var(--ink-2);font-weight:600;margin:6px 0 5px;}
+.emailtpl,.emailta{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;transition:border-color .12s;}
+.emailtpl:focus,.emailta:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.emailta{margin-top:8px;resize:vertical;line-height:1.55;min-height:150px;}
+.emailpreview{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:10px;}
+.emailpreview .epsub{font-weight:700;font-size:13px;padding:10px 13px;border-bottom:1px solid var(--line);background:var(--canvas);color:var(--ink);}
+.emailpreview .epbody{padding:12px 13px;font-size:12.5px;line-height:1.6;color:var(--ink);white-space:pre-wrap;}
+.emailresults .ireset{margin-top:12px;}
+
+/* email templates: source badge + HTML preview */
+.tplsrc{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:2px 8px;}
+.emailpreview .ephtml{max-height:320px;overflow:auto;}
+.emailpreview .ephtml img{max-width:100%;height:auto;}

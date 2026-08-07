@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import readXlsxFile from "read-excel-file";
 import Papa from "papaparse";
 import type {
@@ -21,8 +21,9 @@ const NATIVE_TARGETS: { key: string; label: string }[] = [
 ];
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-
 const CHUNK = 25;
+const STEPS = ["Upload", "Destination", "Map", "Preview", "Import"] as const;
+type StepIdx = 0 | 1 | 2 | 3 | 4;
 
 export default function ImportWizard({
   ssoBlob,
@@ -32,19 +33,26 @@ export default function ImportWizard({
   const [meta, setMeta] = useState<ImportMeta | null>(null);
   const [metaErr, setMetaErr] = useState<string | null>(null);
 
+  const [step, setStep] = useState<StepIdx>(0);
+
   const [fileName, setFileName] = useState("");
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [parseErr, setParseErr] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState("");
   const [source, setSource] = useState("Indeed");
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
 
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [importErr, setImportErr] = useState<string | null>(null);
+  const [presetNames, setPresetNames] = useState<string[]>([]);
+
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   const ssoHeader = useCallback((): Record<string, string> => {
     return ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {};
@@ -67,10 +75,23 @@ export default function ImportWizard({
     };
   }, [ssoHeader]);
 
+  useEffect(() => {
+    try {
+      setPresetNames(
+        Object.keys(JSON.parse(localStorage.getItem("importPresets") || "{}")),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const pipeline: ImportPipeline | undefined = useMemo(
     () => meta?.pipelines.find((p) => p.id === pipelineId),
     [meta, pipelineId],
   );
+  const pipelineName = pipeline?.name || "—";
+  const stageName =
+    pipeline?.stages.find((s) => s.id === stageId)?.name || "—";
 
   const targets = useMemo(() => {
     const cf = (meta?.fieldDefs || []).map((d) => ({
@@ -80,10 +101,10 @@ export default function ImportWizard({
     return [...NATIVE_TARGETS, ...cf];
   }, [meta]);
 
-  // Auto-suggest a target for each column by name.
   const autoMap = useCallback(
-    (columns: string[]): Record<string, string> => {
+    (columns: string[]): { map: Record<string, string>; auto: Set<string> } => {
       const out: Record<string, string> = {};
+      const auto = new Set<string>();
       for (const c of columns) {
         const n = norm(c);
         let target = "";
@@ -98,13 +119,14 @@ export default function ImportWizard({
           if (def) target = `cf:${def.id}`;
         }
         out[c] = target;
+        if (target) auto.add(c);
       }
-      return out;
+      return { map: out, auto };
     },
     [meta],
   );
 
-  const onFile = async (file: File) => {
+  const parseFile = async (file: File) => {
     setParseErr(null);
     setSummary(null);
     setImportErr(null);
@@ -124,7 +146,7 @@ export default function ImportWizard({
         );
         columns = (res.meta.fields || []).filter(Boolean);
         rows = res.data;
-      } else {
+      } else if (/\.xlsx$/i.test(file.name)) {
         const grid = (await readXlsxFile(file)) as unknown[][];
         columns = (grid[0] || []).map((c) => String(c ?? "").trim());
         rows = grid.slice(1).map((r) => {
@@ -132,14 +154,29 @@ export default function ImportWizard({
           columns.forEach((c, idx) => (o[c] = r[idx]));
           return o;
         });
+      } else {
+        throw new Error("Unsupported file type — upload a .xlsx or .csv.");
       }
+      columns = columns.filter(Boolean);
       rows = rows.filter((r) => Object.values(r).some((v) => v != null && v !== ""));
+      if (!columns.length) throw new Error("No columns found in the file.");
+      if (!rows.length) throw new Error("No data rows found in the file.");
+      const { map, auto } = autoMap(columns);
       setParsed({ columns, rows });
-      setMapping(autoMap(columns));
+      setMapping(map);
+      setAutoMapped(auto);
+      setStep(1);
     } catch (e) {
       setParseErr(e instanceof Error ? e.message : String(e));
       setParsed(null);
     }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) parseFile(f);
   };
 
   const runImport = async () => {
@@ -180,7 +217,22 @@ export default function ImportWizard({
     }
   };
 
-  // Reusable mapping presets (localStorage).
+  const downloadErrorReport = () => {
+    if (!summary?.errors.length) return;
+    const rows = [["row", "error"], ...summary.errors.map((e) => [String(e.row), e.error])];
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `import-errors-${fileName.replace(/\.[^.]+$/, "") || "report"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Presets.
   const savePreset = () => {
     const name = window.prompt("Save this mapping as (e.g. 'Indeed')");
     if (!name) return;
@@ -189,22 +241,11 @@ export default function ImportWizard({
     localStorage.setItem("importPresets", JSON.stringify(all));
     setPresetNames(Object.keys(all));
   };
-  const [presetNames, setPresetNames] = useState<string[]>([]);
-  useEffect(() => {
-    try {
-      setPresetNames(
-        Object.keys(JSON.parse(localStorage.getItem("importPresets") || "{}")),
-      );
-    } catch {
-      /* ignore */
-    }
-  }, []);
   const applyPreset = (name: string) => {
     if (!name) return;
     const all = JSON.parse(localStorage.getItem("importPresets") || "{}");
     const p = all[name];
     if (!p) return;
-    // Only apply mappings for columns present in the current file.
     if (parsed) {
       const next: Record<string, string> = {};
       for (const c of parsed.columns) next[c] = p.mapping?.[c] || mapping[c] || "";
@@ -213,6 +254,17 @@ export default function ImportWizard({
     if (p.source) setSource(p.source);
     if (p.pipelineId) setPipelineId(p.pipelineId);
     if (p.stageId) setStageId(p.stageId);
+  };
+
+  const mappedCount = parsed
+    ? parsed.columns.filter((c) => mapping[c]).length
+    : 0;
+
+  const canNext = (): boolean => {
+    if (step === 0) return !!parsed;
+    if (step === 1) return !!pipelineId && !!stageId;
+    if (step === 2) return mappedCount > 0;
+    return true;
   };
 
   if (metaErr)
@@ -233,99 +285,151 @@ export default function ImportWizard({
 
   return (
     <div className="scroll importwrap">
-      {/* 1 — upload */}
-      <div className="isec">
-        <div className="istep">1 · Upload a file</div>
-        <label className="ifile">
-          <input
-            type="file"
-            accept=".xlsx,.csv"
-            onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
-          />
-          {fileName ? `📄 ${fileName}` : "Choose .xlsx or .csv…"}
-        </label>
-        {parseErr ? <div className="savemsg err">✗ {parseErr}</div> : null}
-        {parsed ? (
-          <div className="imeta">
-            {parsed.rows.length} rows · {parsed.columns.length} columns
-          </div>
-        ) : null}
-      </div>
+      {/* progress indicator */}
+      <ol className="istepper">
+        {STEPS.map((label, i) => (
+          <li
+            key={label}
+            className={`istepper-i ${i === step ? "on" : ""} ${i < step ? "done" : ""}`}
+          >
+            <button
+              type="button"
+              disabled={i > step && !(i === step + 1 && canNext())}
+              onClick={() => setStep(i as StepIdx)}
+            >
+              <span className="idot">{i < step ? "✓" : i + 1}</span>
+              {label}
+            </button>
+          </li>
+        ))}
+      </ol>
 
-      {parsed ? (
-        <>
-          {/* 2 — destination */}
-          <div className="isec">
-            <div className="istep">2 · Destination</div>
-            <div className="irow">
-              <label>Pipeline</label>
-              <select
-                value={pipelineId}
-                onChange={(e) => {
-                  setPipelineId(e.target.value);
-                  setStageId("");
-                }}
-              >
-                <option value="">Choose a pipeline…</option>
-                {meta?.pipelines.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <label>Stage</label>
-              <select
-                value={stageId}
-                onChange={(e) => setStageId(e.target.value)}
-                disabled={!pipeline}
-              >
-                <option value="">Choose a stage…</option>
-                {(pipeline?.stages || []).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <label>Source</label>
-              <input
-                className="isrc"
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                placeholder="e.g. Indeed"
-              />
+      {/* STEP 1 — Upload */}
+      {step === 0 && (
+        <div className="isec">
+          <div
+            className={`idrop ${dragOver ? "over" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => fileInput.current?.click()}
+            role="button"
+            tabIndex={0}
+          >
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".xlsx,.csv"
+              hidden
+              onChange={(e) => e.target.files?.[0] && parseFile(e.target.files[0])}
+            />
+            <div className="idrop-i">⬆</div>
+            <div className="idrop-t">
+              {fileName ? `📄 ${fileName}` : "Drag a .xlsx or .csv here"}
             </div>
+            <div className="idrop-s">or click to browse</div>
           </div>
-
-          {/* 3 — mapping */}
-          <div className="isec">
-            <div className="istep">
-              3 · Map columns → GHL fields
-              <span className="ipresets">
-                <button type="button" onClick={savePreset}>
-                  Save preset
-                </button>
-                {presetNames.length ? (
-                  <select
-                    defaultValue=""
-                    onChange={(e) => {
-                      applyPreset(e.target.value);
-                      e.target.value = "";
-                    }}
-                  >
-                    <option value="">Apply preset…</option>
-                    {presetNames.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </span>
+          {parseErr ? <div className="savemsg err">✗ {parseErr}</div> : null}
+          {parsed ? (
+            <div className="imeta">
+              ✓ {parsed.rows.length} rows · {parsed.columns.length} columns parsed
             </div>
-            <div className="imap">
-              {parsed.columns.map((c) => (
-                <div className="imaprow" key={c}>
-                  <span className="icol">{c}</span>
+          ) : null}
+        </div>
+      )}
+
+      {/* STEP 2 — Destination */}
+      {step === 1 && (
+        <div className="isec">
+          <div className="istep">Destination</div>
+          <div className="irow">
+            <label>Pipeline</label>
+            <select
+              value={pipelineId}
+              onChange={(e) => {
+                setPipelineId(e.target.value);
+                setStageId("");
+              }}
+            >
+              <option value="">Choose a pipeline…</option>
+              {meta?.pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <label>Stage</label>
+            <select
+              value={stageId}
+              onChange={(e) => setStageId(e.target.value)}
+              disabled={!pipeline}
+            >
+              <option value="">Choose a stage…</option>
+              {(pipeline?.stages || []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <label>Source</label>
+            <input
+              className="isrc"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="e.g. Indeed"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3 — Map */}
+      {step === 2 && parsed && (
+        <div className="isec">
+          <div className="istep">
+            Map columns → GHL fields
+            <span className="ipresets">
+              <button type="button" onClick={savePreset}>
+                Save preset
+              </button>
+              {presetNames.length ? (
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    applyPreset(e.target.value);
+                    e.target.value = "";
+                  }}
+                >
+                  <option value="">Apply preset…</option>
+                  {presetNames.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </span>
+          </div>
+          <div className="imeta" style={{ marginBottom: 10 }}>
+            {mappedCount} of {parsed.columns.length} columns mapped · unmapped
+            columns are skipped
+          </div>
+          <div className="imap">
+            {parsed.columns.map((c) => {
+              const isAuto = autoMapped.has(c) && mapping[c];
+              const unmapped = !mapping[c];
+              return (
+                <div
+                  className={`imaprow ${unmapped ? "skip" : ""}`}
+                  key={c}
+                >
+                  <span className="icol">
+                    {c}
+                    {isAuto ? <span className="iauto">auto</span> : null}
+                    {unmapped ? <span className="iskip">skip</span> : null}
+                  </span>
                   <span className="iarrow">→</span>
                   <select
                     value={mapping[c] ?? ""}
@@ -341,69 +445,157 @@ export default function ImportWizard({
                     ))}
                   </select>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
+        </div>
+      )}
 
-          {/* 4 — preview + import */}
-          <div className="isec">
-            <div className="istep">4 · Preview &amp; import</div>
-            <div className="ipreview">
-              <table>
-                <thead>
-                  <tr>
-                    {parsed.columns.map((c) => (
-                      <th key={c}>{c}</th>
+      {/* STEP 4 — Preview */}
+      {step === 3 && parsed && (
+        <div className="isec">
+          <div className="istep">Preview</div>
+          <div className="imeta" style={{ marginBottom: 10 }}>
+            {parsed.rows.length} rows into <b>{pipelineName}</b> / <b>{stageName}</b>,
+            deduped by email/phone.
+          </div>
+          <div className="ipreview">
+            <table>
+              <thead>
+                <tr>
+                  {parsed.columns
+                    .filter((c) => mapping[c])
+                    .map((c) => (
+                      <th key={c}>
+                        {targets.find((t) => t.key === mapping[c])?.label || c}
+                      </th>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {parsed.rows.slice(0, 5).map((r, i) => (
-                    <tr key={i}>
-                      {parsed.columns.map((c) => (
+                </tr>
+              </thead>
+              <tbody>
+                {parsed.rows.slice(0, 8).map((r, i) => (
+                  <tr key={i}>
+                    {parsed.columns
+                      .filter((c) => mapping[c])
+                      .map((c) => (
                         <td key={c}>{String(r[c] ?? "")}</td>
                       ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {parsed.rows.length > 5 ? (
-                <div className="imeta">…and {parsed.rows.length - 5} more</div>
-              ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {parsed.rows.length > 8 ? (
+              <div className="imeta">…and {parsed.rows.length - 8} more</div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 5 — Import */}
+      {step === 4 && parsed && (
+        <div className="isec">
+          <div className="istep">Import</div>
+          {importing || summary ? (
+            <div className="iprogwrap">
+              <div className="iprogbar">
+                <div
+                  className="iprogfill"
+                  style={{
+                    width: `${Math.round((progress / parsed.rows.length) * 100)}%`,
+                  }}
+                />
+              </div>
+              <div className="imeta">
+                {progress}/{parsed.rows.length} rows processed
+              </div>
             </div>
+          ) : (
+            <div className="imeta" style={{ marginBottom: 12 }}>
+              Ready to import <b>{parsed.rows.length}</b> rows into{" "}
+              <b>{pipelineName}</b> / <b>{stageName}</b>. Existing contacts
+              (matched by email/phone) are skipped.
+            </div>
+          )}
+
+          {!summary && (
             <button
               className="ibtn"
               type="button"
               disabled={importing || !pipelineId || !stageId}
               onClick={runImport}
             >
-              {importing
-                ? `Importing… ${progress}/${parsed.rows.length}`
-                : `Import ${parsed.rows.length} rows`}
+              {importing ? "Importing…" : `Import ${parsed.rows.length} rows`}
             </button>
-            <div className="imeta">
-              Dedupes by email/phone; existing contacts are skipped. Server-side,
-              admin-only.
-            </div>
-            {importErr ? <div className="savemsg err">✗ {importErr}</div> : null}
-            {summary ? (
-              <div className="iresult">
+          )}
+          {importErr ? <div className="savemsg err">✗ {importErr}</div> : null}
+
+          {summary ? (
+            <div className="iresult">
+              <div className="iresult-nums">
                 <span className="ok">✓ {summary.created} created</span>
                 <span>· {summary.skipped} skipped (existing)</span>
                 <span className="bad">· {summary.failed} failed</span>
-                {summary.errors.length ? (
+              </div>
+              {summary.errors.length ? (
+                <>
+                  <button
+                    type="button"
+                    className="idl"
+                    onClick={downloadErrorReport}
+                  >
+                    ⬇ Download error report ({summary.errors.length})
+                  </button>
                   <ul className="ierrs">
-                    {summary.errors.slice(0, 30).map((e, i) => (
+                    {summary.errors.slice(0, 50).map((e, i) => (
                       <li key={i}>
                         Row {e.row}: {e.error}
                       </li>
                     ))}
                   </ul>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </>
+                </>
+              ) : null}
+              {!importing ? (
+                <button
+                  type="button"
+                  className="ireset"
+                  onClick={() => {
+                    setParsed(null);
+                    setFileName("");
+                    setSummary(null);
+                    setProgress(0);
+                    setStep(0);
+                  }}
+                >
+                  Import another file
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* nav */}
+      {!(step === 4 && summary) ? (
+        <div className="inav">
+          <button
+            type="button"
+            className="ighost"
+            disabled={step === 0 || importing}
+            onClick={() => setStep((s) => (s > 0 ? ((s - 1) as StepIdx) : s))}
+          >
+            ← Back
+          </button>
+          {step < 4 ? (
+            <button
+              type="button"
+              className="ibtn"
+              disabled={!canNext()}
+              onClick={() => setStep((s) => ((s + 1) as StepIdx))}
+            >
+              Next →
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

@@ -120,3 +120,24 @@ export interface ImportSummary {
   failed: number;
   errors: ImportRowError[];
 }
+
+// Task 4 — a caregiver linked to a client via the caregiver_client association.
+export interface Caregiver {
+  relationId: string; // used to remove the link
+  contactId: string; // the caregiver contact (deep-links to GHL)
+  name: string;
+}
+
+// Task 5 — email send. A selectable recipient (client or caregiver contact).
+export interface EmailRecipient {
+  contactId: string;
+  name: string;
+  email: string;
+  role: "client" | "caregiver";
+}
+export interface EmailSendResult {
+  contactId: string;
+  name: string;
+  ok: boolean;
+  error?: string;
+}
