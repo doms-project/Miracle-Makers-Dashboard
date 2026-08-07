@@ -961,23 +961,22 @@ export async function listCaregiverRelations(
   clientContactId: string,
 ): Promise<CaregiverRelation[]> {
   const { locationId } = requireEnv();
+  // GHL "get relations by record": the record id goes in the PATH, and the only
+  // accepted query params are locationId + skip + limit (both required). Passing
+  // recordId/associationId as query props returns 422 ("property should not
+  // exist"). The endpoint returns ALL of the record's relations across every
+  // association, so we filter to the caregiver_client association in code.
   const params = new URLSearchParams({
     locationId,
-    recordId: clientContactId,
-    associationId: CAREGIVER_CLIENT_ASSOCIATION_ID,
+    skip: "0",
+    limit: "100",
   });
   const data = await ghlGet<{ relations?: RawRelation[] }>(
     `/associations/relations/${encodeURIComponent(clientContactId)}?${params.toString()}`,
-  ).catch(async (e) => {
-    // Fallback to the query-only form some tenants expose.
-    if (e instanceof GhlError && e.status === 404) {
-      return ghlGet<{ relations?: RawRelation[] }>(
-        `/associations/relations?${params.toString()}`,
-      );
-    }
-    throw e;
-  });
-  const relations = data.relations || [];
+  );
+  const relations = (data.relations || []).filter(
+    (r) => String(r.associationId ?? "") === CAREGIVER_CLIENT_ASSOCIATION_ID,
+  );
   // The caregiver is whichever side of the relation is NOT the client contact.
   const caregiverIds = relations.map((r) => {
     const rid = String(r.id ?? r._id ?? r.relationId ?? "");
