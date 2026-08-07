@@ -107,9 +107,18 @@ export async function POST(request: Request) {
             contact.email ||
             `Imported lead ${rowNo}`;
 
-        if (!contact.email && !contact.phone && !contact.name && !contact.firstName) {
+        if (
+          !contact.email &&
+          !contact.phone &&
+          !contact.name &&
+          !contact.firstName &&
+          !contact.lastName
+        ) {
           summary.failed++;
-          summary.errors.push({ row: rowNo, error: "No name/email/phone to import." });
+          summary.errors.push({
+            row: rowNo,
+            error: "No name/email/phone to import.",
+          });
           continue;
         }
 
