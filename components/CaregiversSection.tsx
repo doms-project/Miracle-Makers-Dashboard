@@ -1,0 +1,223 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { Caregiver } from "@/lib/types";
+
+const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
+const contactUrl = (contactId: string) =>
+  `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${contactId}`;
+
+type SearchHit = { id: string; name: string; email: string };
+
+// Task 4 — view + manage the caregivers associated with an enrollment's client
+// contact. Add is a searchable typeahead (caregiver contacts only); remove
+// unlinks the relation. All writes go through the visibility-gated API.
+export default function CaregiversSection({
+  opportunityId,
+  ssoBlob,
+  canManage,
+}: {
+  opportunityId: string;
+  ssoBlob: string | null;
+  canManage: boolean;
+}) {
+  const [caregivers, setCaregivers] = useState<Caregiver[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const headers = useCallback((): Record<string, string> => {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (ssoBlob) h["x-ghl-sso-key"] = ssoBlob;
+    return h;
+  }, [ssoBlob]);
+
+  const load = useCallback(async () => {
+    setLoadErr(null);
+    try {
+      const res = await fetch(
+        `/api/opportunities/${opportunityId}/caregivers`,
+        { headers: headers(), cache: "no-store" },
+      );
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setCaregivers(j.caregivers || []);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : String(e));
+      setCaregivers([]);
+    }
+  }, [opportunityId, headers]);
+
+  useEffect(() => {
+    setCaregivers(null);
+    setQ("");
+    setHits([]);
+    setActionErr(null);
+    load();
+  }, [load]);
+
+  // Debounced typeahead search.
+  useEffect(() => {
+    if (!canManage) return;
+    if (debounce.current) clearTimeout(debounce.current);
+    if (!q.trim()) {
+      setHits([]);
+      return;
+    }
+    debounce.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(
+          `/api/opportunities/${opportunityId}/caregivers/search?q=${encodeURIComponent(
+            q.trim(),
+          )}`,
+          { headers: headers(), cache: "no-store" },
+        );
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) setHits(j.results || []);
+      } catch {
+        /* ignore transient search errors */
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => {
+      if (debounce.current) clearTimeout(debounce.current);
+    };
+  }, [q, canManage, opportunityId, headers]);
+
+  const alreadyLinked = new Set((caregivers || []).map((c) => c.contactId));
+
+  const add = async (hit: SearchHit) => {
+    setActionErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/opportunities/${opportunityId}/caregivers`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, caregiverContactId: hit.id }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setCaregivers(j.caregivers || []);
+      setQ("");
+      setHits([]);
+      setOpen(false);
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (c: Caregiver) => {
+    setActionErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/opportunities/${opportunityId}/caregivers`, {
+        method: "DELETE",
+        headers: headers(),
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, relationId: c.relationId }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setCaregivers(j.caregivers || []);
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cgsec">
+      {caregivers === null ? (
+        <div className="cgmuted">Loading caregivers…</div>
+      ) : loadErr ? (
+        <div className="savemsg err">✗ {loadErr}</div>
+      ) : caregivers.length === 0 ? (
+        <div className="cgmuted">No caregivers assigned yet.</div>
+      ) : (
+        <ul className="cglist">
+          {caregivers.map((c) => (
+            <li key={c.relationId || c.contactId} className="cgitem">
+              <a
+                href={contactUrl(c.contactId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cgname"
+              >
+                {c.name} ↗
+              </a>
+              {canManage ? (
+                <button
+                  type="button"
+                  className="cgremove"
+                  disabled={busy}
+                  onClick={() => remove(c)}
+                  aria-label={`Remove ${c.name}`}
+                  title="Remove caregiver"
+                >
+                  ×
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canManage ? (
+        <div className="cgadd">
+          <input
+            className="cgsearch"
+            placeholder="Add a caregiver — type a name…"
+            value={q}
+            disabled={busy}
+            onFocus={() => setOpen(true)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setOpen(true);
+            }}
+          />
+          {open && q.trim() ? (
+            <div className="cgresults">
+              {searching ? (
+                <div className="cgmuted" style={{ padding: "8px 10px" }}>
+                  Searching…
+                </div>
+              ) : hits.length === 0 ? (
+                <div className="cgmuted" style={{ padding: "8px 10px" }}>
+                  No caregiver contacts match.
+                </div>
+              ) : (
+                hits.map((h) => {
+                  const linked = alreadyLinked.has(h.id);
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      className="cghit"
+                      disabled={busy || linked}
+                      onClick={() => add(h)}
+                    >
+                      <span className="cghitname">{h.name}</span>
+                      {h.email ? <span className="cghitmeta">{h.email}</span> : null}
+                      {linked ? <span className="cghitmeta">· already added</span> : null}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
+          {actionErr ? <div className="savemsg err">✗ {actionErr}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
