@@ -33,11 +33,12 @@ async function hit(label, url, opts = {}) {
 }
 
 async function main() {
-  // 1) List relations for a client contact — two candidate shapes.
+  // 1) List relations for a client contact — CORRECT shape: recordId in the
+  // path, only locationId + skip + limit as query params (recordId/associationId
+  // as query props return 422). Filter by associationId in code.
   if (CLIENT) {
-    const p = new URLSearchParams({ locationId: LOC, recordId: CLIENT, associationId: ASSOC });
-    await hit("LIST relations (path form)", `${BASE}/associations/relations/${CLIENT}?${p}`);
-    await hit("LIST relations (query form)", `${BASE}/associations/relations?${p}`);
+    const p = new URLSearchParams({ locationId: LOC, skip: "0", limit: "100" });
+    await hit("LIST relations by record", `${BASE}/associations/relations/${CLIENT}?${p}`);
   } else {
     console.log("\n(Skip list test — set PROBE_CLIENT_CONTACT_ID to a real client contact id to test relation listing.)");
   }

@@ -260,10 +260,24 @@ export default function ImportWizard({
     ? parsed.columns.filter((c) => mapping[c]).length
     : 0;
 
+  // A row can only become a GHL contact if at least one column maps to a contact
+  // identity (name/email/phone). Without this, every row fails server-side with
+  // "No name/email/phone to import." — so require it before Preview/Import.
+  const IDENTITY_TARGETS = new Set([
+    "native:firstName",
+    "native:lastName",
+    "native:name",
+    "native:email",
+    "native:phone",
+  ]);
+  const hasIdentity = parsed
+    ? parsed.columns.some((c) => IDENTITY_TARGETS.has(mapping[c] || ""))
+    : false;
+
   const canNext = (): boolean => {
     if (step === 0) return !!parsed;
     if (step === 1) return !!pipelineId && !!stageId;
-    if (step === 2) return mappedCount > 0;
+    if (step === 2) return mappedCount > 0 && hasIdentity;
     return true;
   };
 
@@ -416,6 +430,13 @@ export default function ImportWizard({
             {mappedCount} of {parsed.columns.length} columns mapped · unmapped
             columns are skipped
           </div>
+          {!hasIdentity ? (
+            <div className="savemsg err" style={{ marginBottom: 10 }}>
+              ✗ Map at least one column to a <b>Contact</b> field — First Name,
+              Full Name, Email, or Phone. Without a contact identity every row is
+              rejected (&quot;No name/email/phone to import&quot;).
+            </div>
+          ) : null}
           <div className="imap">
             {parsed.columns.map((c) => {
               const isAuto = autoMapped.has(c) && mapping[c];
