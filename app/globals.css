@@ -372,3 +372,40 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .tplsrc{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:2px 8px;}
 .emailpreview .ephtml{max-height:320px;overflow:auto;}
 .emailpreview .ephtml img{max-width:100%;height:auto;}
+
+/* ── Task 5: follower editor ──────────────────────────────────── */
+.followedit{display:flex;flex-direction:column;gap:8px;}
+.folchips{display:flex;flex-wrap:wrap;gap:6px;}
+.folchip{display:inline-flex;align-items:center;gap:6px;background:var(--plum-soft);border:1px solid var(--plum-line);color:var(--plum);border-radius:20px;padding:3px 6px 3px 11px;font-size:11.5px;font-weight:600;}
+.folchip .folx{width:18px;height:18px;border-radius:50%;font-size:14px;line-height:1;color:var(--plum);background:transparent;}
+.folchip .folx:hover{background:#fff;}
+.folchip .folx:disabled{opacity:.5;cursor:progress;}
+
+/* ── Task 6: Move action ──────────────────────────────────────── */
+.panelactions{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px;}
+.movebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s;}
+.movebtn:hover{background:var(--plum-soft);border-color:var(--plum);}
+.movebox{background:var(--bg);border-radius:14px;width:min(520px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
+.movebody{padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
+.movebody .irow{gap:4px;}
+.movebody .irow label{margin-top:6px;}
+.movebody .irow select,.movebody .irow input{width:100%;}
+.movewarn{font-size:12px;line-height:1.55;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:9px;padding:11px 13px;}
+.movetoggle{display:flex;align-items:center;gap:8px;margin-top:9px;font-size:11.5px;font-weight:600;color:var(--ink-2);cursor:pointer;}
+.movetoggle input{margin:0;accent-color:var(--plum);}
+.movetoggle-note{margin-top:6px;font-size:11px;line-height:1.5;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:7px;padding:7px 10px;}
+
+/* ── Task 7: division badges, provenance, board card division ─── */
+.divbadge{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;vertical-align:middle;}
+.provenance{font-size:10.5px;color:var(--ink-3);font-style:italic;margin-top:2px;}
+.phead .provenance{margin-top:5px;font-style:normal;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:6px;padding:3px 8px;display:inline-block;}
+.card .cdiv{margin-top:5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);}
+
+/* ── Task 8: masked sensitive fields (SSN) ────────────────────── */
+.v.ro.masked{justify-content:space-between;gap:10px;}
+.maskval{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.06em;}
+.maskbtn{flex:none;border:1px solid var(--line);border-radius:6px;padding:3px 10px;font-size:10.5px;font-weight:700;color:var(--ink-2);background:var(--bg);cursor:pointer;}
+.maskbtn:hover{border-color:var(--plum);color:var(--plum);}
+.maskedwrap{display:flex;align-items:flex-start;gap:8px;}
+.maskedwrap>:first-child{flex:1;}
+.maskedwrap .maskbtn{margin-top:9px;}

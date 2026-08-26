@@ -14,7 +14,7 @@
  */
 const BASE = "https://services.leadconnectorhq.com";
 const TOKEN = (process.env.GHL_PIT || "").trim().replace(/^Bearer\s+/i, "");
-const LOC = (process.env.GHL_LOCATION_ID || "YVPhIAECw9q1M9Jw6A8L").trim();
+const LOC = (process.env.GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X").trim();
 const CONTACT = (process.env.PROBE_CONTACT_ID || "").trim();
 if (!TOKEN) { console.error("Set GHL_PIT."); process.exit(1); }
 

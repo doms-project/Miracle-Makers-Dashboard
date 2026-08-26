@@ -11,13 +11,20 @@
 //   2. Automation-critical — editing misfires a GHL automation.
 // ---------------------------------------------------------------------------
 
+// v2 correction (Task 4): only fields where editing causes HARM are read-only.
+//   - Harmony ID / County ID are now EDITABLE — the state assigns a Harmony ID
+//     weeks into enrollment and a rep types it; nobody else can enter it.
+//   - Airtable Record ID is EDITABLE (rendered in a collapsed System info
+//     section); expected empty on a clean build. Switch to read-only later if a
+//     live Airtable sync is ever set up.
 export const READ_ONLY_FIELDS: string[] = [
-  // External identifiers
-  "Harmony ID",
-  "County ID",
-  "Airtable Record ID",
-  // Automation-critical — this field TRIGGERS the compliance automation.
+  // Automation-critical — this field TRIGGERS the compliance automation (WF3).
   "APP - Compliance Cleared",
+  // Derived by the Move action — must not be hand-edited.
+  "Transferred From",
+  "Transferred Date",
+  // Synced from the caregiver associations.
+  "Caregiver Name",
 ];
 
 const norm = (s: string): string =>

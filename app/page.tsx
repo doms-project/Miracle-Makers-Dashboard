@@ -25,8 +25,12 @@ import { useGhlSession } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
+import { groupFieldsForPipeline } from "@/lib/fieldFolders";
+import MoveDialog from "@/components/MoveDialog";
+import { divisionLabel } from "@/lib/division";
 
-const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
+const LOCATION_ID =
+  process.env.NEXT_PUBLIC_GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X";
 
 // Preferred stage order for chips + board columns. Any stage present in the
 // live data but not listed here is appended after these, in first-seen order.
@@ -130,8 +134,6 @@ const BlockPill = ({ b }: { b: string }) => (
 // ---- Phase 2 field editors ----
 type SaveState = { status: "saving" | "error"; msg?: string } | undefined;
 
-const normName = (s: string): string =>
-  s.toLowerCase().replace(/[^a-z0-9]/g, "");
 // Multi-select / long-text fields get a full-width row.
 const isWideField = (dt: string): boolean =>
   ["MULTIPLE_OPTIONS", "LARGE_TEXT"].includes((dt || "").toUpperCase());
@@ -242,6 +244,66 @@ function TextControl({
   );
 }
 
+// ---- Sensitive fields (Task 8) ----
+// SSN renders masked by default with click-to-reveal, so it isn't exposed in
+// screen-shares. Matched by NAME (never a hardcoded field id), consistent with
+// the rest of the field resolution.
+//
+// ⚠️ This is NOT a security boundary: the value is already in the API payload
+// either way, so anyone with devtools can read it. It reduces casual/shoulder
+// exposure only. Restricting who receives the value would have to happen
+// server-side.
+const isSensitiveField = (name: string): boolean =>
+  /social\s*security|(^|\W)ssn(\W|$)/i.test(name || "");
+
+// "123-45-2550" -> "•••-••-2550" (keeps the last 4, which is what reps read back).
+function maskSsn(raw: string): string {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  const digits = s.replace(/\D/g, "");
+  if (digits.length < 4) return "•".repeat(s.length);
+  return `•••-••-${digits.slice(-4)}`;
+}
+
+function MaskedControl({
+  value,
+  disabled,
+  onSave,
+}: {
+  value: unknown;
+  disabled?: boolean;
+  onSave: (v: unknown) => void;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  const raw = asStr(value);
+  if (!revealed) {
+    return (
+      <div className="v ro masked">
+        <span className="maskval">{raw ? maskSsn(raw) : "—"}</span>
+        <button
+          type="button"
+          className="maskbtn"
+          onClick={() => setRevealed(true)}
+        >
+          Show
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="maskedwrap">
+      <TextControl value={value} disabled={disabled} onSave={onSave} />
+      <button
+        type="button"
+        className="maskbtn"
+        onClick={() => setRevealed(false)}
+      >
+        Hide
+      </button>
+    </div>
+  );
+}
+
 // One editable/read-only control chosen by the field's GHL dataType.
 function FieldControl({
   def,
@@ -256,8 +318,14 @@ function FieldControl({
 }) {
   const t = (def.dataType || "").toUpperCase();
   const disabled = save?.status === "saving";
+  const sensitive = isSensitiveField(def.name);
 
   if (!def.editable) {
+    // A read-only sensitive field is still masked (reveal shows the value).
+    if (sensitive)
+      return (
+        <MaskedControl value={value} disabled onSave={() => {}} />
+      );
     return (
       <div className="v ro">
         {asStr(value) || "—"}{" "}
@@ -270,7 +338,12 @@ function FieldControl({
     t === "SINGLE_OPTIONS" || t === "MULTIPLE_OPTIONS" || t === "CHECKBOX";
 
   let control: ReactNode;
-  if (isOptionType && def.options.length === 0) {
+  if (sensitive) {
+    // Masked with click-to-reveal, ahead of the dataType branches.
+    control = (
+      <MaskedControl value={value} disabled={disabled} onSave={onSave} />
+    );
+  } else if (isOptionType && def.options.length === 0) {
     control = (
       <div className="v ro">
         {asStr(value) || "—"}{" "}
@@ -409,6 +482,11 @@ function CardBody({
       <div className="cm">
         {r.office || "—"} · {r.rep}
       </div>
+      {r.pipelineName ? (
+        <div className="cdiv" title={r.pipelineName}>
+          {divisionLabel(r.pipelineName)}
+        </div>
+      ) : null}
       <div className="cf">
         <BlockPill b={r.block} />
         {r.src ? <span className="pill src">{r.src}</span> : null}
@@ -472,8 +550,20 @@ export default function Dashboard() {
   const [pipelineStages, setPipelineStages] = useState<
     { id: string; name: string }[]
   >([]);
-  const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  const [users, setUsers] = useState<
+    { id: string; name: string; divisions?: string[] }[]
+  >([]);
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
+  // v2 UI — viewer's home pipelines + the division / shared-with-me filter.
+  const [homePipelineIds, setHomePipelineIds] = useState<string[]>([]);
+  const [scope, setScope] = useState<string>("all"); // "all" | "shared" | <division>
+  const [adminPipeline, setAdminPipeline] = useState<string>("all");
+  // Multi-pipeline metadata (v2) — drives the Move dialog.
+  const [pipelines, setPipelines] = useState<{ id: string; name: string }[]>([]);
+  const [stagesByPipeline, setStagesByPipeline] = useState<
+    Record<string, { id: string; name: string }[]>
+  >({});
+  const [moveOpen, setMoveOpen] = useState(false);
 
   const [stage, setStage] = useState<string>("all");
   const [office, setOffice] = useState<string>("all"); // office filter (client req)
@@ -542,6 +632,10 @@ export default function Dashboard() {
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
+      if (body.pipelines) setPipelines(body.pipelines);
+      if (body.stagesByPipeline) setStagesByPipeline(body.stagesByPipeline);
+      if (body.viewer?.homePipelineIds)
+        setHomePipelineIds(body.viewer.homePipelineIds);
     } catch (e) {
       setError({
         error: "Could not reach the dashboard API.",
@@ -569,9 +663,10 @@ export default function Dashboard() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  // Close the email composer whenever the selected record changes/closes.
+  // Close the email composer / Move dialog whenever the record changes/closes.
   useEffect(() => {
     setEmailOpen(false);
+    setMoveOpen(false);
   }, [selId]);
 
   // Fetch the folder-scoped resources fresh (signed URLs are TTL'd).
@@ -743,19 +838,52 @@ export default function Dashboard() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [data]);
 
+  // Division / "Shared with me" filter options are built from the FILTERED
+  // PAYLOAD — never from the pipeline list — so the dropdown can't name a
+  // division the viewer holds nothing in. A shared record's pipeline never
+  // becomes a division option (it appears only under "Shared with me").
+  const scopeOptions = useMemo(() => {
+    const divisions = new Set<string>();
+    let anyShared = false;
+    for (const r of data) {
+      if (r.shared) anyShared = true;
+      else if (r.pipelineName) divisions.add(divisionLabel(r.pipelineName));
+    }
+    return { divisions: [...divisions].sort(), anyShared };
+  }, [data]);
+
+  // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
+  // (a new hire must not be invisible); an unknown id renders "Former user".
+  const userLabel = useCallback(
+    (uid: string): string => {
+      if (!uid) return "Unassigned";
+      const u = users.find((x) => x.id === uid);
+      if (!u) return "Former user";
+      const div = u.divisions?.length ? u.divisions.join(" · ") : "—";
+      return `${u.name} — ${div}`;
+    },
+    [users],
+  );
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return data.filter(
       (r) =>
         (stage === "all" || r.stage === stage) &&
         (office === "all" || r.office === office) &&
+        (scope === "all" ||
+          (scope === "shared"
+            ? r.shared
+            : !r.shared && divisionLabel(r.pipelineName) === scope)) &&
+        // Admin-only pipeline selector (convenience; the server is the boundary).
+        (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
         (needle === "" ||
           // Searchable by name, office, stage, and the key people/ids.
           `${r.first} ${r.last} ${r.office} ${r.stage} ${r.harmony} ${r.cm} ${r.cg} ${r.rep} ${r.src}`
             .toLowerCase()
             .includes(needle)),
     );
-  }, [data, stage, office, q]);
+  }, [data, stage, office, q, scope, adminPipeline]);
 
   const stageIndex = useCallback(
     (name: string) => {
@@ -887,13 +1015,28 @@ export default function Dashboard() {
     >
       <td className="strong">
         <div className="clientcell">
-          <span className="clname">{clientName(r) || "—"}</span>
+          <span className="clname">
+            {clientName(r) || "—"}
+            {r.pipelineName ? (
+              <span className="divbadge" title={r.pipelineName}>
+                {divisionLabel(r.pipelineName)}
+              </span>
+            ) : null}
+          </span>
           {followsNotOwns(r) ? (
             <span
               className="follow-tag"
               title="You follow this record (you're not the owner)"
             >
               Following
+            </span>
+          ) : null}
+          {/* Provenance — only on records reached via the shared path. */}
+          {r.shared ? (
+            <span className="provenance">
+              {r.ownerId === viewerId
+                ? "Your record in another division"
+                : `Shared by ${r.rep || "—"} · you're a follower`}
             </span>
           ) : null}
           {r.cg && r.cg !== "—" ? (
@@ -941,14 +1084,21 @@ export default function Dashboard() {
     </tr>
   );
 
+  // The BOARD shows HOME pipelines only — foreign stages don't belong in your
+  // columns, and a shared record's pipeline must never enter the selector. The
+  // list still shows everything (with division badges).
   const boardVisible = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    const home = new Set(homePipelineIds);
     return data.filter(
       (r) =>
-        needle === "" ||
-        `${r.first} ${r.last}`.toLowerCase().includes(needle),
+        !r.shared &&
+        (home.size === 0 || home.has(r.pipelineId)) &&
+        (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+        (needle === "" ||
+          `${r.first} ${r.last}`.toLowerCase().includes(needle)),
     );
-  }, [data, q]);
+  }, [data, q, homePipelineIds, adminPipeline]);
 
   // Stats (client-requested tiles: total, per office, by source, per rep).
   const stats = useMemo(() => {
@@ -984,6 +1134,15 @@ export default function Dashboard() {
   const selected = useMemo(
     () => data.find((r) => r.id === selId) || null,
     [data, selId],
+  );
+
+  // Folder-driven field sections for the open record's pipeline (Task 4).
+  const fieldGroups = useMemo(
+    () =>
+      selected
+        ? groupFieldsForPipeline(fieldDefs, selected.pipelineId)
+        : { sections: [], systemInfo: [], orphans: [] },
+    [selected, fieldDefs],
   );
 
   const ssoHeader = (): Record<string, string> =>
@@ -1080,6 +1239,55 @@ export default function Dashboard() {
       (r) => ({ ...r, cf: { ...r.cf, [def.id]: value } }),
     );
 
+  // Follower add/remove — owner or admin only (Task 5). Uses the dedicated
+  // /followers route; updates the record from the recomputed id list.
+  const canManageFollowersClient = (r: OpportunityRecord) =>
+    isAdminViewer || (!!viewerId && r.ownerId === viewerId);
+
+  const saveFollowers = useCallback(
+    async (rec: OpportunityRecord, change: { add?: string[]; remove?: string[] }) => {
+      const fk = "followers";
+      setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: { status: "saving" } }));
+      try {
+        const res = await fetch(`/api/opportunities/${rec.id}/followers`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            ...change,
+          }),
+        });
+        const j = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          followers?: string[];
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok || !j.ok || !Array.isArray(j.followers))
+          throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        const ids = j.followers;
+        const names = ids.map(
+          (uid) => users.find((u) => u.id === uid)?.name || "Former user",
+        );
+        setData((prev) =>
+          prev.map((r) =>
+            r.id === rec.id ? { ...r, followerIds: ids, followerNames: names } : r,
+          ),
+        );
+        setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
+      } catch (e) {
+        setSaveState((p) => ({
+          ...p,
+          [skey(rec.id, fk)]: {
+            status: "error",
+            msg: e instanceof Error ? e.message : String(e),
+          },
+        }));
+      }
+    },
+    [sso, users],
+  );
+
   // Kanban drag: 6px activation so a click still opens the record; keyboard too.
   const [dragId, setDragId] = useState<string | null>(null);
   const sensors = useSensors(
@@ -1110,17 +1318,48 @@ export default function Dashboard() {
   // Board columns = the FULL OLTL pipeline (every stage, incl. empty ones) so you
   // can drag into an empty stage. Falls back to data-derived stages pre-load, and
   // appends any stray stage present in data but not in the pipeline list.
+  // Columns come from the board's own pipeline(s): the admin-selected pipeline
+  // if set, else the viewer's home pipelines. Stage names repeat across
+  // pipelines, so we dedupe by name in the pipelines' own order.
   const boardStages = useMemo(() => {
-    if (!pipelineStages.length) return stages;
-    const names = pipelineStages.map((s) => s.name);
-    const set = new Set(names);
-    for (const r of data)
+    const ids =
+      adminPipeline !== "all"
+        ? [adminPipeline]
+        : homePipelineIds.length
+          ? homePipelineIds
+          : pipelines.map((p) => p.id);
+    const names: string[] = [];
+    const set = new Set<string>();
+    for (const pid of ids)
+      for (const s of stagesByPipeline[pid] || [])
+        if (!set.has(s.name)) {
+          set.add(s.name);
+          names.push(s.name);
+        }
+    if (!names.length) {
+      if (!pipelineStages.length) return stages;
+      for (const s of pipelineStages)
+        if (!set.has(s.name)) {
+          set.add(s.name);
+          names.push(s.name);
+        }
+    }
+    // Keep any stray stage present in the data but not in the stage lists.
+    for (const r of boardVisible)
       if (r.stage && !set.has(r.stage)) {
         set.add(r.stage);
         names.push(r.stage);
       }
     return names;
-  }, [pipelineStages, data, stages]);
+  }, [
+    adminPipeline,
+    homePipelineIds,
+    pipelines,
+    stagesByPipeline,
+    pipelineStages,
+    stages,
+    boardVisible,
+  ]);
 
   const saveMsgFor = (id: string, fk: string): ReactNode => {
     const s = saveState[skey(id, fk)];
@@ -1133,29 +1372,24 @@ export default function Dashboard() {
     saveState[skey(id, fk)]?.status === "saving";
 
   // Look up a field definition by (fuzzy) name, and render its editor cell.
-  const fieldByName = (name: string) =>
-    fieldDefs.find((d) => normName(d.name) === normName(name));
-
-  // Render a set of custom fields by name (skips any not present here).
-  const renderCFs = (rec: OpportunityRecord, names: string[]): ReactNode =>
-    names.map((name) => {
-      const def = fieldByName(name);
-      if (!def) return null;
-      return (
-        <div
-          className={`f${isWideField(def.dataType) ? " wide" : ""}`}
-          key={`${rec.id}:${def.id}`}
-        >
-          <label>{def.name}</label>
-          <FieldControl
-            def={def}
-            value={rec.cf[def.id]}
-            save={saveState[skey(rec.id, def.id)]}
-            onSave={(val) => saveCustomField(rec, def, val)}
-          />
-        </div>
-      );
-    });
+  // Render one custom field from its definition (folder-driven path).
+  const renderField = (
+    rec: OpportunityRecord,
+    def: EditableFieldDef,
+  ): ReactNode => (
+    <div
+      className={`f${isWideField(def.dataType) ? " wide" : ""}`}
+      key={`${rec.id}:${def.id}`}
+    >
+      <label>{def.name}</label>
+      <FieldControl
+        def={def}
+        value={rec.cf[def.id]}
+        save={saveState[skey(rec.id, def.id)]}
+        onSave={(val) => saveCustomField(rec, def, val)}
+      />
+    </div>
+  );
 
   return (
     <div className="app">
@@ -1347,6 +1581,47 @@ export default function Dashboard() {
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
+          {/* Division / Shared-with-me — options come from the viewer's own
+              payload, so no division they hold nothing in is ever named. */}
+          {scopeOptions.divisions.length > 1 || scopeOptions.anyShared ? (
+            <div className="officefilter">
+              <label htmlFor="scopeSel">Show</label>
+              <select
+                id="scopeSel"
+                value={scope}
+                onChange={(e) => setScope(e.target.value)}
+              >
+                <option value="all">All</option>
+                {scopeOptions.divisions.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+                {scopeOptions.anyShared ? (
+                  <option value="shared">Shared with me</option>
+                ) : null}
+              </select>
+            </div>
+          ) : null}
+          {/* Admin-only pipeline selector — convenience; the SERVER decides
+              what returns, this only narrows what is already visible. */}
+          {isAdminViewer && pipelines.length > 1 ? (
+            <div className="officefilter">
+              <label htmlFor="pipeSel">Pipeline</label>
+              <select
+                id="pipeSel"
+                value={adminPipeline}
+                onChange={(e) => setAdminPipeline(e.target.value)}
+              >
+                <option value="all">All pipelines</option>
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div className="officefilter">
             <label htmlFor="officeSel">Office</label>
             <select
@@ -1686,6 +1961,25 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* Move dialog (Task 6) */}
+      {selected && moveOpen ? (
+        <MoveDialog
+          key={selected.id}
+          record={selected}
+          pipelines={pipelines}
+          stagesByPipeline={stagesByPipeline}
+          users={users}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          onClose={() => setMoveOpen(false)}
+          onMoved={(rec) => {
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+            // A transfer can remove the viewer's access — reload so the list
+            // reflects what they can still see.
+            load();
+          }}
+        />
+      ) : null}
+
       {/* email composer (Task 5) */}
       {selected && emailOpen ? (
         <EmailComposer
@@ -1757,7 +2051,19 @@ export default function Dashboard() {
                 <div className="sub">
                   {clientName(selected) || "—"} · {selected.office || "—"} ·{" "}
                   {selected.stage || "—"}
+                  {selected.pipelineName ? (
+                    <span className="divbadge" title={selected.pipelineName}>
+                      {divisionLabel(selected.pipelineName)}
+                    </span>
+                  ) : null}
                 </div>
+                {selected.shared ? (
+                  <div className="provenance">
+                    {selected.ownerId === viewerId
+                      ? "Your record in another division"
+                      : `Shared by ${userLabel(selected.ownerId)} · you're a follower`}
+                  </div>
+                ) : null}
               </div>
               <button
                 className="x"
@@ -1775,13 +2081,22 @@ export default function Dashboard() {
               </div>
 
               {canEdit(selected) ? (
-                <button
-                  type="button"
-                  className="emailbtn"
-                  onClick={() => setEmailOpen(true)}
-                >
-                  ✉ Send Email
-                </button>
+                <div className="panelactions">
+                  <button
+                    type="button"
+                    className="emailbtn"
+                    onClick={() => setEmailOpen(true)}
+                  >
+                    ✉ Send Email
+                  </button>
+                  <button
+                    type="button"
+                    className="movebtn"
+                    onClick={() => setMoveOpen(true)}
+                  >
+                    ⇄ Move this case
+                  </button>
+                </div>
               ) : null}
 
               {/* 1 — Status & Workflow (most-used, top) */}
@@ -1816,7 +2131,6 @@ export default function Dashboard() {
                   </select>
                   {saveMsgFor(selected.id, "stage")}
                 </div>
-                {renderCFs(selected, ["Road Blocker"])}
                 <div className="f">
                   <label>Status</label>
                   <select
@@ -1840,11 +2154,6 @@ export default function Dashboard() {
                   </select>
                   {saveMsgFor(selected.id, "status")}
                 </div>
-                {renderCFs(selected, [
-                  "Checked This Week",
-                  "Appeal",
-                  "Waiting",
-                ])}
               </div>
 
               {/* 2 — Assignment */}
@@ -1872,15 +2181,23 @@ export default function Dashboard() {
                     }
                   >
                     <option value="">Unassigned</option>
+                    {/* Owner lists EVERYONE — a rep must be able to reassign to
+                        a colleague. Division label after each name. */}
                     {users.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.name}
+                        {u.name} —{" "}
+                        {u.divisions?.length ? u.divisions.join(" · ") : "—"}
                       </option>
                     ))}
+                    {/* An owner who no longer exists still renders, never blank. */}
+                    {selected.ownerId &&
+                    !users.some((u) => u.id === selected.ownerId) ? (
+                      <option value={selected.ownerId}>Former user</option>
+                    ) : null}
                   </select>
                   {saveMsgFor(selected.id, "owner")}
                 </div>
-                <div className="f">
+                <div className="f wide">
                   <label>
                     Followers (Co-reps)
                     {viewerId &&
@@ -1889,37 +2206,80 @@ export default function Dashboard() {
                       <span className="readonly-note">you follow this</span>
                     ) : null}
                   </label>
-                  <div className="v ro">
-                    {selected.followerNames.length
-                      ? selected.followerNames.join(", ")
-                      : "—"}{" "}
-                    <span className="readonly-note">native GHL</span>
-                  </div>
+                  {canManageFollowersClient(selected) ? (
+                    <div className="followedit">
+                      <div className="folchips">
+                        {selected.followerIds.length ? (
+                          selected.followerIds.map((fid) => (
+                            <span className="folchip" key={fid}>
+                              {users.find((u) => u.id === fid)?.name ||
+                                "Former user"}
+                              <button
+                                type="button"
+                                className="folx"
+                                disabled={savingFk(selected.id, "followers")}
+                                onClick={() =>
+                                  saveFollowers(selected, { remove: [fid] })
+                                }
+                                aria-label="Remove follower"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="muted">No followers</span>
+                        )}
+                      </div>
+                      <select
+                        className="v edit"
+                        value=""
+                        disabled={savingFk(selected.id, "followers")}
+                        onChange={(e) => {
+                          if (e.target.value)
+                            saveFollowers(selected, { add: [e.target.value] });
+                          e.target.value = "";
+                        }}
+                      >
+                        <option value="">+ Add follower…</option>
+                        {users
+                          .filter(
+                            (u) =>
+                              u.id !== selected.ownerId &&
+                              !selected.followerIds.includes(u.id),
+                          )
+                          .map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.name} —{" "}
+                              {u.divisions?.length
+                                ? u.divisions.join(" · ")
+                                : "—"}
+                            </option>
+                          ))}
+                      </select>
+                      {saveMsgFor(selected.id, "followers")}
+                    </div>
+                  ) : (
+                    <div className="v ro">
+                      {selected.followerNames.length
+                        ? selected.followerNames.join(", ")
+                        : "—"}{" "}
+                      <span className="readonly-note">owner/admin manage</span>
+                    </div>
+                  )}
                 </div>
-                {renderCFs(selected, [
-                  "Case Manager",
-                  "Sales Rep Assistant",
-                  "Onboarding Rep",
-                  "HR / Assigned Team",
-                ])}
               </div>
 
-              {/* 3 — Location */}
-              <div className="sechead">Location</div>
-              <div className="grid">
-                {renderCFs(selected, ["Office", "County"])}
-              </div>
-
-              {/* 4 — Enrollment Details */}
-              <div className="sechead">Enrollment Details</div>
-              <div className="grid">
-                {renderCFs(selected, [
-                  "Division",
-                  "Type",
-                  "Referral Source Type",
-                  "Caregiver Name",
-                ])}
-              </div>
+              {/* Folder-driven field sections (Task 4) — rendered from the
+                  folders mapped to this record's pipeline, in configured order. */}
+              {fieldGroups.sections.map((g) => (
+                <Fragment key={g.key}>
+                  <div className="sechead">{g.label}</div>
+                  <div className="grid">
+                    {g.fields.map((def) => renderField(selected, def))}
+                  </div>
+                </Fragment>
+              ))}
 
               {/* Caregivers (many-to-many association) */}
               <div className="sechead">Caregivers</div>
@@ -1930,18 +2290,27 @@ export default function Dashboard() {
                 canManage={canEdit(selected)}
               />
 
-              {/* 5 — System info (read-only, collapsed) */}
-              <details className="sysinfo">
-                <summary>System info · read-only</summary>
-                <div className="grid">
-                  {renderCFs(selected, [
-                    "Harmony ID",
-                    "County ID",
-                    "Airtable Record ID",
-                    "APP - Compliance Cleared",
-                  ])}
-                </div>
-              </details>
+              {/* System info — external ids / derived / automation (collapsed).
+                  Airtable Record ID is editable here; compliance/derived are
+                  read-only via the blocklist. */}
+              {fieldGroups.systemInfo.length ? (
+                <details className="sysinfo">
+                  <summary>System info</summary>
+                  <div className="grid">
+                    {fieldGroups.systemInfo.map((def) => renderField(selected, def))}
+                  </div>
+                </details>
+              ) : null}
+
+              {/* Any field not in a mapped folder — never hidden. */}
+              {fieldGroups.orphans.length ? (
+                <details className="sysinfo">
+                  <summary>Other fields</summary>
+                  <div className="grid">
+                    {fieldGroups.orphans.map((def) => renderField(selected, def))}
+                  </div>
+                </details>
+              ) : null}
               <div className="sechead">Notes</div>
               <div>
                 {notesLoading ? (

@@ -12,8 +12,8 @@
  */
 const BASE = "https://services.leadconnectorhq.com";
 const TOKEN = (process.env.GHL_PIT || "").trim().replace(/^Bearer\s+/i, "");
-const LOC = (process.env.GHL_LOCATION_ID || "YVPhIAECw9q1M9Jw6A8L").trim();
-const FOLDER = (process.env.RESOURCES_FOLDER_ID || "6a75ea609994d35aa0c66e9a").trim();
+const LOC = (process.env.GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X").trim();
+const FOLDER = (process.env.RESOURCES_FOLDER_ID || "").trim();
 if (!TOKEN) { console.error("Set GHL_PIT."); process.exit(1); }
 
 const H = { Authorization: `Bearer ${TOKEN}`, Version: "2021-07-28", Accept: "application/json" };

@@ -28,16 +28,6 @@ export async function POST(request: Request) {
 
   try {
     const session = decryptSso(blob as string);
-    // TEMPORARY diagnostic — log the decrypted session (role/type are the ones
-    // that decide the admin bypass). Remove after the filter is confirmed.
-    // eslint-disable-next-line no-console
-    console.log("[sso-session]", {
-      userId: session.userId,
-      role: session.role ?? null,
-      type: session.type ?? null,
-      companyId: session.companyId ?? null,
-      activeLocation: session.activeLocation ?? null,
-    });
     // Return only the fields the UI needs; the whole object is fine too since
     // it is the viewer's own session, but keep it tidy.
     return NextResponse.json(

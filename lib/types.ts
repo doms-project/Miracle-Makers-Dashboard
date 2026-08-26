@@ -27,6 +27,10 @@ export interface OpportunityRecord {
   monetaryValue: number; // native value
   cf: Record<string, unknown>; // fieldId -> current raw value (arrays preserved)
   contactId: string; // linked contact — notes are stored on the contact
+  // Multi-pipeline (v2). A record now belongs to one of several pipelines.
+  pipelineId: string; // the opportunity's native pipelineId
+  pipelineName: string; // resolved pipeline name (for the division badge)
+  shared: boolean; // true when surfaced via a NON-home pipeline (owner/follower)
 }
 
 // Custom-field definition sent to the client to drive the dynamic editors.
@@ -36,6 +40,7 @@ export interface EditableFieldDef {
   dataType: string; // TEXT | LARGE_TEXT | SINGLE_OPTIONS | MULTIPLE_OPTIONS | DATE | NUMERICAL | MONETORY | CHECKBOX
   options: string[]; // option strings for *_OPTIONS / CHECKBOX
   editable: boolean; // false for the read-only blocklist
+  parentId: string; // custom-field folder id (drives folder-driven field sets)
 }
 
 export interface Note {
@@ -51,33 +56,25 @@ export interface Viewer {
   role: string | null;
   type?: string | null; // GHL session `type` (agency/location) — diagnostic
   total: number; // total records before the visibility filter
-}
-
-// TEMPORARY diagnostic block surfaced in the /api/opportunities response so the
-// visibility path can be inspected in the browser Network tab. Remove after the
-// filter is confirmed.
-export interface VisibilityDebug {
-  ssoConfigured: boolean;
-  branch: "open-no-sso" | "admin" | "restricted";
-  userId: string | null;
-  role: string | null;
-  type: string | null;
-  preFilterCount: number;
-  postFilterCount: number;
-  sampleAssignedTo: unknown; // raw shape of one opp's owner
-  sampleFollowers: unknown; // raw shape of one opp's followers
+  // v2 — the viewer's HOME pipelines (admins: all selected). Drives the board
+  // (home pipelines only) and the division filter.
+  homePipelineIds?: string[];
 }
 
 export interface OpportunitiesResponse {
   records: OpportunityRecord[];
-  pipeline: { id: string; name: string } | null;
+  pipeline: { id: string; name: string } | null; // legacy single-pipeline summary (v2: null)
   count: number;
   viewer?: Viewer;
   // Metadata for the Phase 2 editors (same for all records).
   fieldDefs?: EditableFieldDef[]; // OLTL opportunity custom-field definitions
-  stages?: { id: string; name: string }[]; // OLTL pipeline stages (name→id)
-  users?: { id: string; name: string }[]; // location users (owner picker)
-  debug?: VisibilityDebug; // TEMPORARY — visibility diagnostic
+  stages?: { id: string; name: string }[]; // union of stages across pipelines (deduped by id)
+  // Location users for the owner/follower pickers. `divisions` labels each user
+  // (empty = none mapped -> the picker shows "—", never hides them).
+  users?: { id: string; name: string; divisions?: string[] }[];
+  // Multi-pipeline (v2).
+  pipelines?: { id: string; name: string }[]; // the selected pipelines, in order
+  stagesByPipeline?: Record<string, { id: string; name: string }[]>; // pipelineId -> its stages
 }
 
 export interface ApiError {
