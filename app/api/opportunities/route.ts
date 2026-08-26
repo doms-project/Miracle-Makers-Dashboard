@@ -2,46 +2,46 @@ import { NextResponse } from "next/server";
 import { getOltlOpportunities, GhlError } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
-import type {
-  OpportunitiesResponse,
-  ApiError,
-  OpportunityRecord,
-} from "@/lib/types";
+import {
+  applyAccess,
+  userDivisions,
+  getUserHomePipelines,
+} from "@/lib/pipelineAccess";
+import type { OpportunitiesResponse, ApiError } from "@/lib/types";
 
 // Always dynamic; the GHL token and SSO secret are only ever read server-side.
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// PHASE 3 visibility rule — ASSIGNMENT ONLY.
-// A restricted (non-admin) user sees an opportunity if and only if they OWN it
-// (assignedTo === userId) OR they are a FOLLOWER (co-rep) of it. Followers MUST
-// be included — an owner-only filter would wrongly hide co-repped cases.
-// Office is NOT a permission gate; it is only a UI dimension.
-// Consequence (intended): an unassigned opportunity is visible to NO restricted
-// user — only admins see it. Do not "fix" this; it is the defined behavior.
-function visibleTo(
-  records: OpportunityRecord[],
-  userId: string,
-): OpportunityRecord[] {
-  return records.filter(
-    (o) => o.ownerId === userId || o.followerIds.includes(userId),
-  );
-}
+// v2 visibility — division scoping (see lib/pipelineAccess.applyAccess):
+//   admin                                          -> all
+//   home pipeline AND (owner OR follower OR unassigned) -> theirs (shared=false)
+//   ANY pipeline  AND (owner OR follower)               -> shared = true
+//   otherwise                                           -> excluded
+// The unassigned branch is HOME-ONLY on purpose — an unassigned record in
+// another division must never surface.
 
 async function buildResponse(blob: string | null): Promise<Response> {
-  const { records, pipeline, stages, users, fieldDefs, rawSample } =
+  const { records, pipeline, pipelines, stages, stagesByPipeline, users, fieldDefs } =
     await getOltlOpportunities();
-  const meta = { stages, users, fieldDefs };
+  // Label every user with their division(s) for the owner/follower pickers.
+  const pipelineNameById = new Map(pipelines.map((p) => [p.id, p.name]));
+  const labelledUsers = users.map((u) => ({
+    ...u,
+    divisions: userDivisions(u.id, pipelineNameById),
+  }));
+  const meta = {
+    stages,
+    users: labelledUsers,
+    fieldDefs,
+    pipelines,
+    stagesByPipeline,
+  };
 
   // SSO is enforced only once a Shared Secret is configured. Before that
   // (initial setup / local dev without GHL_SSO_SECRET) the route runs "open"
   // so the dashboard is usable; the UI still shows it as an unauthenticated view.
   if (!ssoConfigured()) {
-    // eslint-disable-next-line no-console
-    console.log("[visibility]", {
-      branch: "open-no-sso",
-      preFilterCount: records.length,
-    });
     const body: OpportunitiesResponse = {
       records,
       pipeline,
@@ -52,17 +52,8 @@ async function buildResponse(blob: string | null): Promise<Response> {
         userName: null,
         role: null,
         total: records.length,
-      },
-      debug: {
-        ssoConfigured: false,
-        branch: "open-no-sso",
-        userId: null,
-        role: null,
-        type: null,
-        preFilterCount: records.length,
-        postFilterCount: records.length,
-        sampleAssignedTo: rawSample.assignedTo,
-        sampleFollowers: rawSample.followers,
+        // Open/setup mode behaves like an admin: every selected pipeline is home.
+        homePipelineIds: pipelines.map((p) => p.id),
       },
       ...meta,
     };
@@ -83,20 +74,8 @@ async function buildResponse(blob: string | null): Promise<Response> {
 
   const session = decryptSso(blob); // throws SsoError on bad secret/blob
   const admin = isAdminSession(session.role, session.type);
-  const visible = admin ? records : visibleTo(records, session.userId);
-
-  // TEMPORARY diagnostic — which branch ran + pre/post counts + session id/role/type.
-  // eslint-disable-next-line no-console
-  console.log("[visibility]", {
-    branch: admin ? "admin" : "restricted",
-    userId: session.userId,
-    role: session.role ?? null,
-    type: session.type ?? null,
-    preFilterCount: records.length,
-    postFilterCount: visible.length,
-    sampleAssignedTo: rawSample.assignedTo,
-    sampleFollowers: rawSample.followers,
-  });
+  // Division scoping + per-viewer `shared` tagging.
+  const visible = applyAccess(records, { userId: session.userId, isAdmin: admin });
 
   const body: OpportunitiesResponse = {
     records: visible,
@@ -109,17 +88,10 @@ async function buildResponse(blob: string | null): Promise<Response> {
       role: session.role ?? null,
       type: session.type ?? null,
       total: records.length,
-    },
-    debug: {
-      ssoConfigured: true,
-      branch: admin ? "admin" : "restricted",
-      userId: session.userId,
-      role: session.role ?? null,
-      type: session.type ?? null,
-      preFilterCount: records.length,
-      postFilterCount: visible.length,
-      sampleAssignedTo: rawSample.assignedTo,
-      sampleFollowers: rawSample.followers,
+      // Admins treat every selected pipeline as home; others get their mapped set.
+      homePipelineIds: admin
+        ? pipelines.map((p) => p.id)
+        : [...getUserHomePipelines(session.userId)],
     },
     ...meta,
   };

@@ -13,8 +13,8 @@
  */
 const BASE = "https://services.leadconnectorhq.com";
 const TOKEN = (process.env.GHL_PIT || "").trim().replace(/^Bearer\s+/i, "");
-const LOC = (process.env.GHL_LOCATION_ID || "YVPhIAECw9q1M9Jw6A8L").trim();
-const ASSOC = (process.env.CAREGIVER_ASSOCIATION_ID || "6a6e26c9884def7a1438b965").trim();
+const LOC = (process.env.GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X").trim();
+const ASSOC = (process.env.CAREGIVER_ASSOCIATION_ID || "").trim();
 const CLIENT = (process.env.PROBE_CLIENT_CONTACT_ID || "").trim();
 if (!TOKEN) { console.error("Set GHL_PIT."); process.exit(1); }
 

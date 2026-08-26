@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Caregiver } from "@/lib/types";
 
-const LOCATION_ID = "YVPhIAECw9q1M9Jw6A8L";
+const LOCATION_ID =
+  process.env.NEXT_PUBLIC_GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X";
 const contactUrl = (contactId: string) =>
   `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${contactId}`;
 

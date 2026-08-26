@@ -4,9 +4,13 @@ import type {
   ResourceFile,
 } from "./types";
 import { isFieldEditable } from "./editable";
+import { PIPELINE_FOLDERS } from "./fieldFolders";
 
+// Account-specific — MUST come from env (re-derive per account with
+// scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
+// visibly rather than silently pointing at another account's folder.
 export const RESOURCES_FOLDER_ID = (
-  process.env.RESOURCES_FOLDER_ID || "6a75ea609994d35aa0c66e9a"
+  process.env.RESOURCES_FOLDER_ID || ""
 ).trim();
 
 // ---------------------------------------------------------------------------
@@ -29,12 +33,28 @@ export class GhlError extends Error {
   }
 }
 
-function requireEnv(): { token: string; locationId: string } {
+// `opts` lets a feature-specific caller additionally require an account-scoped
+// id (resources folder / caregiver association) so it throws AT THE POINT OF USE
+// — same fail-loud behaviour as locationId — instead of silently defaulting to
+// "" (which would upload to the media root / return an empty caregiver list).
+// Unrelated calls (search, pipelines, contacts) omit opts and are unaffected.
+function requireEnv(opts?: {
+  resourcesFolder?: boolean;
+  caregiverAssociation?: boolean;
+}): {
+  token: string;
+  locationId: string;
+  resourcesFolderId: string;
+  caregiverAssociationId: string;
+} {
   // Trim to defend against a trailing space / newline pasted into the env var,
   // which GHL rejects as "invalid jwt". Also strip an accidental "Bearer "
   // prefix baked into the value so the scheme is controlled in one place below.
   const token = process.env.GHL_PIT?.trim().replace(/^Bearer\s+/i, "");
   const locationId = process.env.GHL_LOCATION_ID?.trim();
+  const resourcesFolderId = process.env.RESOURCES_FOLDER_ID?.trim() || "";
+  const caregiverAssociationId =
+    process.env.CAREGIVER_ASSOCIATION_ID?.trim() || "";
   if (!token) {
     throw new GhlError(
       "Server is not configured: GHL_PIT is missing.",
@@ -49,7 +69,21 @@ function requireEnv(): { token: string; locationId: string } {
       "Set the GHL_LOCATION_ID environment variable.",
     );
   }
-  return { token, locationId };
+  if (opts?.resourcesFolder && !resourcesFolderId) {
+    throw new GhlError(
+      "Server is not configured: RESOURCES_FOLDER_ID is missing.",
+      500,
+      "Re-derive it for this account (scripts/rederive-ids-probe.mjs) and set RESOURCES_FOLDER_ID.",
+    );
+  }
+  if (opts?.caregiverAssociation && !caregiverAssociationId) {
+    throw new GhlError(
+      "Server is not configured: CAREGIVER_ASSOCIATION_ID is missing.",
+      500,
+      "Re-derive/create it for this account and set CAREGIVER_ASSOCIATION_ID.",
+    );
+  }
+  return { token, locationId, resourcesFolderId, caregiverAssociationId };
 }
 
 // The effective auth scheme for the Authorization header. GHL's v2
@@ -221,28 +255,78 @@ async function getPipelines(): Promise<Pipeline[]> {
   return cache.pipelines;
 }
 
-export async function resolvePipeline(): Promise<Pipeline> {
-  const pipelines = await getPipelines();
-  const configured = process.env.OLTL_PIPELINE_ID;
-  if (configured) {
-    const match = pipelines.find((p) => p.id === configured);
-    if (match) return match;
-    throw new GhlError(
-      `No pipeline found with id "${configured}".`,
-      404,
-      `Available pipelines: ${pipelines.map((p) => `${p.name} (${p.id})`).join(", ")}`,
+// Multi-pipeline (v2). The dashboard now spans several client pipelines. The
+// set is data-driven (env PIPELINE_IDS), defaulting to the five confirmed for
+// the anzcWt3S0tzpu2fEaS8X account. `OLTL_PIPELINE_ID` and the `/oltl/i` name
+// fallback are retired — four pipelines match that name now.
+const DEFAULT_PIPELINE_IDS = [
+  "KGjdCMG4F8xILk0ineB9", // OLTL Enrollment      12 stages
+  "74Pt3XX4hgBIqD10mW4G", // OLTL Transfer         8
+  "a14NtTi18ACxs99bHPmL", // ODP Enrollment        9
+  "PIs1iWVk0HqHZFNtmoTn", // ODP Transfer          9
+  "BJBWdRim6SOgjoMelVSZ", // Private Pay Clients  11
+];
+
+// Parse PIPELINE_IDS (comma / pipe / whitespace separated); fall back to the
+// defaults above. Order is preserved — it drives the admin selector order.
+export function pipelineIds(): string[] {
+  const raw = (process.env.PIPELINE_IDS || "").trim();
+  if (!raw) return DEFAULT_PIPELINE_IDS;
+  const ids = raw.split(/[\s,|]+/).map((s) => s.trim()).filter(Boolean);
+  return ids.length ? ids : DEFAULT_PIPELINE_IDS;
+}
+
+// Loud config check (memoized) — surfaces the two silent failure modes:
+//   1. running on baked-in DEFAULT_PIPELINE_IDS because PIPELINE_IDS is unset;
+//   2. a selected pipeline with no PIPELINE_FOLDERS mapping (its fields would
+//      silently dump into "Other fields", which reads as working).
+let _configChecked = false;
+function checkPipelineConfig(): void {
+  if (_configChecked) return;
+  _configChecked = true;
+  if (!(process.env.PIPELINE_IDS || "").trim()) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[config] PIPELINE_IDS is not set — using baked-in DEFAULT_PIPELINE_IDS. Set PIPELINE_IDS to control scope for this account.",
     );
   }
-  // Fall back to matching by name when no id is configured.
-  const byName = pipelines.find((p) => /oltl/i.test(p.name));
-  if (byName) return byName;
-  throw new GhlError(
-    "Could not identify the OLTL Enrollments pipeline.",
-    404,
-    `Set OLTL_PIPELINE_ID. Available pipelines: ${pipelines
-      .map((p) => `${p.name} (${p.id})`)
-      .join(", ")}`,
-  );
+  const unmapped = pipelineIds().filter((id) => !PIPELINE_FOLDERS[id]);
+  if (unmapped.length) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[config] pipeline(s) with no PIPELINE_FOLDERS mapping (fields will fall into "Other"): ${unmapped.join(", ")}. Add them to lib/fieldFolders.ts.`,
+    );
+  }
+}
+
+// Resolve the configured pipeline IDs to full Pipeline objects, in configured
+// order. Unknown IDs are skipped (logged via the error only if NONE match).
+export async function getSelectedPipelines(): Promise<Pipeline[]> {
+  checkPipelineConfig();
+  const pipelines = await getPipelines();
+  const byId = new Map(pipelines.map((p) => [p.id, p]));
+  const selected: Pipeline[] = [];
+  for (const id of pipelineIds()) {
+    const p = byId.get(id);
+    if (p) selected.push(p);
+  }
+  if (!selected.length) {
+    throw new GhlError(
+      "None of the configured PIPELINE_IDS matched this account's pipelines.",
+      404,
+      `Configured: ${pipelineIds().join(", ")}. Available: ${pipelines
+        .map((p) => `${p.name} (${p.id})`)
+        .join(", ")}`,
+    );
+  }
+  return selected;
+}
+
+// Composite stage-map key — stage names repeat across pipelines
+// (TRANSFERRED IN, UNCATEGORIZED, INACTIVE, LOST all exist in several), so the
+// map MUST be keyed by pipelineId + stageId, never by name alone.
+function stageKey(pipelineId: string, stageId: string): string {
+  return `${pipelineId}::${stageId}`;
 }
 
 async function getFieldMap(): Promise<Map<string, string>> {
@@ -254,6 +338,13 @@ async function getFieldMap(): Promise<Map<string, string>> {
   }
   cache.fieldMap = map;
   return map;
+}
+
+// Exported so write routes can VALIDATE user ids (e.g. followers) against the
+// location's real users before writing — an arbitrary string would otherwise be
+// stored and render as "Former user", indistinguishable from a deleted account.
+export async function getLocationUserIds(): Promise<Set<string>> {
+  return new Set((await getUserMap()).keys());
 }
 
 async function getUserMap(): Promise<Map<string, string>> {
@@ -402,6 +493,9 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   monetaryValue: [],
   cf: [],
   contactId: [],
+  pipelineId: [],
+  pipelineName: [],
+  shared: [],
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -431,8 +525,10 @@ function normalizeOpportunity(
   opp: RawOpportunity,
   fieldMap: Map<string, string>,
   userMap: Map<string, string>,
-  stageMap: Map<string, string>,
+  stageNameByKey: Map<string, string>, // key = pipelineId::stageId
+  pipelineNameById: Map<string, string>,
 ): OpportunityRecord {
+  const pipelineId = opp.pipelineId || "";
   const rec: OpportunityRecord = {
     id: opp.id,
     first: "",
@@ -461,6 +557,9 @@ function normalizeOpportunity(
     monetaryValue: typeof opp.monetaryValue === "number" ? opp.monetaryValue : 0,
     cf: {},
     contactId: opp.contactId || opp.contact?.id || "",
+    pipelineId,
+    pipelineName: pipelineNameById.get(pipelineId) || "",
+    shared: false, // set true later by the access filter for non-home pipelines
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
   rec.followerNames = rec.followerIds.map((id) => userMap.get(id) || id);
@@ -485,9 +584,9 @@ function normalizeOpportunity(
     rec.last = parts.join(" ");
   }
 
-  // Stage name from stage id.
+  // Stage name from pipelineId + stage id (names repeat across pipelines).
   const stageId = opp.pipelineStageId || opp.stageId || "";
-  rec.stage = stageMap.get(stageId) || "";
+  rec.stage = stageNameByKey.get(stageKey(pipelineId, stageId)) || "";
 
   // Owner name.
   if (opp.assignedTo) {
@@ -557,44 +656,78 @@ export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
     dataType: d.dataType,
     options: optionStrings(d),
     editable: isFieldEditable(d.name),
+    parentId: String(
+      (d as Record<string, unknown>).parentId ??
+        (d as Record<string, unknown>).folderId ??
+        "",
+    ),
   }));
 }
 
 export async function getOltlOpportunities(): Promise<{
   records: OpportunityRecord[];
-  pipeline: { id: string; name: string };
+  pipeline: { id: string; name: string } | null;
+  pipelines: { id: string; name: string }[];
   stages: { id: string; name: string }[];
+  stagesByPipeline: Record<string, { id: string; name: string }[]>;
   users: { id: string; name: string }[];
   fieldDefs: EditableFieldDef[];
-  rawSample: { assignedTo: unknown; followers: unknown };
 }> {
-  const pipeline = await resolvePipeline();
-  const stageMap = new Map<string, string>();
-  for (const s of pipeline.stages || []) stageMap.set(s.id, s.name);
+  const selected = await getSelectedPipelines();
 
-  const [fieldMap, userMap, raw, fieldDefs] = await Promise.all([
+  // Build: composite stage map (pipelineId::stageId -> name), pipeline-name
+  // lookup, per-pipeline stage lists, and a deduped union of stages.
+  const stageNameByKey = new Map<string, string>();
+  const pipelineNameById = new Map<string, string>();
+  const stagesByPipeline: Record<string, { id: string; name: string }[]> = {};
+  const unionSeen = new Set<string>();
+  const unionStages: { id: string; name: string }[] = [];
+  for (const p of selected) {
+    pipelineNameById.set(p.id, p.name);
+    stagesByPipeline[p.id] = (p.stages || []).map((s) => ({ id: s.id, name: s.name }));
+    for (const s of p.stages || []) {
+      stageNameByKey.set(stageKey(p.id, s.id), s.name);
+      if (!unionSeen.has(s.id)) {
+        unionSeen.add(s.id);
+        unionStages.push({ id: s.id, name: s.name });
+      }
+    }
+  }
+
+  // Shared lookups (fetched once, in parallel).
+  const [fieldMap, userMap, fieldDefs] = await Promise.all([
     getFieldMap(),
     getUserMap(),
-    searchAll(pipeline.id),
     getEditableFieldDefs(),
   ]);
 
+  // Fetch each pipeline's opportunities SEQUENTIALLY to stay well under GHL's
+  // 100-req/10s burst limit. Budget: ceil(records/100) pages per pipeline. Even
+  // the largest observed (OLTL Transfer, 100+ ≈ 2 pages) across five pipelines
+  // plus the three shared lookups totals ~10-15 requests — comfortably safe.
+  const raw: RawOpportunity[] = [];
+  for (const p of selected) {
+    const batch = await searchAll(p.id);
+    // GHL returns pipelineId on each opp; stamp it as a fallback so stage +
+    // pipeline resolution is never ambiguous.
+    for (const o of batch) if (!o.pipelineId) o.pipelineId = p.id;
+    raw.push(...batch);
+  }
+
   const records = raw.map((o) =>
-    normalizeOpportunity(o, fieldMap, userMap, stageMap),
+    normalizeOpportunity(o, fieldMap, userMap, stageNameByKey, pipelineNameById),
   );
 
   const users = [...userMap.entries()].map(([id, name]) => ({ id, name }));
 
   return {
     records,
-    pipeline: { id: pipeline.id, name: pipeline.name },
-    stages: (pipeline.stages || []).map((s) => ({ id: s.id, name: s.name })),
+    pipeline: null, // v2: no single pipeline — see `pipelines`
+    pipelines: selected.map((p) => ({ id: p.id, name: p.name })),
+    stages: unionStages,
+    stagesByPipeline,
     users,
     fieldDefs,
-    rawSample: {
-      assignedTo: raw[0]?.assignedTo ?? null,
-      followers: raw[0]?.followers ?? null,
-    },
   };
 }
 
@@ -705,11 +838,17 @@ export async function getOpportunityById(
   }
   const opp = data.opportunity;
   if (!opp) return null;
-  const pipeline = await resolvePipeline();
-  const stageMap = new Map<string, string>();
-  for (const s of pipeline.stages || []) stageMap.set(s.id, s.name);
+  // Build the composite stage map + pipeline-name lookup across all selected
+  // pipelines, so this single opp resolves its stage name by pipelineId+stageId.
+  const selected = await getSelectedPipelines();
+  const stageNameByKey = new Map<string, string>();
+  const pipelineNameById = new Map<string, string>();
+  for (const p of selected) {
+    pipelineNameById.set(p.id, p.name);
+    for (const s of p.stages || []) stageNameByKey.set(stageKey(p.id, s.id), s.name);
+  }
   const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
-  return normalizeOpportunity(opp, fieldMap, userMap, stageMap);
+  return normalizeOpportunity(opp, fieldMap, userMap, stageNameByKey, pipelineNameById);
 }
 
 // ---------------------------------------------------------------------------
@@ -740,8 +879,8 @@ interface RawMedia {
 }
 
 export async function listResources(): Promise<ResourceFile[]> {
-  const { locationId } = requireEnv();
-  const folderId = RESOURCES_FOLDER_ID;
+  const { locationId, resourcesFolderId } = requireEnv({ resourcesFolder: true });
+  const folderId = resourcesFolderId;
   const limit = 100;
   const all: RawMedia[] = [];
   for (let page = 0, offset = 0; page < 50; page++, offset += limit) {
@@ -841,6 +980,317 @@ export async function createOpportunity(o: {
 }
 
 // ---------------------------------------------------------------------------
+// The Move action (Task 6).
+//
+// One control; the system classifies. Two paths:
+//
+//   owner UNCHANGED -> simple move: change pipelineId + stage. Nothing else.
+//   owner CHANGED   -> transfer. ORDERING IS DELIBERATE:
+//     0. PREFLIGHT (no writes): destination pipeline resolves, it HAS a
+//        "TRANSFERRED IN" stage, and the new owner is a real location user.
+//     1. PUT #1 — assignedTo + Transferred From/Date (+ Transfer Reason) in ONE
+//        atomic write. The owner change is the step that can fail for permission
+//        reasons, so it goes FIRST: if it fails, NOTHING has been written and the
+//        record is untouched. (Stamping first would leave a record marked
+//        "transferred" while still owned by the old rep.)
+//     2. Clear followers — all except the new owner (G1: a transferred lead must
+//        leave the old division entirely).
+//     3. Note with the reason — written AFTER the owner actually moved, so a note
+//        can never claim a transfer that did not happen.
+//     4. PUT #2 — pipelineId + stage = TRANSFERRED IN. MUST come after the owner
+//        change: GHL blocks revoking pipeline access from a user who still owns
+//        opportunities in that pipeline.
+//
+// No tag is written: GHL tags are contact-scoped, so a transfer tag on a contact
+// with several opportunities cannot identify which record moved. The
+// opportunity-scoped Transferred From / Transferred Date / note carry the history.
+//
+// There are no transactions — on a step failure we STOP and report exactly which
+// steps completed, rather than silently half-moving.
+// ---------------------------------------------------------------------------
+
+export interface MoveResult {
+  transferred: boolean; // false = simple move
+  steps: string[]; // completed steps, in order
+  failedStep?: string; // set when we stopped early
+  error?: string;
+  stranded?: boolean; // owner moved but the record never left the source pipeline
+  attemptedFollowerRemovals?: string[]; // ids we asked GHL to clear (on failure)
+}
+
+const normOpt = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/s$/, "");
+
+// Find a field definition by (normalized) name — never by hardcoded id.
+function findDefByName(
+  defs: FieldDefinition[],
+  name: string,
+): FieldDefinition | undefined {
+  const target = norm(name);
+  return defs.find((d) => norm(d.name || "") === target);
+}
+
+// Match a pipeline NAME to one of a SINGLE_OPTIONS field's option values.
+// Tolerates singular/plural drift ("ODP Enrollment" vs the option "ODP
+// Enrollments") without hardcoding either spelling.
+function matchOption(options: string[], value: string): string | null {
+  const v = normOpt(value);
+  for (const o of options) if (normOpt(o) === v) return o;
+  return null;
+}
+
+export async function moveOpportunity(args: {
+  oppId: string;
+  toPipelineId: string;
+  toStageId?: string; // honoured on the simple path only
+  newOwnerId?: string | null; // undefined/equal to current => simple move
+  reason?: string;
+  actorUserId: string; // note authorship (server-derived)
+  addSenderAsFollower?: boolean; // Option A switch; default OFF (Option B)
+}): Promise<MoveResult> {
+  const steps: string[] = [];
+  const current = await getOpportunityById(args.oppId);
+  if (!current)
+    throw new GhlError("Opportunity not found.", 404, `id ${args.oppId}`);
+
+  const isTransfer =
+    typeof args.newOwnerId === "string" &&
+    (args.newOwnerId || "") !== (current.ownerId || "");
+
+  // ---- PREFLIGHT (no writes) ----
+  const pipelines = await getSelectedPipelines();
+  const dest = pipelines.find((p) => p.id === args.toPipelineId);
+  if (!dest)
+    throw new GhlError(
+      "Destination pipeline is not available.",
+      400,
+      `${args.toPipelineId} is not in PIPELINE_IDS.`,
+    );
+
+  let destStageId = args.toStageId || "";
+  if (isTransfer) {
+    // Transfers always land in TRANSFERRED IN — verify it EXISTS before any
+    // write, otherwise we would fail at the final step with the owner already moved.
+    const ti = (dest.stages || []).find(
+      (s) => (s.name || "").trim().toUpperCase() === "TRANSFERRED IN",
+    );
+    if (!ti)
+      throw new GhlError(
+        `"${dest.name}" has no TRANSFERRED IN stage.`,
+        400,
+        "Add a TRANSFERRED IN stage to that pipeline before transferring into it.",
+      );
+    destStageId = ti.id;
+    const validUsers = await getLocationUserIds();
+    if (!args.newOwnerId || !validUsers.has(args.newOwnerId))
+      throw new GhlError(
+        "New owner is not a user of this location.",
+        400,
+        String(args.newOwnerId ?? ""),
+      );
+  } else {
+    if (!destStageId) {
+      const first = (dest.stages || [])[0];
+      if (!first)
+        throw new GhlError(`"${dest.name}" has no stages.`, 400);
+      destStageId = first.id;
+    } else if (!(dest.stages || []).some((s) => s.id === destStageId)) {
+      throw new GhlError(
+        "Chosen stage does not belong to the destination pipeline.",
+        400,
+        destStageId,
+      );
+    }
+  }
+  steps.push("preflight");
+
+  // ---- SIMPLE MOVE ----
+  if (!isTransfer) {
+    await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
+      pipelineId: args.toPipelineId,
+      pipelineStageId: destStageId,
+    });
+    steps.push("moved pipeline+stage");
+    return { transferred: false, steps };
+  }
+
+  // ---- TRANSFER ----
+  const defs = await getFieldDefinitions();
+  const fromDef = findDefByName(defs, "Transferred From");
+  const dateDef = findDefByName(defs, "Transferred Date");
+  const reasonDef = findDefByName(defs, "Transfer Reason");
+  const sourceName =
+    pipelines.find((p) => p.id === current.pipelineId)?.name || "";
+
+  const customFields: { id: string; value: unknown }[] = [];
+  if (fromDef && sourceName) {
+    // SINGLE_OPTIONS — must send an EXISTING option value.
+    const opts = optionStrings(fromDef);
+    const matched = opts.length ? matchOption(opts, sourceName) : sourceName;
+    if (matched) customFields.push({ id: fromDef.id, value: matched });
+  }
+  if (dateDef)
+    customFields.push({
+      id: dateDef.id,
+      value: new Date().toISOString().slice(0, 10),
+    });
+  if (reasonDef && args.reason?.trim())
+    customFields.push({ id: reasonDef.id, value: args.reason.trim() });
+
+  // 1. Owner + stamps in ONE atomic write (fails => nothing written).
+  try {
+    await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
+      assignedTo: args.newOwnerId,
+      ...(customFields.length ? { customFields } : {}),
+    });
+    steps.push("owner changed + transfer stamps");
+  } catch (e) {
+    return {
+      transferred: false,
+      steps,
+      failedStep: "owner change",
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  // 2. Clear followers — all except the new owner (G1).
+  // removeOpportunityFollowers sends ONE DELETE with the whole array (no loop),
+  // so we never partially clear from this side. GHL's server-side handling of a
+  // failed batch is unverified, so on failure we report exactly which ids were
+  // ATTEMPTED — any still attached keep shared access until cleared manually.
+  const toRemove = current.followerIds.filter((f) => f !== args.newOwnerId);
+  try {
+    if (toRemove.length) {
+      await removeOpportunityFollowers(args.oppId, toRemove);
+      steps.push(`cleared ${toRemove.length} follower(s)`);
+    }
+    if (args.addSenderAsFollower && current.ownerId) {
+      await addOpportunityFollowers(args.oppId, [current.ownerId]);
+      steps.push("kept sender as follower");
+    }
+  } catch (e) {
+    return {
+      transferred: true,
+      steps,
+      failedStep: "clear followers",
+      error: e instanceof Error ? e.message : String(e),
+      attemptedFollowerRemovals: toRemove,
+    };
+  }
+
+  // 3. Note — only now, when the transfer is real.
+  try {
+    if (current.contactId) {
+      const toName = (await getUserMap()).get(args.newOwnerId!) || args.newOwnerId!;
+      const body =
+        `Moved from ${sourceName || "—"} to ${dest.name}. New owner: ${toName}.` +
+        (args.reason?.trim() ? ` Reason: ${args.reason.trim()}` : "");
+      await addOpportunityNote(current.contactId, args.oppId, body, args.actorUserId);
+      steps.push("note written");
+    }
+  } catch (e) {
+    return {
+      transferred: true,
+      steps,
+      failedStep: "note",
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  // 4. Pipeline + TRANSFERRED IN — after the owner change (GHL constraint).
+  // This is the step whose failure STRANDS the record: the owner has already
+  // changed and followers are cleared, but the record is still in the SOURCE
+  // pipeline — which is not in the new owner's home set, so they see it only as
+  // "shared", and the previous owner cannot see it at all. Nobody finds it by
+  // browsing. Retry a couple of times before giving up, then flag it loudly.
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
+        pipelineId: args.toPipelineId,
+        pipelineStageId: destStageId,
+      });
+      steps.push(
+        `moved pipeline+stage (TRANSFERRED IN)${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
+      );
+      return { transferred: true, steps };
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 500));
+    }
+  }
+  return {
+    transferred: true,
+    stranded: true,
+    steps,
+    failedStep: "move pipeline",
+    error: lastErr instanceof Error ? lastErr.message : String(lastErr),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Followers (Task 5) — dedicated add/remove endpoints (no full-opportunity PUT).
+// GHL sends NO native notification to a newly added follower. Shapes follow
+// GHL v2; scripts/followers-probe.mjs confirms them live. Each returns the
+// response's follower array best-effort, but the route recomputes the final set
+// from the known current followers so it never depends on the response shape.
+// ---------------------------------------------------------------------------
+export async function addOpportunityFollowers(
+  oppId: string,
+  userIds: string[],
+): Promise<string[]> {
+  if (!userIds.length) return [];
+  const res = await ghlSend<{ followers?: string[]; followersAdded?: string[] }>(
+    "POST",
+    `/opportunities/${encodeURIComponent(oppId)}/followers`,
+    { followers: userIds },
+  );
+  return res.followers ?? res.followersAdded ?? [];
+}
+
+export async function removeOpportunityFollowers(
+  oppId: string,
+  userIds: string[],
+): Promise<string[]> {
+  if (!userIds.length) return [];
+  // DELETE with a JSON body — ghlSend only covers PUT/POST/PATCH.
+  const url = `${BASE_URL}/opportunities/${encodeURIComponent(oppId)}/followers`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "DELETE",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ followers: userIds }),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 400);
+    } catch {
+      /* ignore */
+    }
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} for DELETE /opportunities/{id}/followers.`,
+      res.status,
+      detail,
+    );
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    followers?: string[];
+    followersRemoved?: string[];
+  };
+  return j.followers ?? j.followersRemoved ?? [];
+}
+
+// ---------------------------------------------------------------------------
 // Resources upload (Task 1) — multipart to the GHL Media Library.
 // Server-only; the token never leaves this module. `parentId` targets the
 // OLTL Resources folder so uploads don't pollute the media root. NOTE: some
@@ -853,7 +1303,7 @@ export async function uploadResource(file: {
   filename: string;
   contentType: string;
 }): Promise<{ id: string; url: string; name: string }> {
-  const { locationId } = requireEnv();
+  const { resourcesFolderId } = requireEnv({ resourcesFolder: true });
   const form = new FormData();
   const blob = new Blob([file.buffer], {
     type: file.contentType || "application/octet-stream",
@@ -862,7 +1312,7 @@ export async function uploadResource(file: {
   form.append("file", blob, file.filename);
   form.append("hosted", "false");
   form.append("name", file.filename);
-  form.append("parentId", RESOURCES_FOLDER_ID);
+  form.append("parentId", resourcesFolderId);
 
   const url = `${BASE_URL}/medias/upload-file`;
   // IMPORTANT: do NOT set Content-Type here — fetch derives the multipart
@@ -914,9 +1364,9 @@ export async function uploadResource(file: {
 // query params + delete shape live. Every helper surfaces a clear GhlError so a
 // PIT that lacks associations access fails loudly, not silently.
 // ---------------------------------------------------------------------------
-export const CAREGIVER_CLIENT_ASSOCIATION_ID = (
-  process.env.CAREGIVER_ASSOCIATION_ID || "6a6e26c9884def7a1438b965"
-).trim();
+// The caregiver_client association id is account-specific and is now read +
+// guarded via requireEnv({ caregiverAssociation: true }) at each point of use,
+// so it fails loudly when unset (no module-level const / stale fallback).
 
 export interface CaregiverRelation {
   relationId: string; // used to DELETE the link
@@ -960,7 +1410,9 @@ const contactDisplay = (c: RawContact): string =>
 export async function listCaregiverRelations(
   clientContactId: string,
 ): Promise<CaregiverRelation[]> {
-  const { locationId } = requireEnv();
+  const { locationId, caregiverAssociationId } = requireEnv({
+    caregiverAssociation: true,
+  });
   // GHL "get relations by record": the record id goes in the PATH, and the only
   // accepted query params are locationId + skip + limit (both required). Passing
   // recordId/associationId as query props returns 422 ("property should not
@@ -975,7 +1427,7 @@ export async function listCaregiverRelations(
     `/associations/relations/${encodeURIComponent(clientContactId)}?${params.toString()}`,
   );
   const relations = (data.relations || []).filter(
-    (r) => String(r.associationId ?? "") === CAREGIVER_CLIENT_ASSOCIATION_ID,
+    (r) => String(r.associationId ?? "") === caregiverAssociationId,
   );
   // The caregiver is whichever side of the relation is NOT the client contact.
   const caregiverIds = relations.map((r) => {
@@ -1057,10 +1509,12 @@ export async function createCaregiverRelation(
   clientContactId: string,
   caregiverContactId: string,
 ): Promise<string> {
-  const { locationId } = requireEnv();
+  const { locationId, caregiverAssociationId } = requireEnv({
+    caregiverAssociation: true,
+  });
   const body = {
     locationId,
-    associationId: CAREGIVER_CLIENT_ASSOCIATION_ID,
+    associationId: caregiverAssociationId,
     firstRecordId: clientContactId,
     secondRecordId: caregiverContactId,
   };
