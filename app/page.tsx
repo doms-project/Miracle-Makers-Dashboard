@@ -541,7 +541,11 @@ export default function Dashboard() {
   const sso = useGhlSession();
 
   const [data, setData] = useState<OpportunityRecord[]>([]);
-  const [pipelineName, setPipelineName] = useState<string>("OLTL Enrollments");
+  // v1 shipped a single pipeline, so the header read a `pipelineName` state that
+  // was seeded from `body.pipeline.name`. Task 2 made the payload multi-pipeline
+  // (`pipeline` is now null, `pipelines` is the list), so that setter never fired
+  // and every user saw the stale seed "OLTL Enrollments". The label is now
+  // DERIVED from what the viewer can actually see — see `headerLabel` below.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
 
@@ -628,7 +632,6 @@ export default function Dashboard() {
       }
       const body = (await res.json()) as OpportunitiesResponse;
       setData(body.records || []);
-      if (body.pipeline?.name) setPipelineName(body.pipeline.name);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
@@ -698,7 +701,8 @@ export default function Dashboard() {
       loadResources();
   }, [view, resLoaded, sso.status, loadResources]);
 
-  // Admin upload → OLTL Resources folder (server-side; token never in browser).
+  // Admin upload → the configured Resources folder (server-side; token never in
+  // browser).
   const uploadResource = useCallback(
     async (file: File) => {
       setUploadMsg(null);
@@ -851,6 +855,25 @@ export default function Dashboard() {
     }
     return { divisions: [...divisions].sort(), anyShared };
   }, [data]);
+
+  // Header label, derived from what this viewer can actually see:
+  //   admin + a pipeline selected -> that pipeline's name
+  //   admin on "All"              -> "All pipelines"
+  //   rep with one home pipeline  -> that pipeline's name
+  //   rep with several            -> their division label(s) ("ODP")
+  //   no home pipelines           -> "Shared with me"
+  const headerLabel = useMemo(() => {
+    if (adminPipeline !== "all")
+      return pipelines.find((p) => p.id === adminPipeline)?.name || "Pipeline";
+    if (isAdminViewer) return "All pipelines";
+    const home = pipelines.filter((p) => homePipelineIds.includes(p.id));
+    if (home.length === 1) return home[0].name;
+    if (home.length > 1) {
+      const divs = [...new Set(home.map((p) => divisionLabel(p.name)))];
+      return divs.join(" · ");
+    }
+    return "Shared with me";
+  }, [adminPipeline, isAdminViewer, pipelines, homePipelineIds]);
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
   // (a new hire must not be invisible); an unknown id renders "Former user".
@@ -1023,7 +1046,17 @@ export default function Dashboard() {
               </span>
             ) : null}
           </span>
-          {followsNotOwns(r) ? (
+          {/* Why is this row visible to me? Unassigned is called out
+              separately so "Following" can never stand in for "nobody owns
+              this" — the two reach the list by different rules. */}
+          {!r.ownerId ? (
+            <span
+              className="unassigned-tag"
+              title="Nobody owns this yet — it's in your division and you can pick it up"
+            >
+              Unassigned
+            </span>
+          ) : followsNotOwns(r) ? (
             <span
               className="follow-tag"
               title="You follow this record (you're not the owner)"
@@ -1315,7 +1348,8 @@ export default function Dashboard() {
     );
   };
 
-  // Board columns = the FULL OLTL pipeline (every stage, incl. empty ones) so you
+  // Board columns = the FULL stage list of the board's pipeline(s) (incl. empty
+  // stages) so you
   // can drag into an empty stage. Falls back to data-derived stages pre-load, and
   // appends any stray stage present in data but not in the pipeline list.
   // Columns come from the board's own pipeline(s): the admin-selected pipeline
@@ -1397,7 +1431,7 @@ export default function Dashboard() {
         <div className="logo">M</div>
         <button
           className="active"
-          title="OLTL Enrollments — this custom view"
+          title={`${headerLabel} — this custom view`}
           type="button"
         >
           <IconGrid />
@@ -1414,17 +1448,17 @@ export default function Dashboard() {
         <div className="topbar">
           <div className="title">
             <h1>
-              <span className="pipe" /> {pipelineName}
+              <span className="pipe" /> {headerLabel}
             </h1>
             <small>
-              One custom view embedded in GoHighLevel · native GHL for
-              everything else
+              Enrollments across your division · contacts, comms and settings
+              stay in GoHighLevel
             </small>
           </div>
           <div className="spacer" />
           <div
             className="viewas"
-            title="Signed-in GHL user (from the SSO handshake). Role-based filtering is the next step."
+            title="Signed-in GHL user (from the SSO handshake). What you see is filtered to your division and assignments."
           >
             <label>Signed in</label>
             {sso.status === "loading" ? (
@@ -1548,7 +1582,7 @@ export default function Dashboard() {
             isAdminViewer ? (
               <>
                 <span className="tag">Admin</span>{" "}
-                <b>All offices.</b> Every record in the {pipelineName} pipeline (
+                <b>All divisions.</b> Every record in {headerLabel} (
                 {data.length}). Signed in as{" "}
                 <b>{sso.session.userName || sso.session.userId}</b>
                 {sso.session.role ? ` (${sso.session.role})` : ""}.
@@ -1558,16 +1592,18 @@ export default function Dashboard() {
                 <span className="tag">
                   {sso.session.userName || "Your view"}
                 </span>{" "}
-                <b>Your assigned records ({data.length}).</b> You see only
-                opportunities you own or follow. Office is a view filter, not a
-                permission — it doesn&apos;t change what you can see.
+                <b>Your records ({data.length}).</b> In {headerLabel} you see
+                what you own, what you follow, and anything still unassigned —
+                unassigned work is there for you to pick up. Records from other
+                divisions appear only when you own or follow them, marked{" "}
+                <i>shared</i>. Office is a view filter, not a permission.
               </>
             )
           ) : (
             <>
               <span className="tag">All data</span>{" "}
               <b>No GHL SSO session detected</b> — admin/testing view. Every
-              record in the {pipelineName} pipeline ({data.length}).
+              record in {headerLabel} ({data.length}).
             </>
           )}
         </div>
@@ -1760,7 +1796,7 @@ export default function Dashboard() {
                 <div className="statecard">
                   <div className="spinner" />
                   <h3>Loading resources…</h3>
-                  <p>Fetching documents from the OLTL Resources folder.</p>
+                  <p>Fetching documents from the shared Resources folder.</p>
                 </div>
               </div>
             ) : resErr ? (
@@ -1784,8 +1820,8 @@ export default function Dashboard() {
                 <b>No resources yet</b>
                 <br />
                 {isAdminViewer
-                  ? "Upload a document above, or add files to the OLTL Resources folder in GoHighLevel."
-                  : "Add documents to the OLTL Resources folder in GoHighLevel."}
+                  ? "Upload a document above, or add files to the Resources folder in GoHighLevel."
+                  : "Add documents to the Resources folder in GoHighLevel."}
               </div>
             ) : visibleResources.length === 0 ? (
               <div className="empty">
@@ -1845,7 +1881,7 @@ export default function Dashboard() {
             <div className="statecard">
               <div className="spinner" />
               <h3>Loading opportunities…</h3>
-              <p>Fetching live OLTL records from GoHighLevel.</p>
+              <p>Fetching live records from GoHighLevel.</p>
             </div>
           </div>
         ) : error ? (

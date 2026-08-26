@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Miracle Makers · OLTL Enrollments Dashboard",
-  description: "Live OLTL Enrollment opportunities from GoHighLevel.",
+  // Spans several pipelines now — no single division belongs in the tab title.
+  title: "Miracle Makers · Enrollments Dashboard",
+  description: "Live enrollment opportunities from GoHighLevel.",
 };
 
 export default function RootLayout({
