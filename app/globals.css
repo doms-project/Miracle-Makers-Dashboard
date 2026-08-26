@@ -409,3 +409,4 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .maskedwrap{display:flex;align-items:flex-start;gap:8px;}
 .maskedwrap>:first-child{flex:1;}
 .maskedwrap .maskbtn{margin-top:9px;}
+.unassigned-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;vertical-align:middle;}
