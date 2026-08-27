@@ -410,3 +410,30 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .maskedwrap>:first-child{flex:1;}
 .maskedwrap .maskbtn{margin-top:9px;}
 .unassigned-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;vertical-align:middle;}
+
+/* ── Admin: Pipeline Access tab ───────────────────────────────── */
+.pawrap{padding:20px 22px 40px;display:flex;flex-direction:column;gap:14px;}
+.panote{font-size:12px;line-height:1.6;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:10px;padding:12px 14px;}
+.pawarn{font-size:12px;line-height:1.55;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:10px;padding:11px 14px;}
+.panote code,.pawarn code,.pawrap .imeta code{background:rgba(0,0,0,.06);border-radius:4px;padding:1px 5px;font-size:11px;}
+.patoolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.patoolbar .search{flex:1;min-width:220px;border:1px solid var(--line);border-radius:9px;padding:0 12px;}
+.patoolbar .search input{width:100%;border:0;outline:none;padding:10px 0;font:inherit;font-size:12.5px;background:transparent;}
+.pacount{font-size:11.5px;color:var(--ink-3);white-space:nowrap;}
+.pacount .bad{color:var(--blk);}
+.pagridwrap{overflow:auto;border:1px solid var(--line);border-radius:12px;max-height:62vh;}
+.pagrid{width:100%;border-collapse:collapse;font-size:12px;}
+.pagrid th{position:sticky;top:0;z-index:2;background:var(--canvas);border-bottom:1px solid var(--line);padding:10px 12px;text-align:center;font-weight:700;color:var(--ink-2);white-space:nowrap;vertical-align:bottom;}
+.pagrid th.pauser{text-align:left;left:0;z-index:3;min-width:230px;}
+.pagrid td{border-bottom:1px solid var(--line-soft);padding:9px 12px;text-align:center;}
+.pagrid td.pauser{text-align:left;position:sticky;left:0;background:var(--bg);z-index:1;}
+.pagrid tr:hover td{background:var(--row-hover);}
+.pagrid tr:hover td.pauser{background:var(--row-hover);}
+.pagrid tr.panone td.pauser{background:var(--blk-soft);}
+.paname{font-weight:700;color:var(--ink);display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.pamail{font-size:10.5px;color:var(--ink-3);margin-top:2px;}
+.paadmin{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;}
+.panoaccess{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:20px;padding:1px 7px;}
+.panotloaded{display:block;margin-top:3px;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);}
+.pacell input{margin:0;accent-color:var(--plum);width:16px;height:16px;cursor:pointer;}
+.pacell input:disabled{opacity:.35;cursor:not-allowed;}
