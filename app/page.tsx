@@ -1134,13 +1134,18 @@ export default function Dashboard() {
   }, [data, q, homePipelineIds, adminPipeline]);
 
   // Stats (client-requested tiles: total, per office, by source, per rep).
+  // Stats read `filtered`, NOT `data`. `data` is every record the server
+  // returned across all pipelines; `filtered` is what the admin pipeline
+  // selector, scope filter, office filter and search actually narrow. The list
+  // below renders `filtered`, so the cards have to agree with it — reading
+  // `data` made them look frozen when a filter was applied.
   const stats = useMemo(() => {
-    const blocked = data.filter((r) => r.block !== "None").length;
-    const checked = data.filter((r) => r.checked).length;
-    const auth = data.filter((r) => r.stage.startsWith("Auth")).length;
+    const blocked = filtered.filter((r) => r.block !== "None").length;
+    const checked = filtered.filter((r) => r.checked).length;
+    const auth = filtered.filter((r) => r.stage.startsWith("Auth")).length;
     const tally = (pick: (r: OpportunityRecord) => string) => {
       const m = new Map<string, number>();
-      for (const r of data) {
+      for (const r of filtered) {
         const k = pick(r);
         if (k) m.set(k, (m.get(k) || 0) + 1);
       }
@@ -1162,7 +1167,7 @@ export default function Dashboard() {
       repCount: repStats.length,
       assigned,
     };
-  }, [data]);
+  }, [filtered]);
 
   const selected = useMemo(
     () => data.find((r) => r.id === selId) || null,
@@ -1515,9 +1520,15 @@ export default function Dashboard() {
         <>
         <div className="stats">
           <div className="stat">
-            <div className="k">In pipeline</div>
-            <div className="v">{data.length}</div>
-            <div className="sub">live from GoHighLevel</div>
+            <div className="k">{filtered.length === data.length ? "In pipeline" : "Showing"}</div>
+            <div className="v">{filtered.length}</div>
+            {/* When a filter is active the number is NOT the pipeline total, so
+                say what it is out of rather than "live from GoHighLevel". */}
+            <div className="sub">
+              {filtered.length === data.length
+                ? "live from GoHighLevel"
+                : `of ${data.length} · filters active`}
+            </div>
           </div>
           <div className="stat gold">
             <div className="k">By office</div>
@@ -2194,6 +2205,15 @@ export default function Dashboard() {
 
               {/* 2 — Assignment */}
               <div className="sechead">Assignment</div>
+              {/* If the users lookup failed, the owner dropdown and follower
+                  picker are empty. Say so rather than showing empty lists. */}
+              {users.length === 0 ? (
+                <div className="savemsg err" style={{ marginBottom: 10 }}>
+                  ✗ Couldn&apos;t load the user list, so reassigning and adding
+                  followers are unavailable right now. Reload; if it persists the
+                  API token may be missing the users permission.
+                </div>
+              ) : null}
               <div className="grid">
                 <div className="f">
                   <label>Sales Rep (Owner)</label>

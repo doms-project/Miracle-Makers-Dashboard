@@ -5,6 +5,7 @@ import type {
 } from "./types";
 import { isFieldEditable } from "./editable";
 import { PIPELINE_FOLDERS } from "./fieldFolders";
+import { divisionLabel } from "./division";
 
 // Account-specific — MUST come from env (re-derive per account with
 // scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
@@ -347,6 +348,15 @@ export async function getLocationUserIds(): Promise<Set<string>> {
   return new Set((await getUserMap()).keys());
 }
 
+// The users lookup is fetched SERVER-SIDE with the PIT and is NOT gated on the
+// viewer's role — every viewer gets the same map. It backs owner names, follower
+// names, the owner dropdown and the follower picker, so an empty map degrades
+// all of them at once.
+//
+// It used to swallow the error AND cache the empty result, which made a single
+// transient failure (or a PIT missing the users scope) permanent for the life of
+// that warm lambda: every later request on that instance silently rendered raw
+// ids. Now a failure is logged loudly and NOT cached, so the next request retries.
 async function getUserMap(): Promise<Map<string, string>> {
   if (cache.userMap) return cache.userMap;
   const { locationId } = requireEnv();
@@ -360,8 +370,20 @@ async function getUserMap(): Promise<Map<string, string>> {
         u.name || [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
       if (u.id) map.set(u.id, name);
     }
-  } catch {
-    // Non-fatal: owner will fall back to the raw id / "—".
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[users] lookup FAILED — owner/follower names and the owner + follower pickers will be empty. Check the PIT's users.readonly scope.",
+      e instanceof Error ? e.message : String(e),
+    );
+    return map; // do NOT cache a failure — retry on the next request
+  }
+  if (!map.size) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[users] lookup returned ZERO users — pickers will be empty. Not caching, will retry.",
+    );
+    return map;
   }
   cache.userMap = map;
   return map;
@@ -562,7 +584,11 @@ function normalizeOpportunity(
     shared: false, // set true later by the access filter for non-home pipelines
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
-  rec.followerNames = rec.followerIds.map((id) => userMap.get(id) || id);
+  // Never leak a raw user id to the UI — an unresolvable id reads "Former user"
+  // everywhere (matches userLabel() in app/page.tsx).
+  rec.followerNames = rec.followerIds.map(
+    (id) => userMap.get(id) || "Former user",
+  );
 
   // Part A: the dashboard "Source" column is the native `source` field.
   rec.src = opp.source || "";
@@ -588,9 +614,10 @@ function normalizeOpportunity(
   const stageId = opp.pipelineStageId || opp.stageId || "";
   rec.stage = stageNameByKey.get(stageKey(pipelineId, stageId)) || "";
 
-  // Owner name.
+  // Owner name — same rule: an unresolvable id reads "Former user", never the
+  // raw id (this leaked in the list "Rep" column and on board cards too).
   if (opp.assignedTo) {
-    rec.rep = userMap.get(opp.assignedTo) || opp.assignedTo;
+    rec.rep = userMap.get(opp.assignedTo) || "Former user";
   }
 
   // Custom fields -> target keys by name.
@@ -661,6 +688,12 @@ export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
         (d as Record<string, unknown>).folderId ??
         "",
     ),
+    // GHL's authored order within the folder. Missing/unparseable sorts last
+    // (Number.MAX_SAFE_INTEGER) so it falls back to the name sort downstream.
+    position: (() => {
+      const p = Number((d as Record<string, unknown>).position);
+      return Number.isFinite(p) ? p : Number.MAX_SAFE_INTEGER;
+    })(),
   }));
 }
 
@@ -1039,6 +1072,39 @@ function matchOption(options: string[], value: string): string | null {
   return null;
 }
 
+// Division follows the pipeline. The account was backfilled once from each
+// record's pipeline, but that is a SNAPSHOT — the first record moved between
+// pipelines would carry a stale Division and drift from there. So whenever Move
+// changes the pipeline, it writes Division in the SAME PUT (no extra call, no
+// new failure point).
+//
+// The value is derived with divisionLabel(pipelineName) — the same function the
+// UI uses — so there is ONE source of truth, not a second hardcoded map. The
+// field is SINGLE_OPTIONS, so the label is matched against its real options and
+// skipped if nothing matches (never write an invalid option).
+//
+// Division stays a normal EDITABLE field: Move only ensures it is right by
+// default when the pipeline changes. It is deliberately NOT in READ_ONLY_FIELDS.
+async function divisionCustomField(
+  destPipelineName: string,
+): Promise<{ id: string; value: unknown }[]> {
+  const defs = await getFieldDefinitions();
+  const def = findDefByName(defs, "Division");
+  if (!def) return [];
+  const label = divisionLabel(destPipelineName);
+  if (!label) return [];
+  const opts = optionStrings(def);
+  const value = opts.length ? matchOption(opts, label) : label;
+  if (!value) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[move] Division not written: "${label}" is not one of the field's options (${opts.join(", ")}).`,
+    );
+    return [];
+  }
+  return [{ id: def.id, value }];
+}
+
 export async function moveOpportunity(args: {
   oppId: string;
   toPipelineId: string;
@@ -1104,13 +1170,23 @@ export async function moveOpportunity(args: {
   }
   steps.push("preflight");
 
+  // Division follows the pipeline — only when the pipeline actually changes
+  // (a stage-only move within the same pipeline must not touch it).
+  const pipelineChanged = args.toPipelineId !== current.pipelineId;
+  const divisionCf = pipelineChanged
+    ? await divisionCustomField(dest.name)
+    : [];
+
   // ---- SIMPLE MOVE ----
   if (!isTransfer) {
     await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
       pipelineId: args.toPipelineId,
       pipelineStageId: destStageId,
+      ...(divisionCf.length ? { customFields: divisionCf } : {}),
     });
-    steps.push("moved pipeline+stage");
+    steps.push(
+      `moved pipeline+stage${divisionCf.length ? " + Division" : ""}`,
+    );
     return { transferred: false, steps };
   }
 
@@ -1209,9 +1285,11 @@ export async function moveOpportunity(args: {
       await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
         pipelineId: args.toPipelineId,
         pipelineStageId: destStageId,
+        // Division rides along with the pipeline change (same PUT).
+        ...(divisionCf.length ? { customFields: divisionCf } : {}),
       });
       steps.push(
-        `moved pipeline+stage (TRANSFERRED IN)${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
+        `moved pipeline+stage (TRANSFERRED IN)${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );
       return { transferred: true, steps };
     } catch (e) {
