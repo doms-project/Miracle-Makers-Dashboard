@@ -570,6 +570,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   checked: ["checkedthisweek", "checked", "checkedweek"],
   // Fields below are not sourced from custom fields; listed for completeness.
   id: [],
+  oppName: [],
   first: [],
   last: [],
   stage: [],
@@ -620,6 +621,9 @@ function normalizeOpportunity(
   const pipelineId = opp.pipelineId || "";
   const rec: OpportunityRecord = {
     id: opp.id,
+    // Keep the opportunity's OWN name — previously it was only used as a
+    // fallback when the contact had no name, so it never reached the UI.
+    oppName: (opp.name || "").trim(),
     first: "",
     last: "",
     stage: "",

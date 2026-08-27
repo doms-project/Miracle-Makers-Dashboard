@@ -47,8 +47,11 @@ const STAGE_ORDER = [
 ];
 
 const clientName = (r: OpportunityRecord) => `${r.first} ${r.last}`.trim();
+// The panel header. The OPPORTUNITY's own name leads — one contact can hold
+// several opportunities, and heading them all with the contact name made two
+// different records look identical.
 const enrollLabel = (r: OpportunityRecord) =>
-  `${r.last || r.first || "Record"} — ${
+  `${r.oppName || r.last || r.first || "Record"} — ${
     r.harmony ? r.harmony.replace("HRM-", "#") : "new"
   }`;
 
@@ -471,7 +474,7 @@ function CardBody({
   return (
     <>
       <div className="cn">
-        {`${r.first} ${r.last}`.trim() || "—"}
+        {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
         {following ? (
           <span
             className="follow-tag"
@@ -481,6 +484,12 @@ function CardBody({
           </span>
         ) : null}
       </div>
+      {r.oppName && `${r.first} ${r.last}`.trim() &&
+      `${r.first} ${r.last}`.trim() !== r.oppName ? (
+        <div className="ccontact" title="Contact">
+          {`${r.first} ${r.last}`.trim()}
+        </div>
+      ) : null}
       {r.cg && r.cg !== "—" ? (
         <div className="ccg" title="Caregiver">
           🧑‍⚕️ {r.cg}
@@ -909,7 +918,7 @@ export default function Dashboard() {
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
         (needle === "" ||
           // Searchable by name, office, stage, and the key people/ids.
-          `${r.first} ${r.last} ${r.office} ${r.stage} ${r.harmony} ${r.cm} ${r.cg} ${r.rep} ${r.src}`
+          `${r.oppName} ${r.first} ${r.last} ${r.office} ${r.stage} ${r.harmony} ${r.cm} ${r.cg} ${r.rep} ${r.src}`
             .toLowerCase()
             .includes(needle)),
     );
@@ -1046,7 +1055,7 @@ export default function Dashboard() {
       <td className="strong">
         <div className="clientcell">
           <span className="clname">
-            {clientName(r) || "—"}
+            {r.oppName || clientName(r) || "—"}
             {r.pipelineName ? (
               <span className="divbadge" title={r.pipelineName}>
                 {r.pipelineName}
@@ -1077,6 +1086,13 @@ export default function Dashboard() {
               {r.ownerId === viewerId
                 ? `Your record in ${r.pipelineName || "another pipeline"}`
                 : `Shared by ${r.rep || "—"} · ${r.pipelineName || "another pipeline"} · you're a follower`}
+            </span>
+          ) : null}
+          {/* Contact name, only when it differs from the opportunity name —
+              otherwise it's the same string twice. */}
+          {r.oppName && clientName(r) && clientName(r) !== r.oppName ? (
+            <span className="clcontact" title="Contact">
+              {clientName(r)}
             </span>
           ) : null}
           {r.cg && r.cg !== "—" ? (
@@ -1136,7 +1152,7 @@ export default function Dashboard() {
         (home.size === 0 || home.has(r.pipelineId)) &&
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
         (needle === "" ||
-          `${r.first} ${r.last}`.toLowerCase().includes(needle)),
+          `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
     );
   }, [data, q, homePipelineIds, adminPipeline]);
 
@@ -2139,8 +2155,13 @@ export default function Dashboard() {
               <div style={{ flex: 1 }}>
                 <h2>{enrollLabel(selected)}</h2>
                 <div className="sub">
-                  {clientName(selected) || "—"} · {selected.office || "—"} ·{" "}
-                  {selected.stage || "—"}
+                  {/* Contact is secondary here; shown only when it isn't
+                      already the header, so the two are never confused. */}
+                  {clientName(selected) &&
+                  clientName(selected) !== selected.oppName
+                    ? `${clientName(selected)} · `
+                    : ""}
+                  {selected.office || "—"} · {selected.stage || "—"}
                   {selected.pipelineName ? (
                     <span className="divbadge" title={selected.pipelineName}>
                       {selected.pipelineName}
