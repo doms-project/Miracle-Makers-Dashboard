@@ -437,3 +437,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .panotloaded{display:block;margin-top:3px;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);}
 .pacell input{margin:0;accent-color:var(--plum);width:16px;height:16px;cursor:pointer;}
 .pacell input:disabled{opacity:.35;cursor:not-allowed;}
+.clientcell .clcontact{font-size:11px;color:var(--ink-3);font-weight:500;}
+.clientcell .clcontact::before{content:"👤 ";}
+.card .ccontact{font-size:11px;color:var(--ink-2);margin-top:2px;}

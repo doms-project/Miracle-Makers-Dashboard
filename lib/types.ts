@@ -1,6 +1,10 @@
 // The normalized shape the frontend expects. One object per OLTL opportunity.
 export interface OpportunityRecord {
   id: string;
+  // The OPPORTUNITY's own name (GHL `name`). Distinct from the contact — one
+  // contact can hold several opportunities, and showing only the contact name
+  // makes them indistinguishable in the list and panel header.
+  oppName: string;
   first: string;
   last: string;
   stage: string; // pipeline stage name
