@@ -39,6 +39,65 @@ export class GhlError extends Error {
 // — same fail-loud behaviour as locationId — instead of silently defaulting to
 // "" (which would upload to the media root / return an empty caregiver list).
 // Unrelated calls (search, pipelines, contacts) omit opts and are unaffected.
+// GHL puts a readable reason in the error body — e.g.
+//   { "message": "Can not make this user X owner as User does not have
+//                 permission to access this pipeline Y.", "statusCode": 400 }
+// `message` is sometimes a string and sometimes an array of strings (the 422
+// validation shape). Pull it out so callers surface the reason rather than a
+// bare status code; fall back to the raw text when it isn't JSON.
+function ghlMessage(raw: string): string {
+  const text = (raw || "").trim();
+  if (!text) return "";
+  try {
+    const j = JSON.parse(text) as { message?: unknown; error?: unknown };
+    const m = j.message ?? j.error;
+    if (Array.isArray(m)) return m.map(String).join("; ").slice(0, 500);
+    if (typeof m === "string" && m.trim()) return m.trim().slice(0, 500);
+  } catch {
+    /* not JSON — fall through to the raw body */
+  }
+  return text.slice(0, 500);
+}
+
+// GHL enforces its own Pipeline Permissions on owner assignment, and that is a
+// SEPARATE system from our PIPELINE_ACCESS_MAP: ours governs what the dashboard
+// shows, GHL's governs who may own a record and see the native screen. They can
+// disagree, and a mismatch surfaces as:
+//   400 "Can not make this user <userId> owner as User does not have permission
+//        to access this pipeline <pipelineId>."
+// which names ids, not people. Rewrite it with the real names and the exact
+// place to fix it. We deliberately do NOT try to pre-filter the owner dropdown:
+// GHL exposes no API for those grants, so any filter would be a guess that
+// silently hides valid choices.
+export async function explainGhlError(e: unknown): Promise<string> {
+  if (!(e instanceof GhlError))
+    return e instanceof Error ? e.message : String(e);
+  const raw = `${e.message} ${e.detail ?? ""}`;
+  const m =
+    /can\s*not\s+make\s+this\s+user\s+(\S+?)\s+owner.*?permission\s+to\s+access\s+this\s+pipeline\s+(\S+?)[.\s"]/i.exec(
+      raw + " ",
+    );
+  if (m) {
+    const [, userId, pipelineId] = m;
+    let who = userId;
+    let which = pipelineId;
+    try {
+      who = (await getUserMap()).get(userId) || userId;
+    } catch {
+      /* keep the id */
+    }
+    try {
+      which =
+        (await getPipelines()).find((p) => p.id === pipelineId)?.name ||
+        pipelineId;
+    } catch {
+      /* keep the id */
+    }
+    return `${who} doesn't have access to the "${which}" pipeline in GoHighLevel, so they can't be made owner of this record. Grant it in GoHighLevel → Settings → Opportunities → Pipelines → the key icon on "${which}", then try again.`;
+  }
+  return e.detail ? `${e.message} — ${e.detail}` : e.message;
+}
+
 function requireEnv(opts?: {
   resourcesFolder?: boolean;
   caregiverAssociation?: boolean;
@@ -124,7 +183,7 @@ async function ghlGet<T>(path: string): Promise<T> {
   if (!res.ok) {
     let detail = "";
     try {
-      detail = await res.text();
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }
@@ -171,12 +230,20 @@ async function ghlSend<T>(
     );
   }
   if (!res.ok) {
-    let detail = "";
+    let raw = "";
     try {
-      detail = (await res.text()).slice(0, 500);
+      raw = await res.text();
     } catch {
       /* ignore */
     }
+    const detail = ghlMessage(raw);
+    // Log the failing request body alongside the reason — without it a 400 is
+    // undiagnosable from the logs alone.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[ghl] ${method} ${new URL(url).pathname} -> ${res.status}: ${detail}`,
+      JSON.stringify(body)?.slice(0, 800),
+    );
     throw new GhlError(
       `GoHighLevel returned ${res.status} for ${method} ${new URL(url).pathname}.`,
       res.status,
@@ -961,6 +1028,147 @@ export async function listPipelines(): Promise<
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline Access (admin tab) — everything here is fetched LIVE, nothing is
+// hardcoded: users and pipelines come from GHL, grants from a Location Custom
+// Value. Adding a sixth division = create the pipeline in GHL and tick a box.
+//
+// Storage is a Location CUSTOM VALUE (not a custom object, so it doesn't touch
+// the 10-per-account cap). Verified working:
+//   GET  /locations/{loc}/customValues
+//   POST /locations/{loc}/customValues            (create)
+//   PUT  /locations/{loc}/customValues/{id}       (update)
+// Shape: { "<userId>": ["<pipelineId>", …], … }
+// ---------------------------------------------------------------------------
+export const ACCESS_CUSTOM_VALUE_NAME = "MM Pipeline Access";
+
+export interface LocationUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string; // "admin" | "user" | ""
+}
+
+interface RawUser {
+  id?: string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  role?: string;
+  roles?: { role?: string };
+}
+
+// Full user list (id/name/email/role) for the admin grid. Admins bypass the map
+// entirely, so the tab needs the role to label them.
+export async function listLocationUsers(): Promise<LocationUser[]> {
+  const { locationId } = requireEnv();
+  const data = await ghlGet<{ users?: RawUser[] }>(
+    `/users/?locationId=${encodeURIComponent(locationId)}`,
+  );
+  return (data.users || [])
+    .map((u) => ({
+      id: String(u.id ?? ""),
+      name:
+        u.name ||
+        [u.firstName, u.lastName].filter(Boolean).join(" ").trim() ||
+        String(u.email ?? "") ||
+        "Unnamed user",
+      email: String(u.email ?? ""),
+      role: String(u.roles?.role ?? u.role ?? ""),
+    }))
+    .filter((u) => u.id)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+interface RawCustomValue {
+  id?: string;
+  _id?: string;
+  name?: string;
+  value?: unknown;
+}
+
+async function findAccessCustomValue(): Promise<{
+  id: string;
+  value: string;
+} | null> {
+  const { locationId } = requireEnv();
+  const data = await ghlGet<{ customValues?: RawCustomValue[] }>(
+    `/locations/${encodeURIComponent(locationId)}/customValues`,
+  );
+  const hit = (data.customValues || []).find(
+    (c) =>
+      String(c.name ?? "").trim().toLowerCase() ===
+      ACCESS_CUSTOM_VALUE_NAME.toLowerCase(),
+  );
+  if (!hit) return null;
+  return {
+    id: String(hit.id ?? hit._id ?? ""),
+    value: typeof hit.value === "string" ? hit.value : JSON.stringify(hit.value ?? ""),
+  };
+}
+
+export type AccessGrants = Record<string, string[]>;
+
+// Read the stored grants. Returns null on ANY problem (missing value, bad JSON,
+// failed fetch) so the caller can fall back to the env var rather than locking
+// everyone out — a config read failure must not take the dashboard down.
+export async function fetchPipelineAccessGrants(): Promise<AccessGrants | null> {
+  try {
+    const cv = await findAccessCustomValue();
+    if (!cv || !cv.value) return null;
+    const parsed = JSON.parse(cv.value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: AccessGrants = {};
+    for (const [userId, pids] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(pids)) continue; // ignores the {"test":"ok"} placeholder
+      out[userId] = pids.map(String).filter(Boolean);
+    }
+    return Object.keys(out).length || isEmptyGrantsObject(parsed) ? out : null;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[access] couldn't read the pipeline-access custom value; falling back to PIPELINE_ACCESS_MAP.",
+      e instanceof Error ? e.message : String(e),
+    );
+    return null;
+  }
+}
+
+// A deliberately-empty saved map ({}) is a real state — everyone unmapped — and
+// must NOT be treated as "missing" or we'd silently fall back to the env var.
+function isEmptyGrantsObject(parsed: unknown): boolean {
+  return (
+    !!parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    Object.keys(parsed as object).length === 0
+  );
+}
+
+// Write the whole map as one JSON value. Creates the custom value if it's absent.
+export async function savePipelineAccessGrants(
+  grants: AccessGrants,
+): Promise<{ id: string }> {
+  const { locationId } = requireEnv();
+  const body = JSON.stringify(grants);
+  const existing = await findAccessCustomValue();
+  if (existing?.id) {
+    await ghlSend(
+      "PUT",
+      `/locations/${encodeURIComponent(locationId)}/customValues/${encodeURIComponent(existing.id)}`,
+      { name: ACCESS_CUSTOM_VALUE_NAME, value: body },
+    );
+    return { id: existing.id };
+  }
+  const res = await ghlSend<{ customValue?: { id?: string }; id?: string }>(
+    "POST",
+    `/locations/${encodeURIComponent(locationId)}/customValues`,
+    { name: ACCESS_CUSTOM_VALUE_NAME, value: body },
+  );
+  return { id: String(res.customValue?.id ?? res.id ?? "") };
+}
+
 // Upsert dedupes by email/phone at GHL; `isNew` distinguishes created vs matched.
 export async function upsertContact(fields: {
   firstName?: string;
@@ -1225,7 +1433,8 @@ export async function moveOpportunity(args: {
       transferred: false,
       steps,
       failedStep: "owner change",
-      error: e instanceof Error ? e.message : String(e),
+      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+      error: await explainGhlError(e),
     };
   }
 
@@ -1249,7 +1458,8 @@ export async function moveOpportunity(args: {
       transferred: true,
       steps,
       failedStep: "clear followers",
-      error: e instanceof Error ? e.message : String(e),
+      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+      error: await explainGhlError(e),
       attemptedFollowerRemovals: toRemove,
     };
   }
@@ -1269,7 +1479,8 @@ export async function moveOpportunity(args: {
       transferred: true,
       steps,
       failedStep: "note",
-      error: e instanceof Error ? e.message : String(e),
+      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+      error: await explainGhlError(e),
     };
   }
 
@@ -1302,7 +1513,7 @@ export async function moveOpportunity(args: {
     stranded: true,
     steps,
     failedStep: "move pipeline",
-    error: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    error: await explainGhlError(lastErr),
   };
 }
 
@@ -1351,7 +1562,7 @@ export async function removeOpportunityFollowers(
   if (!res.ok) {
     let detail = "";
     try {
-      detail = (await res.text()).slice(0, 400);
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }
@@ -1409,7 +1620,7 @@ export async function uploadResource(file: {
   if (!res.ok) {
     let detail = "";
     try {
-      detail = (await res.text()).slice(0, 500);
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }
@@ -1683,7 +1894,7 @@ export async function listEmailTemplates(): Promise<EmailTemplateLite[]> {
   if (!res.ok) {
     let detail = "";
     try {
-      detail = (await res.text()).slice(0, 400);
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }
@@ -1756,7 +1967,7 @@ export async function sendEmail(args: {
   if (!res.ok) {
     let detail = "";
     try {
-      detail = (await res.text()).slice(0, 400);
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }
@@ -1794,7 +2005,7 @@ export async function deleteCaregiverRelation(
   if (!res.ok) {
     let detail = "";
     try {
-      detail = (await res.text()).slice(0, 500);
+      detail = ghlMessage(await res.text());
     } catch {
       /* ignore */
     }

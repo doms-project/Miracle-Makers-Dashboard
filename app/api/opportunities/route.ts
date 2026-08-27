@@ -7,6 +7,7 @@ import {
   userDivisions,
   getUserHomePipelines,
 } from "@/lib/pipelineAccess";
+import { withGrants } from "@/lib/withGrants";
 import type { OpportunitiesResponse, ApiError } from "@/lib/types";
 
 // Always dynamic; the GHL token and SSO secret are only ever read server-side.
@@ -129,7 +130,7 @@ export async function POST(request: Request) {
     } catch {
       blob = null;
     }
-    return await buildResponse(blob);
+    return await withGrants(() => buildResponse(blob));
   } catch (e) {
     return errorResponse(e);
   }
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
 // returns 401 once SSO is enforced (must be opened inside GHL).
 export async function GET() {
   try {
-    return await buildResponse(null);
+    return await withGrants(() => buildResponse(null));
   } catch (e) {
     return errorResponse(e);
   }

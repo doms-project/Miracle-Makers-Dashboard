@@ -1,4 +1,5 @@
 import type { OpportunityRecord } from "./types";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { divisionLabel } from "./division";
 
 // Task 3 — pipeline access (division scoping).
@@ -25,7 +26,52 @@ import { divisionLabel } from "./division";
 // Env now: PIPELINE_ACCESS_MAP = "userId:pid|pid,userId:pid|pid".
 
 type AccessMap = Map<string, Set<string>>;
-let _cache: AccessMap | null = null;
+
+// Request-scoped grants. The stored map is fetched ONCE per request and held in
+// AsyncLocalStorage — never in a module variable. Two reasons:
+//   1. concurrent requests on one lambda must not share another viewer's read;
+//   2. the users-lookup bug was a cached EMPTY map that became permanent for a
+//      warm lambda. A failed read must never persist.
+const grantsStore = new AsyncLocalStorage<AccessMap>();
+
+/** Run `fn` with these grants installed for the duration of the request. */
+export function runWithGrants<T>(grants: AccessMap, fn: () => T): T {
+  return grantsStore.run(grants, fn);
+}
+
+/**
+ * Build the effective grants for one request.
+ *   stored custom value  -> use it (an empty {} is a real state: all unmapped)
+ *   missing / bad / failed fetch -> FALL BACK to PIPELINE_ACCESS_MAP
+ * Then validate: a stale userId or pipelineId (deleted user, deleted pipeline)
+ * is ignored rather than crashing the filter — intersect against the live lists.
+ */
+export function buildGrants(
+  stored: Record<string, string[]> | null,
+  validUserIds?: Set<string>,
+  validPipelineIds?: Set<string>,
+): AccessMap {
+  const map: AccessMap = new Map();
+  if (stored) {
+    for (const [userId, pids] of Object.entries(stored)) {
+      if (validUserIds && !validUserIds.has(userId)) continue; // stale user
+      const set = new Set(
+        pids.filter((p) => !validPipelineIds || validPipelineIds.has(p)),
+      );
+      if (set.size) map.set(userId, set);
+    }
+    return map;
+  }
+  // Fallback: the env var, validated the same way.
+  for (const [userId, set] of parseAccessMap()) {
+    if (validUserIds && !validUserIds.has(userId)) continue;
+    const kept = new Set(
+      [...set].filter((p) => !validPipelineIds || validPipelineIds.has(p)),
+    );
+    if (kept.size) map.set(userId, kept);
+  }
+  return map;
+}
 
 function parseAccessMap(): AccessMap {
   const map: AccessMap = new Map();
@@ -53,10 +99,13 @@ function parseAccessMap(): AccessMap {
 }
 
 // The user's HOME pipelines. Empty set = ungranted (sees only owned/followed).
-// Swap the body for a GHL user-field read later; the signature stays the same.
+// Reads the request-scoped grants when a route has installed them
+// (runWithGrants); otherwise falls back to the env var so any un-wrapped path
+// still behaves, just without the live custom value.
 export function getUserHomePipelines(userId: string): Set<string> {
-  if (!_cache) _cache = parseAccessMap();
-  return _cache.get(userId) || new Set<string>();
+  const scoped = grantsStore.getStore();
+  if (scoped) return scoped.get(userId) || new Set<string>();
+  return parseAccessMap().get(userId) || new Set<string>();
 }
 
 // The division label(s) a user belongs to, derived from their HOME pipelines'

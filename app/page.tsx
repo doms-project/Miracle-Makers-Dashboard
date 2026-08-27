@@ -27,6 +27,7 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import PipelineAccessTab from "@/components/PipelineAccessTab";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -100,6 +101,12 @@ const IconDoc = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <path d="M14 2v6h6M9 13h6M9 17h6" />
+  </svg>
+);
+const IconKey = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <circle cx="7.5" cy="15.5" r="4.5" />
+    <path d="M10.8 12.2L21 2m-4 4l3 3m-6-6l3 3" />
   </svg>
 );
 const IconUpload = () => (
@@ -484,7 +491,7 @@ function CardBody({
       </div>
       {r.pipelineName ? (
         <div className="cdiv" title={r.pipelineName}>
-          {divisionLabel(r.pipelineName)}
+          {r.pipelineName}
         </div>
       ) : null}
       <div className="cf">
@@ -576,7 +583,7 @@ export default function Dashboard() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [groupKey, setGroupKey] = useState<string | null>(null);
   const [view, setView] = useState<
-    "list" | "board" | "resources" | "import"
+    "list" | "board" | "resources" | "import" | "access"
   >("list");
   const [selId, setSelId] = useState<string | null>(null);
   // Resources tab (folder-scoped GHL media).
@@ -1042,7 +1049,7 @@ export default function Dashboard() {
             {clientName(r) || "—"}
             {r.pipelineName ? (
               <span className="divbadge" title={r.pipelineName}>
-                {divisionLabel(r.pipelineName)}
+                {r.pipelineName}
               </span>
             ) : null}
           </span>
@@ -1068,8 +1075,8 @@ export default function Dashboard() {
           {r.shared ? (
             <span className="provenance">
               {r.ownerId === viewerId
-                ? "Your record in another division"
-                : `Shared by ${r.rep || "—"} · you're a follower`}
+                ? `Your record in ${r.pipelineName || "another pipeline"}`
+                : `Shared by ${r.rep || "—"} · ${r.pipelineName || "another pipeline"} · you're a follower`}
             </span>
           ) : null}
           {r.cg && r.cg !== "—" ? (
@@ -1332,6 +1339,17 @@ export default function Dashboard() {
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   );
+  // Stage ids are only valid within their OWN pipeline. Names repeat across
+  // pipelines (TRANSFERRED IN, UNCATEGORIZED, INACTIVE, LOST exist in all five)
+  // with DIFFERENT ids, so resolving a stage from the merged union can write a
+  // foreign id and GHL rejects it with OPPORTUNITY_STAGE_ID_INVALID. Always
+  // scope to the record's own pipeline.
+  const stagesFor = useCallback(
+    (pipelineId: string): { id: string; name: string }[] =>
+      stagesByPipeline[pipelineId] || [],
+    [stagesByPipeline],
+  );
+
   const onDragEnd = (e: DragEndEvent) => {
     setDragId(null);
     const { active, over } = e;
@@ -1341,7 +1359,10 @@ export default function Dashboard() {
     const targetStage = overId.slice(4);
     const rec = data.find((x) => x.id === active.id);
     if (!rec || rec.stage === targetStage || !canEdit(rec)) return;
-    const target = pipelineStages.find((s) => s.name === targetStage);
+    // Resolve the target stage within the RECORD'S OWN pipeline. Board columns
+    // are keyed by stage NAME and names repeat across pipelines, so the merged
+    // list would happily hand back another pipeline's id.
+    const target = stagesFor(rec.pipelineId).find((s) => s.name === targetStage);
     if (!target) return;
     // Reuse the proven save path: optimistic move + PATCH (pipelineStageId) +
     // revert-on-error. Save by stage ID, never name.
@@ -1512,11 +1533,21 @@ export default function Dashboard() {
                 Import
               </button>
             )}
+            {isAdminViewer && (
+              <button
+                className={view === "access" ? "on" : ""}
+                onClick={() => setView("access")}
+                type="button"
+              >
+                <IconKey />
+                Access
+              </button>
+            )}
           </div>
         </div>
 
         {/* opportunity-only controls (hidden on the Resources / Import tabs) */}
-        {view !== "resources" && view !== "import" && (
+        {view !== "resources" && view !== "import" && view !== "access" && (
         <>
         <div className="stats">
           <div className="stat">
@@ -1756,7 +1787,19 @@ export default function Dashboard() {
         )}
 
         {/* content: Import tab (admin), Resources tab, else loading / error / list / board */}
-        {view === "import" ? (
+        {view === "access" ? (
+          isAdminViewer ? (
+            <PipelineAccessTab
+              ssoBlob={sso.status === "ready" ? sso.blob : null}
+            />
+          ) : (
+            <div className="empty">
+              <b>Admins only</b>
+              <br />
+              Pipeline access is restricted to admin users.
+            </div>
+          )
+        ) : view === "import" ? (
           isAdminViewer ? (
             <ImportWizard ssoBlob={sso.status === "ready" ? sso.blob : null} />
           ) : (
@@ -2100,15 +2143,15 @@ export default function Dashboard() {
                   {selected.stage || "—"}
                   {selected.pipelineName ? (
                     <span className="divbadge" title={selected.pipelineName}>
-                      {divisionLabel(selected.pipelineName)}
+                      {selected.pipelineName}
                     </span>
                   ) : null}
                 </div>
                 {selected.shared ? (
                   <div className="provenance">
                     {selected.ownerId === viewerId
-                      ? "Your record in another division"
-                      : `Shared by ${userLabel(selected.ownerId)} · you're a follower`}
+                      ? `Your record in ${selected.pipelineName || "another pipeline"}`
+                      : `Shared by ${userLabel(selected.ownerId)} · ${selected.pipelineName || "another pipeline"} · you're a follower`}
                   </div>
                 ) : null}
               </div>
@@ -2164,13 +2207,16 @@ export default function Dashboard() {
                           ...r,
                           stageId: e.target.value,
                           stage:
-                            pipelineStages.find((s) => s.id === e.target.value)
-                              ?.name || r.stage,
+                            stagesFor(selected.pipelineId).find(
+                              (s) => s.id === e.target.value,
+                            )?.name || r.stage,
                         }),
                       )
                     }
                   >
-                    {pipelineStages.map((s) => (
+                    {/* This record's OWN pipeline only — never the merged union,
+                        or we'd offer a foreign stage id (400 STAGE_ID_INVALID). */}
+                    {stagesFor(selected.pipelineId).map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
                       </option>
