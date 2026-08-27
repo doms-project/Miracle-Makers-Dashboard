@@ -41,6 +41,10 @@ export interface EditableFieldDef {
   options: string[]; // option strings for *_OPTIONS / CHECKBOX
   editable: boolean; // false for the read-only blocklist
   parentId: string; // custom-field folder id (drives folder-driven field sets)
+  // GHL's authored display order WITHIN a folder (spaced in 50s so fields can be
+  // inserted between later — never renumber, just respect it). The search API
+  // returns fields in an arbitrary order, so this is the only reliable ordering.
+  position: number;
 }
 
 export interface Note {

@@ -100,6 +100,19 @@ export interface FieldGroup {
   fields: EditableFieldDef[];
 }
 
+// GHL authors a display order per folder via `position` (spaced in 50s so new
+// fields can be slotted between existing ones — we never renumber, only read).
+// The opportunity/custom-field APIs return fields in an arbitrary order, so
+// without this "Client First Name" (position 50) can land seventh and
+// Milestones can lead with MCO instead of IEB. Ties and missing positions fall
+// back to a name sort so the order is at least stable.
+function byPosition(a: EditableFieldDef, b: EditableFieldDef): number {
+  const pa = Number.isFinite(a.position) ? a.position : Number.MAX_SAFE_INTEGER;
+  const pb = Number.isFinite(b.position) ? b.position : Number.MAX_SAFE_INTEGER;
+  if (pa !== pb) return pa - pb;
+  return (a.name || "").localeCompare(b.name || "");
+}
+
 // Group a record's fields for its pipeline:
 //   sections  — folder sections (in PIPELINE_FOLDERS order) with ≥1 field
 //   systemInfo — the collapsed read-only-ish block
@@ -140,16 +153,25 @@ export function groupFieldsForPipeline(
     buckets.set(key, arr);
   }
 
-  // Emit sections in the pipeline's configured folder order.
+  // Emit sections in the pipeline's configured folder order, each field list in
+  // GHL's authored `position` order.
   const sections: FieldGroup[] = [];
   for (const folderId of allowed) {
     const key = KEY_BY_ID.get(folderId);
     if (!key) continue;
     const fields = buckets.get(key);
     if (fields && fields.length) {
-      sections.push({ key, label: FOLDER_LABELS[key], fields });
+      sections.push({
+        key,
+        label: FOLDER_LABELS[key],
+        fields: [...fields].sort(byPosition),
+      });
     }
   }
 
-  return { sections, systemInfo, orphans };
+  return {
+    sections,
+    systemInfo: [...systemInfo].sort(byPosition),
+    orphans: [...orphans].sort(byPosition),
+  };
 }
