@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 import type {
   EmailRecipient,
   EmailSendResult,
@@ -53,7 +54,7 @@ export default function EmailComposer({
     })
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         if (cancelled) return;
         const recs: EmailRecipient[] = j.recipients || [];
         setRecipients(recs);
@@ -136,7 +137,7 @@ export default function EmailComposer({
         }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setResults(j.results || []);
     } catch (e) {
       setSendErr(e instanceof Error ? e.message : String(e));

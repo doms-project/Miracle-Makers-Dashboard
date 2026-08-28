@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 import readXlsxFile from "read-excel-file";
 import Papa from "papaparse";
 import type {
@@ -66,7 +67,7 @@ export default function ImportWizard({
     fetch("/api/import/meta", { headers: ssoHeader(), cache: "no-store" })
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         if (!cancelled) setMeta(j as ImportMeta);
       })
       .catch((e) => {
@@ -204,7 +205,7 @@ export default function ImportWizard({
           }),
         });
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         agg.created += j.created || 0;
         agg.skipped += j.skipped || 0;
         agg.failed += j.failed || 0;

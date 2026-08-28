@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 import UserPicker, { type PickableUser } from "./UserPicker";
 import { divisionLabel } from "@/lib/division";
 import type { ContactMatch, EditableFieldDef } from "@/lib/types";
@@ -259,7 +260,7 @@ export default function AddClientDialog({
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       onCreated(j.opportunityId || "");
       onClose();
     } catch (e) {

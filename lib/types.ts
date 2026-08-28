@@ -171,9 +171,19 @@ export interface ImportSummary {
 // Task 4 — a caregiver linked to a client via the caregiver_client association.
 export interface Caregiver {
   relationId: string; // used to remove the link
-  contactId: string; // the caregiver contact (deep-links to GHL)
+  contactId: string; // the OTHER contact in the relation (deep-links to GHL)
   name: string;
+  // The association is DIRECTIONAL. On a client's record the other side is a
+  // caregiver; on a caregiver's record it is a client. The heading and the
+  // wording follow this — they used to say "Caregivers" on both.
+  role?: "caregiver" | "client";
 }
+
+// Caregiver/client link counts for the list + board badges, keyed by contactId.
+export type RelationCounts = Record<
+  string,
+  { caregivers: number; clients: number }
+>;
 
 // Task 5 — email send. A selectable recipient (client or caregiver contact).
 export interface EmailRecipient {

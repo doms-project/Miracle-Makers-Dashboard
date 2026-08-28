@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { apiFetch, failureMessage } from "@/lib/apiFetch";
 import type { ReactNode } from "react";
 import {
   DndContext,
@@ -19,6 +20,7 @@ import type {
   OpportunitiesResponse,
   ApiError,
   Note,
+  RelationCounts,
   EditableFieldDef,
 } from "@/lib/types";
 import { useGhlSession } from "@/lib/useGhlSession";
@@ -550,10 +552,14 @@ function CardBody({
   r,
   following,
   saving,
+  relBadge,
 }: {
   r: OpportunityRecord;
   following: boolean;
   saving?: "saving" | "error";
+  // BUG 2 — "1 caregiver" / "2 clients". Passed in rather than computed here so
+  // the card stays a pure renderer and the counts load in one place.
+  relBadge?: string;
 }) {
   return (
     <>
@@ -590,6 +596,14 @@ function CardBody({
       <div className="cf">
         <BlockPill b={r.block} />
         {r.src ? <span className="pill src">{r.src}</span> : null}
+        {relBadge ? (
+          <span
+            className="pill rellink"
+            title="Linked through the caregiver ↔ client association"
+          >
+            ⇄ {relBadge}
+          </span>
+        ) : null}
       </div>
       {saving === "saving" ? (
         <div className="savemsg">Saving…</div>
@@ -605,12 +619,14 @@ function BoardCard({
   canDrag,
   following,
   saving,
+  relBadge,
   onOpen,
 }: {
   r: OpportunityRecord;
   canDrag: boolean;
   following: boolean;
   saving?: "saving" | "error";
+  relBadge?: string;
   onOpen: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -629,7 +645,7 @@ function BoardCard({
       {...(canDrag ? listeners : {})}
       {...attributes}
     >
-      <CardBody r={r} following={following} saving={saving} />
+      <CardBody r={r} following={following} saving={saving} relBadge={relBadge} />
     </div>
   );
 }
@@ -700,6 +716,13 @@ export default function Dashboard() {
   const [noteDraft, setNoteDraft] = useState("");
   // ITEM 3 — Add Client modal.
   const [addOpen, setAddOpen] = useState(false);
+  // BUG 2 — caregiver/client link counts, keyed by contactId, for the row and
+  // card badges. Loaded AFTER the list, for the records actually on screen:
+  // GHL has no bulk relations query, so counts for N records cost N upstream
+  // calls, and putting that on the critical path of the primary view for a
+  // secondary signal is the wrong trade. A failure here means no badges and
+  // nothing else.
+  const [relCounts, setRelCounts] = useState<RelationCounts>({});
   // ITEM 4 — the note currently being edited, and its working text.
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -796,7 +819,7 @@ export default function Dashboard() {
         error?: string;
         detail?: string;
       };
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setResources(j.resources || []);
       setResLoaded(true);
     } catch (e) {
@@ -837,7 +860,7 @@ export default function Dashboard() {
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         setUploadMsg(`✓ Uploaded ${file.name}`);
         setResLoaded(false); // force a fresh list on next tick
         await loadResources();
@@ -888,7 +911,7 @@ export default function Dashboard() {
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         if (!cancelled)
           setNotes((prev) => ({
             ...prev,
@@ -1170,6 +1193,65 @@ export default function Dashboard() {
     return [...filtered].sort((a, b) => dir * cmpBy(a, b, sortKey));
   }, [filtered, sortKey, sortDir, cmpBy]);
 
+  // Fetch link counts for the contacts currently on screen. Skips any already
+  // known, so paging or filtering only ever asks for the new ones.
+  useEffect(() => {
+    if (sso.status === "loading") return;
+    const ids = [
+      ...new Set(
+        visible
+          .map((r) => r.contactId)
+          .filter((id) => id && !(id in relCounts)),
+      ),
+    ].slice(0, 60);
+    if (!ids.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await apiFetch<{ counts?: RelationCounts }>(
+          "/api/relations/counts",
+          {
+            method: "POST",
+            ssoBlob: sso.status === "ready" ? sso.blob : null,
+            body: JSON.stringify({
+              ssoKey: sso.status === "ready" ? sso.blob : undefined,
+              contactIds: ids,
+            }),
+          },
+        );
+        if (cancelled) return;
+        // Record a zero for every id asked about, not just the ones with links,
+        // so a contact with no relations is never re-requested on each render.
+        const next: RelationCounts = {};
+        for (const id of ids)
+          next[id] = j.counts?.[id] ?? { caregivers: 0, clients: 0 };
+        setRelCounts((prev) => ({ ...prev, ...next }));
+      } catch {
+        // Badges are a nicety. Never surface this; never block the list.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, sso, relCounts]);
+
+  // The badge text for one record: "1 caregiver" / "2 clients", or "" when the
+  // contact has no links (or its counts haven't arrived yet).
+  const relBadge = useCallback(
+    (r: OpportunityRecord): string => {
+      const c = relCounts[r.contactId];
+      if (!c) return "";
+      const parts: string[] = [];
+      if (c.caregivers)
+        parts.push(`${c.caregivers} caregiver${c.caregivers === 1 ? "" : "s"}`);
+      if (c.clients)
+        parts.push(`${c.clients} client${c.clients === 1 ? "" : "s"}`);
+      return parts.join(" · ");
+    },
+    [relCounts],
+  );
+
+
   // Group the (already sorted) list by the chosen dimension.
   const grouped = useMemo(() => {
     if (!groupKey) return null;
@@ -1255,6 +1337,18 @@ export default function Dashboard() {
           {r.cg && r.cg !== "—" ? (
             <span className="clcg" title="Caregiver">
               {r.cg}
+            </span>
+          ) : null}
+          {/* BUG 2 — a client with a linked caregiver looked identical to one
+              without. The wording follows the DIRECTION: "1 caregiver" on a
+              client's record, "2 clients" on a caregiver's. Absent until the
+              counts arrive, rather than flashing a zero. */}
+          {relBadge(r) ? (
+            <span
+              className="rellink"
+              title="Linked through the caregiver ↔ client association"
+            >
+              ⇄ {relBadge(r)}
             </span>
           ) : null}
         </div>
@@ -1405,7 +1499,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok || !j.note)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       const n = j.note;
       setNotes((prev) => ({
         ...prev,
@@ -1450,7 +1544,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       setNotes((prev) => ({
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
@@ -1495,7 +1589,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       setNotes((prev) => ({
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
@@ -1540,7 +1634,7 @@ export default function Dashboard() {
           detail?: string;
         };
         if (!res.ok || !j.ok || !j.record)
-          throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+          throw new Error(failureMessage(res, j));
         // Reflect the server's canonical record (esp. array-wrapped values).
         setData((prev) => prev.map((r) => (r.id === rec.id ? j.record! : r)));
         setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
@@ -1592,7 +1686,7 @@ export default function Dashboard() {
           detail?: string;
         };
         if (!res.ok || !j.ok || !Array.isArray(j.followers))
-          throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+          throw new Error(failureMessage(res, j));
         const ids = j.followers;
         const names = ids.map(
           (uid) => users.find((u) => u.id === uid)?.name || "Former user",
@@ -2337,6 +2431,7 @@ export default function Dashboard() {
                           canDrag={canEdit(r)}
                           following={followsNotOwns(r)}
                           saving={saveState[skey(r.id, "stage")]?.status}
+                          relBadge={relBadge(r)}
                           onOpen={() => setSelId(r.id)}
                         />
                       ))
@@ -2359,7 +2454,11 @@ export default function Dashboard() {
                   : null;
                 return r ? (
                   <div className="card dragging" style={{ width: 242 }}>
-                    <CardBody r={r} following={followsNotOwns(r)} />
+                    <CardBody
+                      r={r}
+                      following={followsNotOwns(r)}
+                      relBadge={relBadge(r)}
+                    />
                   </div>
                 ) : null;
               })()}
@@ -2742,7 +2841,11 @@ export default function Dashboard() {
               ))}
 
               {/* Caregivers (many-to-many association) */}
-              <div className="sechead">Caregivers</div>
+              {/* BUG 1 — the heading is rendered INSIDE the section now, because
+                  it depends on the resolved direction: "Caregivers" on a
+                  client's record, "Clients" on a caregiver's. It was a fixed
+                  string here, which is how a caregiver's clients ended up
+                  labelled as caregivers. */}
               <CaregiversSection
                 key={selected.id}
                 opportunityId={selected.id}

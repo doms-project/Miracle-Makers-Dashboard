@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 import type { OpportunityRecord } from "@/lib/types";
 
 // ITEM 4 — one of the contact's OTHER open cases. GoHighLevel allows only ONE
@@ -70,7 +71,7 @@ export default function MoveDialog({
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failureMessage(res, j));
         if (!cancelled) setConflicts(j.conflicts || []);
       })
       .catch((e) => {
@@ -132,7 +133,7 @@ export default function MoveDialog({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       // ITEM 3. This was gated on `j.record`: if the re-read after the move came
       // back empty, onMoved never fired, so the panel was never told to close
       // and kept showing the pre-move record. The move HAS happened by this

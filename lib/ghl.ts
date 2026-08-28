@@ -1511,9 +1511,23 @@ export async function addFieldOption(
   if (!value) throw new GhlError("An option needs a name.", 400);
 
   const { locationId } = requireEnv();
-  const defs = await getFieldDefinitions();
-  const def = defs.find((d) => d.id === fieldId);
-  if (!def) throw new GhlError("That field does not exist.", 404, fieldId);
+  let defs = await getFieldDefinitions();
+  let def = defs.find((d) => d.id === fieldId);
+  if (!def) {
+    // The definitions are cached per warm lambda, so a field created (or an id
+    // changed) after this instance warmed up would look like it doesn't exist.
+    // Drop the cache and look once more before saying so — a wrong 404 here
+    // reads exactly like a missing route and sends you hunting in the wrong place.
+    cache.fieldDefs = undefined;
+    defs = await getFieldDefinitions();
+    def = defs.find((d) => d.id === fieldId);
+  }
+  if (!def)
+    throw new GhlError(
+      "That field no longer exists in GoHighLevel.",
+      404,
+      `No opportunity custom field has id ${fieldId}. ${defs.length} definitions were checked (cache refreshed). If the field was renamed or deleted in GoHighLevel, reload the dashboard.`,
+    );
 
   const t = String(def.dataType || "").toUpperCase();
   if (t !== "SINGLE_OPTIONS" && t !== "MULTIPLE_OPTIONS")
@@ -1529,11 +1543,25 @@ export async function addFieldOption(
     return current;
 
   const options = [...current, value];
-  await ghlSend(
-    "PUT",
-    `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`,
-    { name: def.name, options },
-  );
+  const path = `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`;
+  try {
+    await ghlSend("PUT", path, { name: def.name, options });
+  } catch (e) {
+    // Name the exact upstream call. A 404 from GHL and a 404 from Next look
+    // identical in the browser otherwise, and they need opposite fixes.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[fields] PUT ${path} failed while adding "${value}" to "${def.name}" (${def.dataType}, ${current.length} existing options):`,
+      e instanceof GhlError ? `${e.status} ${e.detail || e.message}` : String(e),
+    );
+    if (e instanceof GhlError && e.status === 404)
+      throw new GhlError(
+        `GoHighLevel returned 404 for the field "${def.name}".`,
+        404,
+        `The dashboard reached GoHighLevel; GoHighLevel rejected it. PUT ${path} — check the Private Integration has the locations/customFields WRITE scope, and that this field belongs to location ${locationId}.`,
+      );
+    throw e;
+  }
   // The definitions cache now holds a stale option list; drop it so the next
   // read sees the new name rather than the panel showing an option that isn't
   // in its own dropdown.
@@ -2209,8 +2237,22 @@ export async function uploadResource(file: {
 
 export interface CaregiverRelation {
   relationId: string; // used to DELETE the link
-  contactId: string; // the caregiver contact
+  contactId: string; // the OTHER contact in the relation
   name: string;
+  // Which side the other contact is on. THE ASSOCIATION IS DIRECTIONAL and the
+  // dashboard used to ignore that: it took "whichever side isn't me" and called
+  // it a caregiver, so on a CAREGIVER's record their clients were listed under
+  // "Caregivers".
+  role: "caregiver" | "client";
+}
+
+// What the association definition says about each slot. Read LIVE from GHL
+// rather than hardcoded, because the labels are the authority on direction and
+// this is exactly the thing that was assumed and got wrong.
+export interface AssociationDirection {
+  firstIsCaregiver: boolean; // firstRecordId holds the caregiver
+  firstLabel: string;
+  secondLabel: string;
 }
 
 interface RawRelation {
@@ -2243,11 +2285,70 @@ const contactDisplay = (c: RawContact): string =>
   c.email?.toString().trim() ||
   "Unnamed contact";
 
-// List the caregivers associated with a given client contact. `clientContactId`
-// is the opportunity's linked contact. Returns each relation's id (for removal)
-// and the caregiver contact id + name.
+// ---------------------------------------------------------------------------
+// DIRECTION. The association definition names each slot:
+//
+//   firstObjectLabel  "Caregiver"   -> firstRecordId  is the caregiver
+//   secondObjectLabel "Client"      -> secondRecordId is the client
+//
+// so which side you are on decides what the OTHER side is:
+//
+//   this record is firstRecordId   -> the other side is a CLIENT
+//   this record is secondRecordId  -> the other side is a CAREGIVER
+//
+// The labels are read live from GHL, not hardcoded, because a hardcoded guess
+// about direction is precisely what produced the bug. Cached per warm lambda;
+// a failed read is never cached.
+// ---------------------------------------------------------------------------
+let _assocDir: AssociationDirection | undefined;
+
+export async function getAssociationDirection(): Promise<AssociationDirection> {
+  if (_assocDir) return _assocDir;
+  const { caregiverAssociationId } = requireEnv({ caregiverAssociation: true });
+  let first = "";
+  let second = "";
+  try {
+    const data = await ghlGet<{
+      association?: { firstObjectLabel?: string; secondObjectLabel?: string };
+      firstObjectLabel?: string;
+      secondObjectLabel?: string;
+    }>(`/associations/${encodeURIComponent(caregiverAssociationId)}`);
+    const a = data.association ?? data;
+    first = String(a.firstObjectLabel ?? "");
+    second = String(a.secondObjectLabel ?? "");
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[associations] could not read the association definition — falling back to the documented direction (first = Caregiver). NOT cached; will retry.",
+      e instanceof Error ? e.message : String(e),
+    );
+    return { firstIsCaregiver: true, firstLabel: "Caregiver", secondLabel: "Client" };
+  }
+  // Decide from the labels themselves. If neither says "caregiver" we keep the
+  // documented order rather than inventing one, and say so.
+  const firstIsCaregiver = /caregiver/i.test(first)
+    ? true
+    : /caregiver/i.test(second)
+      ? false
+      : true;
+  if (!/caregiver/i.test(first) && !/caregiver/i.test(second))
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[associations] neither label mentions "caregiver" (first="${first}", second="${second}") — assuming first is the caregiver.`,
+    );
+  _assocDir = {
+    firstIsCaregiver,
+    firstLabel: first || "Caregiver",
+    secondLabel: second || "Client",
+  };
+  return _assocDir;
+}
+
+// Every caregiver_client relation this contact is part of, with the direction
+// resolved. Works from EITHER side: pass a client and you get their caregivers,
+// pass a caregiver and you get their clients.
 export async function listCaregiverRelations(
-  clientContactId: string,
+  contactId: string,
 ): Promise<CaregiverRelation[]> {
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
@@ -2263,23 +2364,31 @@ export async function listCaregiverRelations(
     limit: "100",
   });
   const data = await ghlGet<{ relations?: RawRelation[] }>(
-    `/associations/relations/${encodeURIComponent(clientContactId)}?${params.toString()}`,
+    `/associations/relations/${encodeURIComponent(contactId)}?${params.toString()}`,
   );
   const relations = (data.relations || []).filter(
     (r) => String(r.associationId ?? "") === caregiverAssociationId,
   );
-  // The caregiver is whichever side of the relation is NOT the client contact.
-  const caregiverIds = relations.map((r) => {
+  const dir = await getAssociationDirection();
+
+  const sides = relations.map((r) => {
     const rid = String(r.id ?? r._id ?? r.relationId ?? "");
-    const other =
-      String(r.firstRecordId ?? "") === clientContactId
-        ? String(r.secondRecordId ?? "")
-        : String(r.firstRecordId ?? "");
-    return { relationId: rid, contactId: other };
+    const isFirst = String(r.firstRecordId ?? "") === contactId;
+    const other = isFirst
+      ? String(r.secondRecordId ?? "")
+      : String(r.firstRecordId ?? "");
+    // I am in the caregiver slot  -> the other side is a client, and vice versa.
+    const iAmCaregiver = isFirst === dir.firstIsCaregiver;
+    return {
+      relationId: rid,
+      contactId: other,
+      role: (iAmCaregiver ? "client" : "caregiver") as "caregiver" | "client",
+    };
   });
+
   // Resolve names (best-effort; a failed lookup still shows the id).
   const out: CaregiverRelation[] = [];
-  for (const c of caregiverIds) {
+  for (const c of sides) {
     if (!c.contactId) continue;
     let name = c.contactId;
     try {
@@ -2290,9 +2399,34 @@ export async function listCaregiverRelations(
     } catch {
       /* keep id as name */
     }
-    out.push({ relationId: c.relationId, contactId: c.contactId, name });
+    out.push({ ...c, name });
   }
   return out;
+}
+
+// Counts only, for the list/board badges. No contact lookups — the badge needs a
+// number, not names, and resolving names here would multiply the request count
+// by the number of relations.
+export async function countCaregiverRelations(
+  contactId: string,
+): Promise<{ caregivers: number; clients: number }> {
+  const { locationId, caregiverAssociationId } = requireEnv({
+    caregiverAssociation: true,
+  });
+  const params = new URLSearchParams({ locationId, skip: "0", limit: "100" });
+  const data = await ghlGet<{ relations?: RawRelation[] }>(
+    `/associations/relations/${encodeURIComponent(contactId)}?${params.toString()}`,
+  );
+  const dir = await getAssociationDirection();
+  let caregivers = 0;
+  let clients = 0;
+  for (const r of data.relations || []) {
+    if (String(r.associationId ?? "") !== caregiverAssociationId) continue;
+    const isFirst = String(r.firstRecordId ?? "") === contactId;
+    if (isFirst === dir.firstIsCaregiver) clients++;
+    else caregivers++;
+  }
+  return { caregivers, clients };
 }
 
 // Typeahead: search contacts filtered to Record Type = "Caregiver" so clients
@@ -2351,11 +2485,18 @@ export async function createCaregiverRelation(
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
   });
+  // 🔴 DIRECTION WAS INVERTED HERE. This wrote the CLIENT into firstRecordId,
+  // which the association labels as the Caregiver slot, and the caregiver into
+  // secondRecordId, labelled Client. Every link the dashboard created is stored
+  // backwards relative to the association's own definition — see
+  // scripts/relation-direction-audit.mjs, which lists them and can repair them.
+  // Nothing is rewritten automatically: these are HIPAA-scoped case records.
+  const dir = await getAssociationDirection();
   const body = {
     locationId,
     associationId: caregiverAssociationId,
-    firstRecordId: clientContactId,
-    secondRecordId: caregiverContactId,
+    firstRecordId: dir.firstIsCaregiver ? caregiverContactId : clientContactId,
+    secondRecordId: dir.firstIsCaregiver ? clientContactId : caregiverContactId,
   };
   const res = await ghlSend<{ relation?: RawRelation; id?: string }>(
     "POST",

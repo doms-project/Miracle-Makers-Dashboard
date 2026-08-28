@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 
 type User = { id: string; name: string; email: string; role: string };
 type Pipeline = { id: string; name: string; inDashboard: boolean };
@@ -41,7 +42,7 @@ export default function PipelineAccessTab({
         cache: "no-store",
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setUsers(j.users || []);
       setPipelines(j.pipelines || []);
       setGrants(j.grants || {});
@@ -85,7 +86,7 @@ export default function PipelineAccessTab({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        throw new Error(failureMessage(res, j));
       setGrants(j.grants || {});
       setUsingEnvFallback(false);
       setDirty(false);
