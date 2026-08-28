@@ -52,6 +52,7 @@ export interface EditableFieldDef {
 }
 
 export interface Note {
+  id: string;
   who: string;
   when: string;
   txt: string;
@@ -59,6 +60,38 @@ export interface Note {
   // looked up later — a lookup would relabel past notes if the author moves
   // division, rewriting history.
   division?: string;
+  // ITEM 4 — note editing. The UI shows the edit affordance only when
+  // authorId === the viewer; the server re-checks and is the real boundary.
+  // `edited` renders the marker that keeps an overwrite honest.
+  authorId?: string;
+  edited?: boolean;
+}
+
+// Add Client (item 3) — what the modal posts. `assignedTo` is ADVISORY: the
+// server forces a rep to themselves and only honours it for an admin.
+export interface NewClientPayload {
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  email?: string;
+  pipelineId: string;
+  stageId?: string;
+  assignedTo?: string;
+  oppName?: string;
+  contactId?: string; // set when the user picked an existing contact
+  office?: string;
+  county?: string;
+  referralSource?: string;
+}
+
+export interface ContactMatch {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  // Pipelines where this contact ALREADY has a case — each one is a destination
+  // GHL will refuse (OPPORTUNITY_NO_DUPLICATE).
+  pipelines: { pipelineId: string; pipelineName: string; stage: string }[];
 }
 
 export interface Viewer {

@@ -35,7 +35,8 @@ const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // Read a custom field's stored value under ANY key GHL might use for it.
 const cfRaw = (cf) => {
-  for (const k of ["fieldValueArray", "fieldValueString", "fieldValue", "value"])
+  // fieldValueDate confirmed live as the key DATE fields come back under.
+  for (const k of ["fieldValueArray", "fieldValueDate", "fieldValueString", "fieldValue", "value"])
     if (cf?.[k] !== undefined && cf?.[k] !== null) return cf[k];
   for (const [k, v] of Object.entries(cf || {}))
     if (k.startsWith("fieldValue") && v !== undefined && v !== null && v !== "")

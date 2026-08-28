@@ -443,3 +443,50 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* Move/notes follow-ups: transferred-from badge + note division */
 .fromtag{font-size:10px;font-weight:700;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;}
 .note .nh .ndiv{color:var(--plum);font-weight:600;}
+
+/* ── ITEM 2 · UserPicker — replaces the native <select> for owner/follower ──
+   A native <option> is one line of unstyleable text, so "Jhune Manalaysay -
+   Onboarding" and its division ran together. Name on its own line, division as
+   a muted chip below it. Same visual language as the caregiver typeahead. */
+.uppick{position:relative;}
+.upbtn{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:var(--bg);font:inherit;font-size:12.5px;cursor:pointer;transition:border-color .12s;}
+.upbtn:hover:not(:disabled){border-color:var(--plum);}
+.upbtn.on{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.upbtn:disabled{background:var(--line-soft);cursor:progress;opacity:.7;}
+.upbtnlabel{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
+.upbtnname{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.upcaret{flex:none;color:var(--ink-3);font-size:10px;}
+.upchip{align-self:flex-start;font-size:10px;font-weight:600;letter-spacing:.03em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 8px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.upmenu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:20;background:var(--bg);border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 30px rgba(0,0,0,.14);overflow:hidden;}
+.upsearch{border:0;border-bottom:1px solid var(--line-soft);border-radius:0;}
+.upsearch:focus{box-shadow:none;border-color:var(--line-soft);}
+.uplist{max-height:260px;overflow:auto;}
+.uprow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;padding:8px 11px;font:inherit;background:transparent;cursor:pointer;border-bottom:1px solid var(--line-soft);}
+.uprow:last-child{border-bottom:0;}
+.uprow:hover{background:var(--row-hover);}
+.uprow.sel{background:var(--plum-soft);}
+.uprowname{font-size:12.5px;font-weight:600;color:var(--ink);}
+
+/* ── ITEM 3 · Add Client ── */
+.addclientbtn{border:1px solid var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;margin-right:10px;transition:background .12s;}
+.addclientbtn:hover{background:var(--plum);color:#fff;}
+.addbox{max-width:620px;}
+.addsec{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:14px 0 2px;}
+.addgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.addgrid .f.wide{grid-column:1 / -1;}
+.addgrid input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;font-size:12.5px;outline:none;}
+.addgrid input:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.addmore{margin-top:12px;background:transparent;border:0;padding:0;font:inherit;font-size:12px;font-weight:600;color:var(--plum);cursor:pointer;}
+.dupbox{margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--plum);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--ink-2);background:var(--canvas);}
+.dupbox.on{background:var(--plum-soft);border-color:var(--plum-line);border-left-color:var(--plum);}
+.dupacts{display:flex;gap:8px;margin-top:8px;}
+.dupacts .ighost{padding:6px 12px;font-size:11.5px;}
+
+/* ── ITEM 4 · note editing (author only; no delete) ── */
+.nedited{margin-left:6px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;cursor:help;}
+.noteedit{margin-left:8px;background:transparent;border:0;padding:0;font:inherit;font-size:11px;font-weight:600;color:var(--plum);cursor:pointer;}
+.noteedit:hover{text-decoration:underline;}
+.noteeditbox{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+.noteeditbox textarea{width:100%;border:1px solid var(--plum);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;outline:none;resize:vertical;box-shadow:0 0 0 3px var(--plum-soft);}
+.noteeditacts{display:flex;gap:8px;justify-content:flex-end;}
+.noteeditacts .ighost,.noteeditacts .ibtn{padding:6px 14px;font-size:11.5px;}
