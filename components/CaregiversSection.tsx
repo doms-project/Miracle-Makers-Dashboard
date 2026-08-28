@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { failureMessage } from "@/lib/apiFetch";
 import type { Caregiver } from "@/lib/types";
 
 const LOCATION_ID =
@@ -13,6 +14,10 @@ type SearchHit = { id: string; name: string; email: string };
 // Task 4 — view + manage the caregivers associated with an enrollment's client
 // contact. Add is a searchable typeahead (caregiver contacts only); remove
 // unlinks the relation. All writes go through the visibility-gated API.
+// BUG 1 — the association is DIRECTIONAL, and this section used to ignore that.
+// It listed "whichever contact isn't me" and always called them caregivers, so
+// opening a CAREGIVER's record showed their CLIENTS under a "Caregivers"
+// heading. Every label here now follows the resolved role.
 export default function CaregiversSection({
   opportunityId,
   ssoBlob,
@@ -47,7 +52,7 @@ export default function CaregiversSection({
         { headers: headers(), cache: "no-store" },
       );
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setCaregivers(j.caregivers || []);
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : String(e));
@@ -105,7 +110,7 @@ export default function CaregiversSection({
         body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, caregiverContactId: hit.id }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setCaregivers(j.caregivers || []);
       setQ("");
       setHits([]);
@@ -127,7 +132,7 @@ export default function CaregiversSection({
         body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, relationId: c.relationId }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failureMessage(res, j));
       setCaregivers(j.caregivers || []);
     } catch (e) {
       setActionErr(e instanceof Error ? e.message : String(e));
@@ -136,10 +141,26 @@ export default function CaregiversSection({
     }
   };
 
+  // What the OTHER side of these relations is, from the server's direction
+  // resolution. Falls back to "caregiver" only when there is nothing to go on
+  // (an empty list), which is the common case on a client record.
+  const otherRole: "caregiver" | "client" =
+    caregivers?.find((c) => c.role)?.role ?? "caregiver";
+  const plural = otherRole === "client" ? "clients" : "caregivers";
+  const singular = otherRole === "client" ? "client" : "caregiver";
+
   return (
     <div className="cgsec">
+      {/* Direction decides the heading: this record is in the caregiver slot ->
+          the other side is a CLIENT, and vice versa. */}
+      <div className="sechead cghead">
+        {otherRole === "client" ? "Clients" : "Caregivers"}
+        {caregivers?.length ? (
+          <span className="cgcount">{caregivers.length}</span>
+        ) : null}
+      </div>
       {caregivers === null ? (
-        <div className="cgmuted">Loading caregivers…</div>
+        <div className="cgmuted">Loading…</div>
       ) : loadErr ? (
         <div className="savemsg err">✗ {loadErr}</div>
       ) : caregivers.length === 0 ? (
@@ -163,7 +184,7 @@ export default function CaregiversSection({
                   disabled={busy}
                   onClick={() => remove(c)}
                   aria-label={`Remove ${c.name}`}
-                  title="Remove caregiver"
+                  title={`Remove ${singular}`}
                 >
                   ×
                 </button>

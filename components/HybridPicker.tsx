@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 
 export interface HybridUser {
   id: string;
@@ -130,22 +131,17 @@ export default function HybridPicker({
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/fields/${encodeURIComponent(fieldId)}/options`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {}),
+      // apiFetch never throws a bare status: a Next 404 (an HTML page, not
+      // JSON) now reports the URL and says the running build predates the
+      // route, and a GHL failure carries GoHighLevel's own message.
+      const j = await apiFetch<{ ok?: boolean; options?: string[] }>(
+        `/api/fields/${encodeURIComponent(fieldId)}/options`,
+        {
+          method: "POST",
+          ssoBlob,
+          body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, option: v }),
         },
-        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, option: v }),
-      });
-      const j = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        options?: string[];
-        error?: string;
-        detail?: string;
-      };
-      if (!res.ok || !j.ok)
-        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      );
       onOptionAdded?.(fieldId, j.options || [...options, v]);
       setNewName("");
       setAdding(false);
