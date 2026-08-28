@@ -1095,6 +1095,11 @@ export default function Dashboard() {
               {clientName(r)}
             </span>
           ) : null}
+          {transferredFrom(r) ? (
+            <span className="fromtag" title="Transferred from">
+              ← from {transferredFrom(r)}
+            </span>
+          ) : null}
           {r.cg && r.cg !== "—" ? (
             <span className="clcg" title="Caregiver">
               {r.cg}
@@ -1195,6 +1200,24 @@ export default function Dashboard() {
   const selected = useMemo(
     () => data.find((r) => r.id === selId) || null,
     [data, selId],
+  );
+
+  // ITEM 5 — the Transferred From stamp, resolved by field NAME (never a
+  // hardcoded id) so it can be surfaced as a badge on rows and cards.
+  const transferredFromId = useMemo(
+    () =>
+      fieldDefs.find(
+        (d) => (d.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === "transferredfrom",
+      )?.id || "",
+    [fieldDefs],
+  );
+  const transferredFrom = useCallback(
+    (r: OpportunityRecord): string => {
+      if (!transferredFromId) return "";
+      const v = r.cf[transferredFromId];
+      return Array.isArray(v) ? String(v[0] ?? "") : v ? String(v) : "";
+    },
+    [transferredFromId],
   );
 
   // Folder-driven field sections for the open record's pipeline (Task 4).
@@ -2077,10 +2100,16 @@ export default function Dashboard() {
           users={users}
           ssoBlob={sso.status === "ready" ? sso.blob : null}
           onClose={() => setMoveOpen(false)}
-          onMoved={(rec) => {
+          onMoved={(rec, transferred) => {
+            // ITEM 4. Owner CHANGED: the viewer may have just lost access, so
+            // close the panel and reload. Owner UNCHANGED: refresh in place —
+            // the updated record carries the new pipelineId/stageId, and the
+            // panel's Stage dropdown reads stagesFor(selected.pipelineId), so
+            // it re-scopes to the destination pipeline automatically instead of
+            // offering the old pipeline's stages (which would write an invalid
+            // stage id).
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
-            // A transfer can remove the viewer's access — reload so the list
-            // reflects what they can still see.
+            if (transferred) setSelId(null);
             load();
           }}
         />
@@ -2448,7 +2477,13 @@ export default function Dashboard() {
                   selNotes.map((n, i) => (
                     <div className="note" key={i}>
                       <div className="nh">
-                        <b>{n.who}</b> · {n.when}
+                        <b>{n.who}</b>
+                        {/* ITEM 6 — division AT WRITE TIME, stamped into the
+                            note when it was created, never looked up now. */}
+                        {n.division ? (
+                          <span className="ndiv"> ({n.division})</span>
+                        ) : null}{" "}
+                        · {n.when}
                       </div>
                       <p>{n.txt}</p>
                     </div>

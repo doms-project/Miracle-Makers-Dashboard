@@ -892,8 +892,30 @@ export async function listOpportunityNotes(
       id: n.id || "",
       who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
       when: fmtNoteDate(n.dateAdded),
-      txt: n.body || "",
+      // The division stamped at write time — NOT looked up now, so a later
+      // division change can never rewrite history.
+      division: parseNoteBody(n.body || "").division,
+      txt: parseNoteBody(n.body || "").text,
     }));
+}
+
+// ITEM 6 — the author's DIVISION AT WRITE TIME.
+// GHL's note object carries only body/userId/dateAdded/relations — there is no
+// metadata field to hang this on, so option (b) does not exist and we use (a):
+// stamp the division into the body at write time. It cannot drift, because a
+// later lookup would relabel every past note if the author changes division.
+// Read back with parseNoteBody(); the tag is stripped for display.
+const DIVISION_TAG = /^\s*\[([^\]]{1,40})\]\s*/;
+
+export function parseNoteBody(body: string): { division: string; text: string } {
+  const m = DIVISION_TAG.exec(body || "");
+  if (!m) return { division: "", text: body || "" };
+  return { division: m[1].trim(), text: (body || "").slice(m[0].length) };
+}
+
+export function stampDivision(body: string, division: string): string {
+  const clean = (division || "").replace(/[[\]]/g, "").trim();
+  return clean ? `[${clean}] ${body}` : body;
 }
 
 // Add a note on the contact, related to both the opportunity and the contact so
@@ -1324,6 +1346,7 @@ export async function moveOpportunity(args: {
   newOwnerId?: string | null; // undefined/equal to current => simple move
   reason?: string;
   actorUserId: string; // note authorship (server-derived)
+  actorDivision?: string; // the author's division AT WRITE TIME (stamped, never looked up)
   addSenderAsFollower?: boolean; // Option A switch; default OFF (Option B)
 }): Promise<MoveResult> {
   const steps: string[] = [];
@@ -1389,7 +1412,12 @@ export async function moveOpportunity(args: {
     ? await divisionCustomField(dest.name)
     : [];
 
-  // ---- SIMPLE MOVE ----
+  // ---- SIMPLE MOVE (owner unchanged) ----
+  // ITEM 2: the reason and the note used to be written ONLY on the transfer
+  // path, so this early return dropped both. The real gate was `isTransfer`
+  // (owner changed) — NOT the division, which is why a same-division move that
+  // also changed the owner appeared to "work". A reason the rep typed must
+  // ALWAYS be written, so it is recorded here too.
   if (!isTransfer) {
     await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
       pipelineId: args.toPipelineId,
@@ -1399,6 +1427,29 @@ export async function moveOpportunity(args: {
     steps.push(
       `moved pipeline+stage${divisionCf.length ? " + Division" : ""}`,
     );
+    // Note the move (with the reason) whenever anything actually changed.
+    if (current.contactId && (pipelineChanged || args.reason?.trim())) {
+      try {
+        const body =
+          (pipelineChanged
+            ? `Moved from ${
+                pipelines.find((p) => p.id === current.pipelineId)?.name || "—"
+              } to ${dest.name}.`
+            : `Stage changed in ${dest.name}.`) +
+          (args.reason?.trim() ? ` Reason: ${args.reason.trim()}` : "");
+        await addOpportunityNote(
+          current.contactId,
+          args.oppId,
+          stampDivision(body, args.actorDivision || ""),
+          args.actorUserId,
+        );
+        steps.push("note written");
+      } catch (e) {
+        // The move itself succeeded; don't fail it because the note didn't land.
+        // eslint-disable-next-line no-console
+        console.error("[move] note failed on simple move:", await explainGhlError(e));
+      }
+    }
     return { transferred: false, steps };
   }
 
@@ -1420,7 +1471,11 @@ export async function moveOpportunity(args: {
   if (dateDef)
     customFields.push({
       id: dateDef.id,
-      value: new Date().toISOString().slice(0, 10),
+      // ITEM 3: was `toISOString().slice(0,10)` -> "2026-08-27". GHL DATE fields
+      // accept full ISO 8601; a bare date string can be silently dropped, which
+      // is exactly the symptom (Transferred From lands, Transferred Date does
+      // not, same customFields array, no error).
+      value: new Date().toISOString(),
     });
   if (reasonDef && args.reason?.trim())
     customFields.push({ id: reasonDef.id, value: args.reason.trim() });
@@ -1475,7 +1530,12 @@ export async function moveOpportunity(args: {
       const body =
         `Moved from ${sourceName || "—"} to ${dest.name}. New owner: ${toName}.` +
         (args.reason?.trim() ? ` Reason: ${args.reason.trim()}` : "");
-      await addOpportunityNote(current.contactId, args.oppId, body, args.actorUserId);
+      await addOpportunityNote(
+        current.contactId,
+        args.oppId,
+        stampDivision(body, args.actorDivision || ""),
+        args.actorUserId,
+      );
       steps.push("note written");
     }
   } catch (e) {

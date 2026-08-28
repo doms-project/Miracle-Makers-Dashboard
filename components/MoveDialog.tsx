@@ -23,7 +23,9 @@ export default function MoveDialog({
   users: { id: string; name: string }[];
   ssoBlob: string | null;
   onClose: () => void;
-  onMoved: (rec: OpportunityRecord) => void;
+  // `transferred` = the owner changed, so the caller can close the panel
+  // (the viewer may have just lost access) rather than refresh it in place.
+  onMoved: (rec: OpportunityRecord, transferred: boolean) => void;
 }) {
   const [toPipelineId, setToPipelineId] = useState(record.pipelineId);
   const [toStageId, setToStageId] = useState(record.stageId);
@@ -74,7 +76,7 @@ export default function MoveDialog({
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok)
         throw new Error(j.detail || j.error || `HTTP ${res.status}`);
-      if (j.record) onMoved(j.record as OpportunityRecord);
+      if (j.record) onMoved(j.record as OpportunityRecord, !!j.transferred);
       onClose();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));

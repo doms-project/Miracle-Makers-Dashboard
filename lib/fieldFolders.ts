@@ -79,6 +79,13 @@ export const LOST_REASON_OVERRIDES: Record<string, string> = {
 
 // Fields that always live in the collapsed System info section, regardless of
 // their folder (external ids / derived / automation). Matched by normalized name.
+// ITEM 1 — fields deliberately NOT rendered in the panel. "Transfer Reason"
+// duplicates the Move note, and the note is strictly better: it carries author
+// + timestamp, and it is per-transfer, whereas the field is overwritten by the
+// next move. The field still exists in GHL; it just isn't shown.
+const HIDDEN_NAMES = ["Transfer Reason"];
+const HIDDEN_SET = new Set(HIDDEN_NAMES.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")));
+
 const SYSTEM_INFO_NAMES = [
   "Airtable Record ID",
   "APP - Compliance Cleared",
@@ -134,6 +141,7 @@ export function groupFieldsForPipeline(
   const orphans: EditableFieldDef[] = [];
 
   for (const def of defs) {
+    if (HIDDEN_SET.has(norm(def.name))) continue; // ITEM 1
     if (SYSTEM_INFO_SET.has(norm(def.name))) {
       systemInfo.push(def);
       continue;

@@ -55,6 +55,10 @@ export interface Note {
   who: string;
   when: string;
   txt: string;
+  // The author's division AT WRITE TIME, stamped into the note body. Never
+  // looked up later — a lookup would relabel past notes if the author moves
+  // division, rewriting history.
+  division?: string;
 }
 
 export interface Viewer {
