@@ -67,10 +67,20 @@ export function hasTime(v: unknown): boolean {
   return h !== 0 && h !== 12;
 }
 
-// A field that is MEANT to carry a time, by its GHL name — e.g.
-// "AAA In Person Date and Time", "MCO In Person Date and Time". Name-driven so
-// adding another such field in GHL needs no code change and no hardcoded id.
-export function isDateTimeField(name: string): boolean {
+// A field whose NAME promises a time — "AAA In Person Date and Time",
+// "MCO In Person Date and Time".
+//
+// PROVEN BY A REAL WRITE: a GHL DATE field cannot hold one.
+//   PUT  value = "2026-08-28T14:30:00.000Z"
+//   read fieldValue = "2026-08-28"          (field ZP7MF2LO3ws4jzYbrTJx)
+// The time is accepted with a 200 and silently discarded.
+//
+// So this no longer selects an editor — offering a time input that throws the
+// time away on save is worse than not offering one. It now drives a WARNING
+// beside the field, and nothing else. It is name-driven, so the moment those
+// fields are renamed in GHL to drop "and Time", the warning disappears on its
+// own with no code change.
+export function nameImpliesTime(name: string): boolean {
   return /\btime\b/i.test(name || "");
 }
 
@@ -95,14 +105,9 @@ export function formatGhlDate(v: unknown, opts?: { withTime?: boolean }): string
   return `${date}, ${h}:${mm} ${h24 < 12 ? "AM" : "PM"} UTC`;
 }
 
-// Value for <input type="date"> — always "YYYY-MM-DD".
+// Value for <input type="date"> — always "YYYY-MM-DD". The ONLY editor shape
+// used for DATE fields, since GHL stores nothing finer.
 export function toDateInput(v: unknown): string {
   const d = parseGhlDate(v);
   return d ? d.toISOString().slice(0, 10) : "";
-}
-
-// Value for <input type="datetime-local"> — always "YYYY-MM-DDTHH:MM".
-export function toDateTimeInput(v: unknown): string {
-  const d = parseGhlDate(v);
-  return d ? d.toISOString().slice(0, 16) : "";
 }

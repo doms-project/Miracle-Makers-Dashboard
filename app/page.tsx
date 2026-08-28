@@ -29,13 +29,8 @@ import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
-import {
-  toDateInput,
-  toDateTimeInput,
-  formatGhlDate,
-  hasTime,
-  isDateTimeField,
-} from "@/lib/dates";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import { toDateInput, formatGhlDate, hasTime, nameImpliesTime } from "@/lib/dates";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import { divisionLabel } from "@/lib/division";
@@ -170,10 +165,13 @@ const asDate = (v: unknown): string => toDateInput(v);
 
 // Display for any DATE value: epoch ms, epoch seconds, bare date or ISO, all
 // rendered the same way, in UTC so the day can never shift.
-const asDateText = (v: unknown, def?: { name?: string }): string =>
-  formatGhlDate(v, {
-    withTime: hasTime(v) || (isDateTimeField(def?.name || "") && hasTime(v)),
-  });
+// A time is shown ONLY if the stored value actually carries one. GHL truncates
+// DATE fields to the calendar date, so in practice this never fires — it stays
+// as a guard so a value written by some other system isn't silently trimmed on
+// display. The field's name has no say in it: names promise what the field type
+// cannot deliver.
+const asDateText = (v: unknown, _def?: { name?: string }): string =>
+  formatGhlDate(v, { withTime: hasTime(v) });
 
 // ---- Sort / group dimensions (dynamic + permission-aware) ----
 type DimKind =
@@ -234,16 +232,11 @@ function TextControl({
 }: {
   value: unknown;
   multiline?: boolean;
-  type?: "text" | "number" | "date" | "datetime-local";
+  type?: "text" | "number" | "date";
   disabled?: boolean;
   onSave: (v: string | number) => void;
 }) {
-  const initial =
-    type === "date"
-      ? toDateInput(value)
-      : type === "datetime-local"
-        ? toDateTimeInput(value)
-        : asStr(value);
+  const initial = type === "date" ? toDateInput(value) : asStr(value);
   const [v, setV] = useState(initial);
   const commit = () => {
     if (v !== initial) onSave(type === "number" ? Number(v) : v);
@@ -466,15 +459,18 @@ function FieldControl({
       </div>
     );
   } else if (t === "DATE") {
-    // A field NAMED as carrying a time ("AAA In Person Date and Time") gets a
-    // datetime-local editor; everything else gets a plain date. Name-driven, so
-    // a new such field in GHL needs no code change and no hardcoded id.
-    const withTime = isDateTimeField(def.name);
+    // DATE-ONLY, for every field including the two named "…Date and Time".
+    //
+    // Proven with a real write: GHL accepts a full ISO timestamp with a 200 and
+    // stores only the calendar date ("2026-08-28T14:30:00.000Z" -> "2026-08-28").
+    // A datetime editor would therefore let a rep enter an appointment time that
+    // vanishes on save — silently, with a success message. Not offering the
+    // input is strictly better than offering one that lies.
     control = (
       <>
         <TextControl
           value={value}
-          type={withTime ? "datetime-local" : "date"}
+          type="date"
           disabled={disabled}
           onSave={onSave}
         />
@@ -482,6 +478,16 @@ function FieldControl({
             showing an empty input that looks like "no value set". */}
         {asDateText(value, def) ? (
           <div className="datehint">{asDateText(value, def)}</div>
+        ) : null}
+        {/* The field's NAME promises a time this field type cannot hold. Say so
+            where it matters, rather than leaving a rep to wonder where the time
+            input went. Name-driven: rename the field in GHL to drop "and Time"
+            and this disappears by itself. */}
+        {nameImpliesTime(def.name) ? (
+          <div className="datewarn">
+            Date only — GoHighLevel can&apos;t store a time on this field. Record
+            the time in a note.
+          </div>
         ) : null}
       </>
     );
@@ -699,6 +705,10 @@ export default function Dashboard() {
   const [editDraft, setEditDraft] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+  // ITEM 2 — the note pending removal. window.confirm() is never used: this app
+  // runs inside a GHL iframe, where a sandboxed frame without `allow-modals`
+  // makes confirm() return false with no prompt — the click just dies.
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesErr, setNotesErr] = useState<string | null>(null);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -922,28 +932,6 @@ export default function Dashboard() {
     (!!viewerId &&
       (r.ownerId === viewerId || r.followerIds.includes(viewerId)));
 
-  // Stage list derived from data, preferred order first.
-  const stages = useMemo(() => {
-    const present: string[] = [];
-    const seen = new Set<string>();
-    for (const r of data) {
-      if (r.stage && !seen.has(r.stage)) {
-        seen.add(r.stage);
-        present.push(r.stage);
-      }
-    }
-    const ordered = STAGE_ORDER.filter((s) => seen.has(s));
-    const extra = present.filter((s) => !STAGE_ORDER.includes(s));
-    return [...ordered, ...extra];
-  }, [data]);
-
-  // Offices present in the data, for the office filter control.
-  const offices = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of data) if (r.office) set.add(r.office);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [data]);
-
   // Division / "Shared with me" filter options are built from the FILTERED
   // PAYLOAD — never from the pipeline list — so the dropdown can't name a
   // division the viewer holds nothing in. A shared record's pipeline never
@@ -990,11 +978,18 @@ export default function Dashboard() {
     [users],
   );
 
-  const filtered = useMemo(() => {
+  // Everything EXCEPT the stage filter.
+  //
+  // The stage chips and their counts read this, not `data`. Reading `data` meant
+  // the chips ignored every other filter: with Pipeline set to OLTL Transfer you
+  // still saw INITIAL CALL, a PRIVATE PAY stage, because some record somewhere in
+  // the payload was in it. The count was technically true and completely
+  // misleading. Stage is excluded from this set on purpose — including it would
+  // collapse the chip row to the single chip you just clicked.
+  const preStage = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return data.filter(
       (r) =>
-        (stage === "all" || r.stage === stage) &&
         (office === "all" || r.office === office) &&
         (scope === "all" ||
           (scope === "shared"
@@ -1008,7 +1003,78 @@ export default function Dashboard() {
             .toLowerCase()
             .includes(needle)),
     );
-  }, [data, stage, office, q, scope, adminPipeline]);
+  }, [data, office, q, scope, adminPipeline]);
+
+  const filtered = useMemo(
+    () => preStage.filter((r) => stage === "all" || r.stage === stage),
+    [preStage, stage],
+  );
+
+  // Everything the pipeline/division selection holds, before stage, office and
+  // search narrow it — the denominator the count line reports against.
+  const scopedTotal = useMemo(
+    () =>
+      data.filter(
+        (r) =>
+          (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+          (scope === "all" ||
+            (scope === "shared"
+              ? r.shared
+              : !r.shared && divisionLabel(r.pipelineName) === scope)),
+      ).length,
+    [data, adminPipeline, scope],
+  );
+
+  // Stage chips + office options, derived from the CURRENTLY FILTERED set
+  // (everything but stage) rather than the whole payload. A chip for a stage no
+  // record in view is in — INITIAL CALL while filtered to OLTL Transfer — is
+  // noise at best and reads as a bug.
+  const stages = useMemo(() => {
+    const present: string[] = [];
+    const seen = new Set<string>();
+    for (const r of preStage) {
+      if (r.stage && !seen.has(r.stage)) {
+        seen.add(r.stage);
+        present.push(r.stage);
+      }
+    }
+    const ordered = STAGE_ORDER.filter((s) => seen.has(s));
+    const extra = present.filter((s) => !STAGE_ORDER.includes(s));
+    return [...ordered, ...extra];
+  }, [preStage]);
+
+  // Offices, scoped the same way: an office with nothing in it under the current
+  // pipeline shouldn't be offered. Excludes the office filter itself so picking
+  // one doesn't reduce the list to that one option.
+  const offices = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of data)
+      if (
+        r.office &&
+        (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+        (scope === "all" ||
+          (scope === "shared"
+            ? r.shared
+            : !r.shared && divisionLabel(r.pipelineName) === scope))
+      )
+        set.add(r.office);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [data, adminPipeline, scope]);
+
+  // A stage selected before the pipeline changed can survive into a pipeline
+  // that has no such stage, leaving an empty list with an invisible chip still
+  // active. Clear it rather than showing nothing with no explanation.
+  useEffect(() => {
+    if (stage !== "all" && !stages.includes(stage)) setStage("all");
+  }, [stages, stage]);
+
+  // The same trap, one level up: `scope` is no longer shown to admins, and a
+  // control you cannot see must not still be filtering. A user promoted to admin
+  // mid-session (or any future path that flips the flag) would otherwise be left
+  // with an invisible division filter and no way to clear it.
+  useEffect(() => {
+    if (isAdminViewer && scope !== "all") setScope("all");
+  }, [isAdminViewer, scope]);
 
   const stageIndex = useCallback(
     (name: string) => {
@@ -1370,12 +1436,6 @@ export default function Dashboard() {
   // reading who removed it and when; the original text is not kept.
   const removeNote = async (noteId: string) => {
     if (!selId || editBusy) return;
-    if (
-      !window.confirm(
-        "Remove this note?\n\nThe note stays in the case history, struck through and marked as removed by you. The text is not kept and this cannot be undone.",
-      )
-    )
-      return;
     setEditBusy(true);
     setEditErr(null);
     try {
@@ -1400,6 +1460,8 @@ export default function Dashboard() {
         ),
       }));
       setEditingNote(null);
+      setRemoveTarget(null); // closed only on success; a failure keeps the
+                             // dialog open WITH the reason on it
     } catch (e) {
       setEditErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1787,14 +1849,17 @@ export default function Dashboard() {
         <>
         <div className="stats">
           <div className="stat">
-            <div className="k">{filtered.length === data.length ? "In pipeline" : "Showing"}</div>
+            {/* Measured against the CURRENT pipeline/division selection, not
+                the whole payload — otherwise this card contradicted the count
+                line beside the chips the moment a pipeline was chosen. */}
+            <div className="k">
+              {filtered.length === scopedTotal ? "In view" : "Showing"}
+            </div>
             <div className="v">{filtered.length}</div>
-            {/* When a filter is active the number is NOT the pipeline total, so
-                say what it is out of rather than "live from GoHighLevel". */}
             <div className="sub">
-              {filtered.length === data.length
-                ? "live from GoHighLevel"
-                : `of ${data.length} · filters active`}
+              {filtered.length === scopedTotal
+                ? `${headerLabel} · live from GoHighLevel`
+                : `of ${scopedTotal} in ${headerLabel} · filters active`}
             </div>
           </div>
           <div className="stat gold">
@@ -1895,9 +1960,20 @@ export default function Dashboard() {
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
-          {/* Division / Shared-with-me — options come from the viewer's own
-              payload, so no division they hold nothing in is ever named. */}
-          {scopeOptions.divisions.length > 1 || scopeOptions.anyShared ? (
+          {/* Division / Shared-with-me — REPS ONLY.
+              Options come from the viewer's own payload, so no division they
+              hold nothing in is ever named.
+
+              An admin does NOT get this. They already have the Pipeline
+              selector, which is the same axis at finer resolution, and the two
+              were independent ANDs — so "Show: ODP" + "Pipeline: OLTL Transfer"
+              was selectable and could satisfy nothing. Two controls that can
+              contradict each other are worse than one, and Pipeline is strictly
+              more precise. Reps keep it because they have no pipeline selector,
+              and their "Shared with me" option expresses something no pipeline
+              filter can. */}
+          {!isAdminViewer &&
+          (scopeOptions.divisions.length > 1 || scopeOptions.anyShared) ? (
             <div className="officefilter">
               <label htmlFor="scopeSel">Show</label>
               <select
@@ -1993,7 +2069,10 @@ export default function Dashboard() {
             </select>
           </div>
           <span className="count">
-            {visible.length} shown · {data.length} in pipeline
+            {/* "in pipeline" used to count the WHOLE payload even with a
+                pipeline selected — the same contradiction as the filters.
+                It now names what it is counting. */}
+            {visible.length} shown · {scopedTotal} in {headerLabel}
           </span>
         </div>
 
@@ -2003,7 +2082,7 @@ export default function Dashboard() {
             onClick={() => setStage("all")}
             type="button"
           >
-            All<span className="n">{data.length}</span>
+            All<span className="n">{preStage.length}</span>
           </button>
           {stages.map((st) => (
             <button
@@ -2013,8 +2092,10 @@ export default function Dashboard() {
               type="button"
             >
               {st}
+              {/* Counted within the current pipeline / office / search, not
+                  across the whole payload. */}
               <span className="n">
-                {data.filter((r) => r.stage === st).length}
+                {preStage.filter((r) => r.stage === st).length}
               </span>
             </button>
           ))}
@@ -2308,6 +2389,30 @@ export default function Dashboard() {
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
             if (transferred) setSelId(null);
             load();
+          }}
+        />
+      ) : null}
+
+      {/* Remove-note confirmation (item 2) — an in-app dialog, never
+          window.confirm(), which a sandboxed GHL iframe silently swallows. */}
+      {removeTarget ? (
+        <ConfirmDialog
+          title="Remove this note?"
+          body={
+            <>
+              It will stay on the record struck through, marked{" "}
+              <b>&ldquo;removed by you&rdquo;</b>, and the text won&apos;t be
+              shown. This can&apos;t be undone.
+            </>
+          }
+          confirmLabel="Remove note"
+          danger
+          busy={editBusy}
+          error={editErr}
+          onConfirm={() => removeNote(removeTarget)}
+          onCancel={() => {
+            setRemoveTarget(null);
+            setEditErr(null);
           }}
         />
       ) : null}
@@ -2729,7 +2834,10 @@ export default function Dashboard() {
                                 type="button"
                                 className="noteedit noteremove"
                                 disabled={editBusy}
-                                onClick={() => removeNote(n.id)}
+                                onClick={() => {
+                                  setEditErr(null);
+                                  setRemoveTarget(n.id);
+                                }}
                               >
                                 Remove
                               </button>
@@ -2787,6 +2895,18 @@ export default function Dashboard() {
                   </div>
                 )}
               </div>
+              {/* ITEM 1, SECOND CAUSE. `editErr` used to be rendered ONLY inside
+                  the edit box, i.e. only when `editing` was true. Removing a
+                  note never sets `editingNote`, so a failed DELETE — a 403, a
+                  500, a dropped connection — set the error and then had NOWHERE
+                  to appear. Every failure looked exactly like "clicking Remove
+                  does nothing". Errors from a removal now surface here, outside
+                  the edit box. */}
+              {editErr && editingNote === null ? (
+                <div className="savemsg err" style={{ marginTop: 6 }}>
+                  ✗ {editErr}
+                </div>
+              ) : null}
               <div className="addnote">
                 <input
                   placeholder="Add a note…"

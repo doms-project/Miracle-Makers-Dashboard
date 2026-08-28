@@ -108,10 +108,11 @@ const cfKeyAndValue = (cf) => {
     );
   }
   console.log(
-    `\n  This answers the date-vs-datetime question with data: if "AAA In Person Date\n` +
-    `  and Time" and "MCO In Person Date and Time" show TIME=, they carry a real time\n` +
-    `  and the datetime editor is right. If every row says (no time), GHL is storing\n` +
-    `  them as plain dates and the two field NAMES are misleading, not the code.`,
+    `\n  ANSWERED — a real write settled this: PUT "2026-08-28T14:30:00.000Z" to\n` +
+    `  AAA In Person Date and Time (ZP7MF2LO3ws4jzYbrTJx) reads back as "2026-08-28".\n` +
+    `  A GHL DATE field CANNOT hold a time; the two field NAMES are misleading, not\n` +
+    `  the code. Every DATE editor in the panel is date-only, and the two fields whose\n` +
+    `  names promise a time now say so. Expect every row below to read (no time).`,
   );
 
   // ---- C. duplicates ------------------------------------------------------

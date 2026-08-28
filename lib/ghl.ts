@@ -572,23 +572,28 @@ function cfRaw(cf: RawCustomField): unknown {
 // ---------------------------------------------------------------------------
 // DATE values (ITEM 1).
 //
-// PROVEN: GHL accepts a full ISO 8601 string on a DATE custom field and stores
-// the calendar date (`"2026-08-28T12:24:00.000Z"` -> `2026-08-28`).
-// UNPROVEN and treated as unsafe: the bare `"2026-08-28"` that an
-// `<input type="date">` produces. Every DATE write in this codebase now goes
-// through here, so the panel, the importer and Move all send the same shape.
-// Midday UTC is used for a bare date so a timezone shift can never roll it onto
-// the previous/next day.
+// PROVEN BY A REAL WRITE: GHL accepts a full ISO 8601 string on a DATE custom
+// field, returns 200, and stores ONLY the calendar date —
+// `"2026-08-28T14:30:00.000Z"` reads back as `"2026-08-28"`. A DATE field
+// cannot hold a time, whatever the field is named.
+//
+// So the time component here is not an attempt to store one; it exists purely
+// to pin the date. Midday UTC keeps a bare `"2026-08-28"` from rolling onto the
+// previous or next day when a timezone is applied at either end.
+//
+// Every DATE write in this codebase goes through this function, so the panel,
+// the importer and Move all send one shape.
 // ---------------------------------------------------------------------------
 export function toGhlDate(value: unknown): string {
   if (value == null) return "";
   const s = String(value).trim();
   if (!s) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T12:00:00.000Z`;
-  // ITEM 1 — <input type="datetime-local"> yields "2026-08-28T14:30" with NO
-  // zone, which `new Date()` reads as LOCAL time. The panel renders these
-  // inputs FROM UTC, so parsing them back as local would shift every
-  // appointment time by the server's offset on each save. Read it as UTC.
+  // A zoneless "2026-08-28T14:30" — `new Date()` would read this as LOCAL time
+  // and could shift it onto the adjacent DAY at the server's offset, which is
+  // the part that survives truncation. The panel no longer produces this shape
+  // (the datetime editor was removed once GHL was proven to discard the time),
+  // but an imported spreadsheet cell still can. Read it as UTC.
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s))
     return new Date(`${s}${s.length === 16 ? ":00" : ""}Z`).toISOString();
   const d = new Date(s);
