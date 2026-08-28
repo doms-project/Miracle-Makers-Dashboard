@@ -28,6 +28,14 @@ import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
 import UserPicker from "@/components/UserPicker";
+import HybridPicker from "@/components/HybridPicker";
+import {
+  toDateInput,
+  toDateTimeInput,
+  formatGhlDate,
+  hasTime,
+  isDateTimeField,
+} from "@/lib/dates";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import { divisionLabel } from "@/lib/division";
@@ -154,12 +162,18 @@ const asStr = (v: unknown): string =>
   Array.isArray(v) ? v.map(String).join(", ") : v == null ? "" : String(v);
 const asArr = (v: unknown): string[] =>
   Array.isArray(v) ? v.map(String) : v == null || v === "" ? [] : [String(v)];
-const asDate = (v: unknown): string => {
-  const s = asStr(v);
-  if (!s) return "";
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? s.slice(0, 10) : d.toISOString().slice(0, 10);
-};
+// ITEM 1 — these now go through lib/dates.ts, which handles the epoch-ms shape
+// the SEARCH endpoint returns. The old version fed "1787875200000" to
+// `new Date(string)`, got Invalid Date, and fell through to `s.slice(0,10)` —
+// "1787875200", which <input type="date"> silently rejected.
+const asDate = (v: unknown): string => toDateInput(v);
+
+// Display for any DATE value: epoch ms, epoch seconds, bare date or ISO, all
+// rendered the same way, in UTC so the day can never shift.
+const asDateText = (v: unknown, def?: { name?: string }): string =>
+  formatGhlDate(v, {
+    withTime: hasTime(v) || (isDateTimeField(def?.name || "") && hasTime(v)),
+  });
 
 // ---- Sort / group dimensions (dynamic + permission-aware) ----
 type DimKind =
@@ -220,11 +234,16 @@ function TextControl({
 }: {
   value: unknown;
   multiline?: boolean;
-  type?: "text" | "number" | "date";
+  type?: "text" | "number" | "date" | "datetime-local";
   disabled?: boolean;
   onSave: (v: string | number) => void;
 }) {
-  const initial = type === "date" ? asDate(value) : asStr(value);
+  const initial =
+    type === "date"
+      ? toDateInput(value)
+      : type === "datetime-local"
+        ? toDateTimeInput(value)
+        : asStr(value);
   const [v, setV] = useState(initial);
   const commit = () => {
     if (v !== initial) onSave(type === "number" ? Number(v) : v);
@@ -317,16 +336,40 @@ function MaskedControl({
 }
 
 // One editable/read-only control chosen by the field's GHL dataType.
+// ITEM 4 — the four CUSTOM people-fields get the hybrid picker: GHL users
+// listed automatically, plus admin-added names for people without a login.
+// Matched by NAME so a rename in GHL is the only thing that needs attention,
+// and no field ids are hardcoded.
+const PEOPLE_FIELDS = [
+  "Onboarding Rep",
+  "Case Manager",
+  "Sales Rep Assistant",
+  "HR / Assigned Team",
+];
+const PEOPLE_SET = new Set(
+  PEOPLE_FIELDS.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")),
+);
+const isPeopleField = (name: string): boolean =>
+  PEOPLE_SET.has((name || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
+
 function FieldControl({
   def,
   value,
   save,
   onSave,
+  users,
+  isAdmin,
+  ssoBlob,
+  onOptionAdded,
 }: {
   def: EditableFieldDef;
   value: unknown;
   save: SaveState;
   onSave: (v: unknown) => void;
+  users: { id: string; name: string; divisions?: string[] }[];
+  isAdmin: boolean;
+  ssoBlob: string | null;
+  onOptionAdded: (fieldId: string, options: string[]) => void;
 }) {
   const t = (def.dataType || "").toUpperCase();
   const disabled = save?.status === "saving";
@@ -338,9 +381,11 @@ function FieldControl({
       return (
         <MaskedControl value={value} disabled onSave={() => {}} />
       );
+    // ITEM 1 — THE reported bug. Transferred Date is read-only, so it rendered
+    // through `asStr(value)` and printed the raw epoch `1787875200000`.
     return (
       <div className="v ro">
-        {asStr(value) || "—"}{" "}
+        {(t === "DATE" ? asDateText(value, def) : asStr(value)) || "—"}{" "}
         <span className="readonly-note">read-only</span>
       </div>
     );
@@ -354,6 +399,26 @@ function FieldControl({
     // Masked with click-to-reveal, ahead of the dataType branches.
     control = (
       <MaskedControl value={value} disabled={disabled} onSave={onSave} />
+    );
+  } else if (isPeopleField(def.name) && isOptionType) {
+    // ITEM 4 — these four rendered as a plain picklist showing only "TBD",
+    // because their GHL option lists are nearly empty while most of the people
+    // who belong in them are GHL users. The stored value stays a plain string
+    // and the field's dataType is untouched.
+    control = (
+      <HybridPicker
+        fieldId={def.id}
+        fieldName={def.name}
+        users={users}
+        options={def.options}
+        value={t === "MULTIPLE_OPTIONS" ? asArr(value) : asStr(value)}
+        multi={t === "MULTIPLE_OPTIONS"}
+        disabled={disabled}
+        isAdmin={isAdmin}
+        ssoBlob={ssoBlob}
+        onChange={onSave}
+        onOptionAdded={onOptionAdded}
+      />
     );
   } else if (isOptionType && def.options.length === 0) {
     control = (
@@ -401,13 +466,24 @@ function FieldControl({
       </div>
     );
   } else if (t === "DATE") {
+    // A field NAMED as carrying a time ("AAA In Person Date and Time") gets a
+    // datetime-local editor; everything else gets a plain date. Name-driven, so
+    // a new such field in GHL needs no code change and no hardcoded id.
+    const withTime = isDateTimeField(def.name);
     control = (
-      <TextControl
-        value={value}
-        type="date"
-        disabled={disabled}
-        onSave={onSave}
-      />
+      <>
+        <TextControl
+          value={value}
+          type={withTime ? "datetime-local" : "date"}
+          disabled={disabled}
+          onSave={onSave}
+        />
+        {/* The stored value, formatted — so a mis-parse is visible rather than
+            showing an empty input that looks like "no value set". */}
+        {asDateText(value, def) ? (
+          <div className="datehint">{asDateText(value, def)}</div>
+        ) : null}
+      </>
     );
   } else if (t === "MONETORY" || t === "NUMERICAL" || t === "NUMBER") {
     control = (
@@ -1281,6 +1357,56 @@ export default function Dashboard() {
 
   const selNotes = (selId && notes[selId]) || [];
 
+  // ITEM 4 — an admin just added a name to a field's picklist. Patch the cached
+  // definition in place so the new option is immediately selectable, instead of
+  // requiring a reload to see the name you just typed.
+  const applyNewOption = useCallback((fieldId: string, options: string[]) => {
+    setFieldDefs((prev) =>
+      prev.map((d) => (d.id === fieldId ? { ...d, options } : d)),
+    );
+  }, []);
+
+  // ITEM 5 — soft-delete the viewer's OWN note. The note stays, struck through,
+  // reading who removed it and when; the original text is not kept.
+  const removeNote = async (noteId: string) => {
+    if (!selId || editBusy) return;
+    if (
+      !window.confirm(
+        "Remove this note?\n\nThe note stays in the case history, struck through and marked as removed by you. The text is not kept and this cannot be undone.",
+      )
+    )
+      return;
+    setEditBusy(true);
+    setEditErr(null);
+    try {
+      const res = await fetch(
+        `/api/opportunities/${selId}/notes/${encodeURIComponent(noteId)}`,
+        { method: "DELETE", headers: ssoHeader() },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        note?: Note;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok || !j.ok)
+        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setNotes((prev) => ({
+        ...prev,
+        [selId]: (prev[selId] || []).map((n) =>
+          n.id === noteId
+            ? { ...n, txt: j.note?.txt ?? "Note removed", removed: true }
+            : n,
+        ),
+      }));
+      setEditingNote(null);
+    } catch (e) {
+      setEditErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
   // ITEM 4 — save an edit to the viewer's OWN note. The affordance is only shown
   // on their own notes; the route re-checks authorship and is the real gate.
   const saveNoteEdit = async (noteId: string) => {
@@ -1542,6 +1668,10 @@ export default function Dashboard() {
         value={rec.cf[def.id]}
         save={saveState[skey(rec.id, def.id)]}
         onSave={(val) => saveCustomField(rec, def, val)}
+        users={users}
+        isAdmin={isAdminViewer}
+        ssoBlob={sso.status === "ready" ? sso.blob : null}
+        onOptionAdded={applyNewOption}
       />
     </div>
   );
@@ -2188,6 +2318,7 @@ export default function Dashboard() {
           pipelines={pipelines}
           stagesByPipeline={stagesByPipeline}
           users={users}
+          fieldDefs={fieldDefs}
           viewerId={viewerId || ""}
           viewerName={
             (sso.status === "ready" ? sso.session.userName : "") ||
@@ -2563,7 +2694,7 @@ export default function Dashboard() {
                           ) : null}{" "}
                           {/* The original timestamp, kept across edits. */}
                           · {n.when}
-                          {n.edited ? (
+                          {n.edited && !n.removed ? (
                             <span
                               className="nedited"
                               title="This note was edited after it was written. The original text is not kept."
@@ -2571,18 +2702,38 @@ export default function Dashboard() {
                               edited
                             </span>
                           ) : null}
-                          {mine && n.id && !editing ? (
-                            <button
-                              type="button"
-                              className="noteedit"
-                              onClick={() => {
-                                setEditingNote(n.id);
-                                setEditDraft(n.txt);
-                                setEditErr(null);
-                              }}
+                          {n.removed ? (
+                            <span
+                              className="nedited nremoved"
+                              title="The author removed this note. It stays in the case history so the gap is visible; the original text is not kept."
                             >
-                              Edit
-                            </button>
+                              removed
+                            </span>
+                          ) : null}
+                          {/* Author only, and never on an already-removed
+                              note — there is nothing left to edit or remove. */}
+                          {mine && n.id && !editing && !n.removed ? (
+                            <>
+                              <button
+                                type="button"
+                                className="noteedit"
+                                onClick={() => {
+                                  setEditingNote(n.id);
+                                  setEditDraft(n.txt);
+                                  setEditErr(null);
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="noteedit noteremove"
+                                disabled={editBusy}
+                                onClick={() => removeNote(n.id)}
+                              >
+                                Remove
+                              </button>
+                            </>
                           ) : null}
                         </div>
                         {editing ? (
@@ -2623,7 +2774,9 @@ export default function Dashboard() {
                             ) : null}
                           </div>
                         ) : (
-                          <p>{n.txt}</p>
+                          <p className={n.removed ? "noteremoved" : undefined}>
+                            {n.txt}
+                          </p>
                         )}
                       </div>
                     );

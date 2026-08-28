@@ -5,7 +5,7 @@ import {
   getSelectedPipelines,
   getLocationUserIds,
   listContactOpportunities,
-  getFieldDefinitions,
+  getEditableFieldDefs,
   divisionCustomField,
   explainGhlError,
   GhlError,
@@ -22,12 +22,41 @@ export const maxDuration = 60;
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// Optional extra detail fields, resolved by NAME so no ids are hardcoded.
-const DETAIL_FIELDS: { key: keyof NewClientPayload; name: string }[] = [
-  { key: "office", name: "Office" },
-  { key: "county", name: "County" },
-  { key: "referralSource", name: "Referral Source Type" },
-];
+// ITEM 3 — the "more details" fields (Office / County / Referral Source Type)
+// arrive keyed BY FIELD ID with real option values, because the modal now
+// renders them from their live GHL definitions instead of as free text. Every
+// id is checked against the definitions and every value against the field's own
+// option list, so a hand-rolled POST cannot write a value the picklist doesn't
+// contain — which is precisely the thing free text was producing.
+function coerceDetail(
+  def: { dataType?: string; options: string[] },
+  value: unknown,
+): { value: unknown; rejected: string[] } {
+  const t = String(def.dataType || "").toUpperCase();
+  const opts = def.options || [];
+  const match = (v: string): string | null =>
+    opts.find((o) => norm(o) === norm(v)) ?? null;
+
+  if (t === "MULTIPLE_OPTIONS" || t === "CHECKBOX") {
+    const list = Array.isArray(value) ? value.map(String) : value ? [String(value)] : [];
+    const kept: string[] = [];
+    const rejected: string[] = [];
+    for (const v of list) {
+      const m = opts.length ? match(v) : v;
+      if (m) kept.push(m);
+      else rejected.push(v);
+    }
+    return { value: kept, rejected };
+  }
+
+  const v = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+  if (!v.trim()) return { value: "", rejected: [] };
+  if (t === "SINGLE_OPTIONS" && opts.length) {
+    const m = match(v);
+    return m ? { value: m, rejected: [] } : { value: "", rejected: [v] };
+  }
+  return { value: v.trim(), rejected: [] };
+}
 
 // ITEM 3 — Add Client. POST creates the contact and its case.
 //
@@ -190,13 +219,26 @@ async function postHandler(request: Request) {
 
     // ---- custom fields: Division from the pipeline, plus any detail fields ---
     const customFields = [...(await divisionCustomField(dest.name))];
-    const defs = await getFieldDefinitions();
-    for (const { key, name } of DETAIL_FIELDS) {
-      const value = String(body[key] ?? "").trim();
-      if (!value) continue;
-      const def = defs.find((d) => norm(d.name || "") === norm(name));
-      if (def) customFields.push({ id: def.id, value });
+    const defs = await getEditableFieldDefs();
+    const defById = new Map(defs.map((d) => [d.id, d]));
+    const rejectedDetails: string[] = [];
+    for (const [fieldId, raw] of Object.entries(body.details || {})) {
+      const def = defById.get(fieldId);
+      // Unknown id, or a read-only field someone tried to set on creation.
+      if (!def || !def.editable) {
+        rejectedDetails.push(fieldId);
+        continue;
+      }
+      const { value, rejected } = coerceDetail(def, raw);
+      for (const r of rejected) rejectedDetails.push(`${def.name}: "${r}"`);
+      if (Array.isArray(value) ? value.length : String(value).trim())
+        customFields.push({ id: def.id, value });
     }
+    if (rejectedDetails.length)
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[clients] ignored detail values that are not in their field's option list: ${rejectedDetails.join(", ")}`,
+      );
 
     // ---- create -------------------------------------------------------------
     // GHL links contact <-> opportunity natively via contactId. No extra call.
@@ -224,7 +266,9 @@ async function postHandler(request: Request) {
       );
 
     return NextResponse.json(
-      { ok: true, opportunityId: oppId, contactId },
+      // `rejectedDetails` is reported rather than swallowed: a value that
+      // didn't match its picklist was NOT written, and the caller should know.
+      { ok: true, opportunityId: oppId, contactId, rejectedDetails },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
