@@ -440,3 +440,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .clientcell .clcontact{font-size:11px;color:var(--ink-3);font-weight:500;}
 .clientcell .clcontact::before{content:"👤 ";}
 .card .ccontact{font-size:11px;color:var(--ink-2);margin-top:2px;}
+/* Move/notes follow-ups: transferred-from badge + note division */
+.fromtag{font-size:10px;font-weight:700;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;}
+.note .nh .ndiv{color:var(--plum);font-weight:600;}
