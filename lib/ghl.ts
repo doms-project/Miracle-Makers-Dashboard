@@ -95,6 +95,16 @@ export async function explainGhlError(e: unknown): Promise<string> {
     }
     return `${who} doesn't have access to the "${which}" pipeline in GoHighLevel, so they can't be made owner of this record. Grant it in GoHighLevel → Settings → Opportunities → Pipelines → the key icon on "${which}", then try again.`;
   }
+  // ITEM 4 — GHL's own one-opportunity-per-contact-per-pipeline rule. Its
+  // message says "create" even when the request was an UPDATE (a Move), which
+  // reads as "the dashboard tried to duplicate the record" — it did not. Say
+  // what actually happened and what to do about it.
+  if (
+    /OPPORTUNITY_NO_DUPLICATE/i.test(raw) ||
+    /duplicate opportunity for the contact/i.test(raw)
+  ) {
+    return "This client already has a case in the destination pipeline. GoHighLevel allows only ONE opportunity per contact per pipeline, so this record can't be moved there. Close or move the existing case first, then try again. (GoHighLevel's own message says \"create\" — it fires on updates too; nothing was duplicated.)";
+  }
   return e.detail ? `${e.message} — ${e.detail}` : e.message;
 }
 
@@ -306,8 +316,26 @@ export async function getFieldDefinitions(): Promise<FieldDefinition[]> {
       `/locations/${encodeURIComponent(locationId)}/customFields?model=opportunity`,
     );
     defs = data.customFields || [];
-  } catch {
-    // Non-fatal: leave empty (read path still resolves stage/owner/contact).
+  } catch (e) {
+    // Non-fatal for the read path (stage/owner/contact still resolve), but it
+    // is FATAL for every write that resolves a field by name: Move's transfer
+    // stamps, Division, the panel's editable-field allowlist. This used to be
+    // swallowed silently AND the empty result cached, so one failed fetch made
+    // a warm lambda permanently unable to stamp anything — the same defect as
+    // the users lookup. Never cache a failed read; say so loudly.
+    // eslint-disable-next-line no-console
+    console.error(
+      "[ghl] custom-field definitions could not be fetched — NOT cached, will retry on the next call. Field-by-name writes (transfer stamps, Division) are skipped until this succeeds:",
+      await explainGhlError(e),
+    );
+    return [];
+  }
+  if (!defs.length) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[ghl] custom-field definitions came back EMPTY. Not caching. Check the PIT's locations/customFields scope.",
+    );
+    return defs;
   }
   cache.fieldDefs = defs;
   return defs;
@@ -492,14 +520,59 @@ interface RawOpportunity {
 }
 
 // Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
+//
+// ITEM 1 (read side). This used to read exactly four fixed keys. GHL returns a
+// custom field's value under a key that varies by dataType and API surface
+// (fieldValueString / fieldValueArray / fieldValue / value — and typed variants
+// such as fieldValueDate / fieldValueNumber appear on some responses). Any key
+// outside that fixed list read back as "" — which is INDISTINGUISHABLE from
+// "never written". A stamp could land in GHL and still show blank here.
+//
+// So: try the known keys first (order matters — array before string), then fall
+// back to ANY `fieldValue*` property that holds a value. The unknown key is
+// logged once so we learn the real shape instead of guessing at it.
+const KNOWN_CF_KEYS = ["fieldValueArray", "fieldValueString", "fieldValue", "value"];
+const _loggedCfKeys = new Set<string>();
+
 function cfRaw(cf: RawCustomField): unknown {
-  return (
-    cf.fieldValueArray ??
-    cf.fieldValueString ??
-    cf.fieldValue ??
-    cf.value ??
-    ""
-  );
+  for (const k of KNOWN_CF_KEYS) {
+    const v = (cf as Record<string, unknown>)[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  for (const [k, v] of Object.entries(cf as Record<string, unknown>)) {
+    if (!k.startsWith("fieldValue")) continue;
+    if (v === undefined || v === null || v === "") continue;
+    if (!_loggedCfKeys.has(k)) {
+      _loggedCfKeys.add(k);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] custom-field value found under the unhandled key "${k}" (field ${cf.id}). It is being read, but add it to KNOWN_CF_KEYS.`,
+      );
+    }
+    return v;
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// DATE values (ITEM 1).
+//
+// PROVEN: GHL accepts a full ISO 8601 string on a DATE custom field and stores
+// the calendar date (`"2026-08-28T12:24:00.000Z"` -> `2026-08-28`).
+// UNPROVEN and treated as unsafe: the bare `"2026-08-28"` that an
+// `<input type="date">` produces. Every DATE write in this codebase now goes
+// through here, so the panel, the importer and Move all send the same shape.
+// Midday UTC is used for a bare date so a timezone shift can never roll it onto
+// the previous/next day.
+// ---------------------------------------------------------------------------
+export function toGhlDate(value: unknown): string {
+  if (value == null) return "";
+  const s = String(value).trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T12:00:00.000Z`;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s; // let GHL reject it rather than silently blanking
+  return d.toISOString();
 }
 
 interface SearchResponse {
@@ -1043,6 +1116,60 @@ export async function listResources(): Promise<ResourceFile[]> {
 // Bulk import — list all pipelines, upsert contacts (dedupe), create opps.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// ITEM 4 — the contact's OTHER opportunities, for the Move dialog's pre-check.
+//
+// GoHighLevel enforces ONE opportunity per contact per pipeline. Attempting to
+// move a record into a pipeline where that contact already has a case fails
+// with a 400 `OPPORTUNITY_NO_DUPLICATE` — and the message says "Can not create
+// duplicate opportunity", which reads as though the dashboard tried to create
+// something. It didn't; the rule fires on updates too.
+//
+// This is a READ, so the dialog can grey out the destinations that would fail
+// instead of letting the rep discover the rule by hitting it.
+// ---------------------------------------------------------------------------
+export interface ContactOpportunity {
+  id: string;
+  name: string;
+  pipelineId: string;
+  pipelineName: string;
+  stage: string;
+  status: string;
+}
+
+export async function listContactOpportunities(
+  contactId: string,
+): Promise<ContactOpportunity[]> {
+  if (!contactId) return [];
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    location_id: locationId,
+    contact_id: contactId,
+    limit: "100",
+  });
+  const data = await ghlGet<SearchResponse>(
+    `/opportunities/search?${params.toString()}`,
+  );
+  const pipelines = await getPipelines();
+  const nameById = new Map(pipelines.map((p) => [p.id, p.name]));
+  const stageNames = new Map<string, string>();
+  for (const p of pipelines)
+    for (const s of p.stages || []) stageNames.set(stageKey(p.id, s.id), s.name);
+
+  return (data.opportunities || []).map((o) => {
+    const pid = o.pipelineId || "";
+    return {
+      id: o.id,
+      name: (o.name || "").trim(),
+      pipelineId: pid,
+      pipelineName: nameById.get(pid) || "",
+      stage:
+        stageNames.get(stageKey(pid, o.pipelineStageId || o.stageId || "")) || "",
+      status: o.status || "",
+    };
+  });
+}
+
 export async function listPipelines(): Promise<
   { id: string; name: string; stages: { id: string; name: string }[] }[]
 > {
@@ -1289,12 +1416,105 @@ const normOpt = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/s$/, "");
 
 // Find a field definition by (normalized) name — never by hardcoded id.
+//
+// ITEM 1 diagnostic: if the account holds TWO fields whose names normalize the
+// same ("Transferred Date" in the Transfer folder and a stray "Transferred
+// Date" elsewhere), `find` silently takes the first and every write lands on
+// the wrong field — which looks exactly like "the value was dropped" when you
+// check the field you meant. Name the collision instead of hiding it.
 function findDefByName(
   defs: FieldDefinition[],
   name: string,
 ): FieldDefinition | undefined {
   const target = norm(name);
-  return defs.find((d) => norm(d.name || "") === target);
+  const hits = defs.filter((d) => norm(d.name || "") === target);
+  if (hits.length > 1) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[ghl] ${hits.length} custom fields are named "${name}": ${hits
+        .map((h) => `${h.id} (${h.dataType}, folder ${String(h.parentId ?? "—")})`)
+        .join(" | ")}. Writing to the FIRST. If a stamp appears to vanish, this is why.`,
+    );
+  }
+  return hits[0];
+}
+
+// ---------------------------------------------------------------------------
+// PUT /opportunities/{id} that VERIFIES the custom fields actually landed.
+//
+// ITEM 1, stated by the user and correct: "A 200 doesn't mean the field was
+// written." GHL validates each customFields entry INDEPENDENTLY — it can accept
+// one entry and drop another from the very same array, with no error and no
+// mention in the response. That is why "Transferred From and Transferred Date
+// ride the same array" is both TRUE and consistent with only one of them
+// landing; the array is not the unit of success, the entry is.
+//
+// So every Move write now reads its own result back: what we sent vs what the
+// response reports, per field id, by name. A dropped or altered value is logged
+// with both values. Verification NEVER fails the move — the write already
+// happened; this only makes a silent drop visible.
+// ---------------------------------------------------------------------------
+interface PutOppResponse {
+  opportunity?: { customFields?: RawCustomField[] };
+  customFields?: RawCustomField[];
+}
+
+async function putOpportunityVerified(
+  oppId: string,
+  body: Record<string, unknown>,
+  label: string,
+): Promise<void> {
+  const res = await ghlSend<PutOppResponse>(
+    "PUT",
+    `/opportunities/${encodeURIComponent(oppId)}`,
+    body,
+  );
+
+  const sent = (body.customFields as { id: string; value: unknown }[]) || [];
+  if (!sent.length) return;
+
+  const returned = res.opportunity?.customFields ?? res.customFields;
+  if (!returned) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[move:${label}] PUT returned 200 but carried no customFields to verify against. Sent ${sent.length} field(s); run scripts/date-write-probe.mjs to confirm they stored.`,
+    );
+    return;
+  }
+
+  let names = new Map<string, string>();
+  try {
+    names = new Map(
+      (await getFieldDefinitions()).map((d) => [d.id, d.name || d.id]),
+    );
+  } catch {
+    /* ids are still useful on their own */
+  }
+  const byId = new Map(returned.filter((c) => c.id).map((c) => [c.id!, c]));
+
+  for (const s of sent) {
+    const label2 = names.get(s.id) || s.id;
+    const got = byId.get(s.id);
+    if (!got) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[move:${label}] ✗ "${label2}" (${s.id}) was SENT as ${JSON.stringify(s.value)} but is ABSENT from the response — GoHighLevel dropped it silently.`,
+      );
+      continue;
+    }
+    const stored = cfRaw(got);
+    const a = String(Array.isArray(stored) ? stored.join(",") : stored);
+    const b = String(Array.isArray(s.value) ? (s.value as unknown[]).join(",") : s.value);
+    // A DATE round-trips as the calendar date, so compare on the leading 10
+    // characters before calling it a mismatch.
+    const same = a === b || (a && b && a.slice(0, 10) === b.slice(0, 10));
+    if (!same) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[move:${label}] ⚠ "${label2}" (${s.id}) sent ${JSON.stringify(b)} but GoHighLevel stored ${JSON.stringify(a)}.`,
+      );
+    }
+  }
 }
 
 // Match a pipeline NAME to one of a SINGLE_OPTIONS field's option values.
@@ -1358,6 +1578,17 @@ export async function moveOpportunity(args: {
     typeof args.newOwnerId === "string" &&
     (args.newOwnerId || "") !== (current.ownerId || "");
 
+  // ITEM 2 — the note's [DIVISION] prefix comes from actorDivision. When that
+  // arrives empty, stampDivision correctly returns the body UNCHANGED — which is
+  // indistinguishable from "the stamp is broken". It was silent; now it isn't.
+  // The route logs WHY it is empty; this logs THAT it is, at the point of use.
+  if (!args.actorDivision?.trim()) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[move] actorDivision is EMPTY for user "${args.actorUserId || "(none)"}" — the note will be written with NO [DIVISION] prefix. See the [move:division] line above for the reason.`,
+    );
+  }
+
   // ---- PREFLIGHT (no writes) ----
   const pipelines = await getSelectedPipelines();
   const dest = pipelines.find((p) => p.id === args.toPipelineId);
@@ -1419,11 +1650,15 @@ export async function moveOpportunity(args: {
   // also changed the owner appeared to "work". A reason the rep typed must
   // ALWAYS be written, so it is recorded here too.
   if (!isTransfer) {
-    await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
-      pipelineId: args.toPipelineId,
-      pipelineStageId: destStageId,
-      ...(divisionCf.length ? { customFields: divisionCf } : {}),
-    });
+    await putOpportunityVerified(
+      args.oppId,
+      {
+        pipelineId: args.toPipelineId,
+        pipelineStageId: destStageId,
+        ...(divisionCf.length ? { customFields: divisionCf } : {}),
+      },
+      "simple",
+    );
     steps.push(
       `moved pipeline+stage${divisionCf.length ? " + Division" : ""}`,
     );
@@ -1461,6 +1696,16 @@ export async function moveOpportunity(args: {
   const sourceName =
     pipelines.find((p) => p.id === current.pipelineId)?.name || "";
 
+  // ITEM 1 — say out loud which stamp fields resolved. If a name lookup misses,
+  // the entry is never built, and "the field didn't land" is then a LOCAL fact
+  // (we never sent it), not a GHL one. That distinction was unavailable before.
+  if (!fromDef || !dateDef) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[move] transfer stamp fields resolved: Transferred From=${fromDef?.id ?? "NOT FOUND"} Transferred Date=${dateDef?.id ?? "NOT FOUND"} (from ${defs.length} opportunity custom-field definitions). A NOT FOUND is never sent.`,
+    );
+  }
+
   const customFields: { id: string; value: unknown }[] = [];
   if (fromDef && sourceName) {
     // SINGLE_OPTIONS — must send an EXISTING option value.
@@ -1471,21 +1716,24 @@ export async function moveOpportunity(args: {
   if (dateDef)
     customFields.push({
       id: dateDef.id,
-      // ITEM 3: was `toISOString().slice(0,10)` -> "2026-08-27". GHL DATE fields
-      // accept full ISO 8601; a bare date string can be silently dropped, which
-      // is exactly the symptom (Transferred From lands, Transferred Date does
-      // not, same customFields array, no error).
-      value: new Date().toISOString(),
+      // Full ISO 8601 — the one shape proven to store (a bare "2026-08-27" is
+      // not). Routed through toGhlDate so Move, the panel and the importer all
+      // send DATE the same way.
+      value: toGhlDate(new Date().toISOString()),
     });
   if (reasonDef && args.reason?.trim())
     customFields.push({ id: reasonDef.id, value: args.reason.trim() });
 
   // 1. Owner + stamps in ONE atomic write (fails => nothing written).
   try {
-    await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
-      assignedTo: args.newOwnerId,
-      ...(customFields.length ? { customFields } : {}),
-    });
+    await putOpportunityVerified(
+      args.oppId,
+      {
+        assignedTo: args.newOwnerId,
+        ...(customFields.length ? { customFields } : {}),
+      },
+      "transfer-stamps",
+    );
     steps.push("owner changed + transfer stamps");
   } catch (e) {
     return {
@@ -1557,12 +1805,16 @@ export async function moveOpportunity(args: {
   let lastErr: unknown = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await ghlSend("PUT", `/opportunities/${encodeURIComponent(args.oppId)}`, {
-        pipelineId: args.toPipelineId,
-        pipelineStageId: destStageId,
-        // Division rides along with the pipeline change (same PUT).
-        ...(divisionCf.length ? { customFields: divisionCf } : {}),
-      });
+      await putOpportunityVerified(
+        args.oppId,
+        {
+          pipelineId: args.toPipelineId,
+          pipelineStageId: destStageId,
+          // Division rides along with the pipeline change (same PUT).
+          ...(divisionCf.length ? { customFields: divisionCf } : {}),
+        },
+        "transfer-pipeline",
+      );
       steps.push(
         `moved pipeline+stage (TRANSFERRED IN)${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );

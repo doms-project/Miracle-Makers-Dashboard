@@ -26,17 +26,52 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
 
   try {
     stored = await fetchPipelineAccessGrants();
-  } catch {
+  } catch (e) {
+    // ITEM 2 root-cause trail. This was a bare `catch {}`: when the custom-value
+    // read failed, the request fell back to the env var with NOTHING said. If
+    // PIPELINE_ACCESS_MAP is also unset, every user then has zero home
+    // pipelines — no division, no [DIVISION] note prefix, and no clue why.
+    // eslint-disable-next-line no-console
+    console.error(
+      "[grants] could not read the 'MM Pipeline Access' custom value — falling back to PIPELINE_ACCESS_MAP:",
+      e instanceof Error ? e.message : String(e),
+    );
     stored = null; // fall back to the env var
   }
   try {
     userIds = await getLocationUserIds();
     pipelineIds = new Set((await listPipelines()).map((p) => p.id));
-  } catch {
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[grants] live user/pipeline lists unavailable — SKIPPING grant validation (failing open on validation, never on access):",
+      e instanceof Error ? e.message : String(e),
+    );
     userIds = undefined;
     pipelineIds = undefined; // skip validation rather than drop everything
   }
 
   const grants = buildGrants(stored, userIds, pipelineIds);
+
+  // Validation drops stale ids SILENTLY by design. Silent is right for the
+  // filter and wrong for the operator: a grant keyed by a user id that no longer
+  // exists (or a pipeline that was deleted) simply stops working, and the only
+  // symptom is a rep seeing nothing. Report exactly what was discarded.
+  const storedCount = stored ? Object.keys(stored).length : null;
+  if (storedCount != null && storedCount !== grants.size) {
+    const kept = new Set(grants.keys());
+    const dropped = Object.keys(stored!).filter((u) => !kept.has(u));
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[grants] ${storedCount} stored grant(s) -> ${grants.size} effective. Discarded as stale (unknown user, or every pipeline unknown): ${dropped.join(", ") || "(none — entries had no valid pipelines)"}.`,
+    );
+  }
+  if (!grants.size) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[grants] NO effective pipeline grants for this request (source: ${stored ? "custom value" : "PIPELINE_ACCESS_MAP env"}). Every non-admin browses nothing, and Move notes get no [DIVISION] prefix.`,
+    );
+  }
+
   return runWithGrants(grants, fn);
 }
