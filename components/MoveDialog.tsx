@@ -1,7 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { OpportunityRecord } from "@/lib/types";
+
+// ITEM 4 — one of the contact's OTHER open cases. GoHighLevel allows only ONE
+// opportunity per contact per pipeline, so each of these BLOCKS its pipeline as
+// a destination.
+interface Conflict {
+  opportunityId: string;
+  name: string;
+  pipelineId: string;
+  pipelineName: string;
+  stage: string;
+  status: string;
+}
 
 // Task 6 — the Move action. One control; the system classifies:
 //   owner UNCHANGED -> simple move (pipeline + stage). No warning, no stamps.
@@ -36,6 +48,51 @@ export default function MoveDialog({
   const [addSender, setAddSender] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // ITEM 4 — the contact's other cases, fetched when the dialog opens.
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const [conflictsLoading, setConflictsLoading] = useState(true);
+  const [conflictsErr, setConflictsErr] = useState<string | null>(null);
+
+  // Fetch the duplicate pre-check. A failure here NEVER blocks the Move: we
+  // simply lose the ability to grey out destinations, and the server-side error
+  // (explained by explainGhlError) still catches it.
+  useEffect(() => {
+    let cancelled = false;
+    setConflictsLoading(true);
+    setConflictsErr(null);
+    fetch(`/api/opportunities/${record.id}/conflicts`, {
+      headers: ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {},
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const j = (await res.json().catch(() => ({}))) as {
+          conflicts?: Conflict[];
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+        if (!cancelled) setConflicts(j.conflicts || []);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setConflictsErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setConflictsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [record.id, ssoBlob]);
+
+  // pipelineId -> the case already occupying it for this contact.
+  const conflictByPipeline = useMemo(() => {
+    const m = new Map<string, Conflict>();
+    for (const c of conflicts) if (!m.has(c.pipelineId)) m.set(c.pipelineId, c);
+    return m;
+  }, [conflicts]);
+
+  const blocked = conflictByPipeline.get(toPipelineId) || null;
 
   const isTransfer = (newOwnerId || "") !== (record.ownerId || "");
   const destStages = stagesByPipeline[toPipelineId] || [];
@@ -76,7 +133,12 @@ export default function MoveDialog({
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok)
         throw new Error(j.detail || j.error || `HTTP ${res.status}`);
-      if (j.record) onMoved(j.record as OpportunityRecord, !!j.transferred);
+      // ITEM 3. This was gated on `j.record`: if the re-read after the move came
+      // back empty, onMoved never fired, so the panel was never told to close
+      // and kept showing the pre-move record. The move HAS happened by this
+      // point — the caller must be told either way, so fall back to the record
+      // we already hold rather than silently doing nothing.
+      onMoved((j.record as OpportunityRecord) || record, !!j.transferred);
       onClose();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -111,12 +173,40 @@ export default function MoveDialog({
                 setToStageId(first?.id || "");
               }}
             >
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              {pipelines.map((p) => {
+                // ITEM 4 — a pipeline where this contact already has a case
+                // cannot receive this one. Grey it out with the reason rather
+                // than letting the rep discover GHL's rule via a 400. The
+                // record's CURRENT pipeline is never blocked by itself (the
+                // conflicts route already excludes this opportunity).
+                const c = conflictByPipeline.get(p.id);
+                return (
+                  <option key={p.id} value={p.id} disabled={!!c}>
+                    {p.name}
+                    {c ? " — already has a case for this client" : ""}
+                  </option>
+                );
+              })}
             </select>
+            {blocked ? (
+              <div className="savemsg err" style={{ marginTop: 6 }}>
+                ✗ This client already has a case in{" "}
+                <b>{blocked.pipelineName || "that pipeline"}</b>
+                {blocked.stage ? ` (${blocked.stage})` : ""}. GoHighLevel allows
+                only one case per client per pipeline — move or close that one
+                first.
+              </div>
+            ) : null}
+            {conflictsLoading ? (
+              <div className="imeta">Checking the client&apos;s other cases…</div>
+            ) : null}
+            {conflictsErr ? (
+              <div className="imeta">
+                Couldn&apos;t check the client&apos;s other cases ({conflictsErr}
+                ). The move will still be attempted — GoHighLevel will reject it
+                if a case already exists in the destination.
+              </div>
+            ) : null}
 
             <label>Stage</label>
             {isTransfer ? (
@@ -203,7 +293,7 @@ export default function MoveDialog({
             <button
               type="button"
               className="ibtn"
-              disabled={busy || unchanged}
+              disabled={busy || unchanged || !!blocked}
               onClick={submit}
             >
               {busy ? "Moving…" : isTransfer ? "Transfer case" : "Move"}

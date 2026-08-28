@@ -3,6 +3,7 @@ import {
   upsertContact,
   createOpportunity,
   getEditableFieldDefs,
+  toGhlDate,
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
@@ -41,6 +42,14 @@ function formatValue(def: EditableFieldDef, value: unknown): unknown {
   if (t === "MONETORY" || t === "NUMERICAL" || t === "NUMBER") {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
+  }
+  // ITEM 1 — same gap as the panel PATCH route: DATE had no branch, so an
+  // imported date cell went to GHL as whatever the spreadsheet held. Normalize
+  // to full ISO 8601, the shape proven to store. This also rescues Excel/CSV
+  // cells that arrive as a Date object or a US "8/28/2026" string.
+  if (t === "DATE") {
+    if (value == null || String(value).trim() === "") return "";
+    return toGhlDate(value);
   }
   return value == null ? "" : String(value);
 }
