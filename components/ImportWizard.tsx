@@ -51,6 +51,8 @@ export default function ImportWizard({
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [importErr, setImportErr] = useState<string | null>(null);
   const [presetNames, setPresetNames] = useState<string[]>([]);
+  const [namingPreset, setNamingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
 
   const fileInput = useRef<HTMLInputElement | null>(null);
 
@@ -233,13 +235,21 @@ export default function ImportWizard({
   };
 
   // Presets.
-  const savePreset = () => {
-    const name = window.prompt("Save this mapping as (e.g. 'Indeed')");
-    if (!name) return;
+  //
+  // This used `window.prompt()`. The dashboard runs INSIDE A GHL IFRAME, and a
+  // sandboxed iframe without `allow-modals` makes prompt() return null with no
+  // dialog at all — so "Save preset" did nothing, silently, exactly like the
+  // Remove-note button did. Same defect, different screen; found while fixing
+  // that one. An inline input replaces it.
+  const savePreset = (name: string) => {
+    const clean = name.trim();
+    if (!clean) return;
     const all = JSON.parse(localStorage.getItem("importPresets") || "{}");
-    all[name] = { mapping, source, pipelineId, stageId };
+    all[clean] = { mapping, source, pipelineId, stageId };
     localStorage.setItem("importPresets", JSON.stringify(all));
     setPresetNames(Object.keys(all));
+    setPresetName("");
+    setNamingPreset(false);
   };
   const applyPreset = (name: string) => {
     if (!name) return;
@@ -405,9 +415,37 @@ export default function ImportWizard({
           <div className="istep">
             Map columns → GHL fields
             <span className="ipresets">
-              <button type="button" onClick={savePreset}>
-                Save preset
-              </button>
+              {namingPreset ? (
+                <span className="ipresetname">
+                  <input
+                    value={presetName}
+                    placeholder="Preset name (e.g. Indeed)"
+                    autoFocus
+                    onChange={(e) => setPresetName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") savePreset(presetName);
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        setNamingPreset(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!presetName.trim()}
+                    onClick={() => savePreset(presetName)}
+                  >
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setNamingPreset(false)}>
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button type="button" onClick={() => setNamingPreset(true)}>
+                  Save preset
+                </button>
+              )}
               {presetNames.length ? (
                 <select
                   defaultValue=""

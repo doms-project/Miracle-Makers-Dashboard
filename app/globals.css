@@ -460,7 +460,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .upmenu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:20;background:var(--bg);border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 30px rgba(0,0,0,.14);overflow:hidden;}
 .upsearch{border:0;border-bottom:1px solid var(--line-soft);border-radius:0;}
 .upsearch:focus{box-shadow:none;border-color:var(--line-soft);}
-.uplist{max-height:260px;overflow:auto;}
+.uplist{max-height:200px;overflow:auto;}
 .uprow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;padding:8px 11px;font:inherit;background:transparent;cursor:pointer;border-bottom:1px solid var(--line-soft);}
 .uprow:last-child{border-bottom:0;}
 .uprow:hover{background:var(--row-hover);}
@@ -497,7 +497,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* ── ITEM 4 · hybrid picker — GHL users plus admin-added names ── */
 .updiv{padding:6px 11px 4px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);background:var(--line-soft);border-top:1px solid var(--line);}
 .extbadge{margin-left:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);border:1px solid var(--line);border-radius:20px;padding:0 6px;vertical-align:middle;}
-.upadd{border-top:1px solid var(--line);padding:8px 11px;display:flex;flex-direction:column;gap:6px;}
+/* ITEM 3 — "+ Add name…" sits ABOVE the list, not below it.
+   The record panel body is a scroll container (.pbody{overflow:auto}), so this
+   absolutely-positioned menu is CLIPPED by it. With 25 users the list fills its
+   max-height and anything after it landed past the panel's bottom edge — which
+   is why users and TBD were visible and "+ Add name…" was not. It was never a
+   permission problem; the row was rendering off-screen. Above the list it can
+   never be the clipped one, and the list is capped shorter so the whole menu
+   fits inside the panel. */
+.upadd{border-bottom:1px solid var(--line);background:var(--canvas);padding:8px 11px;display:flex;flex-direction:column;gap:6px;}
 .upaddbtn{background:transparent;border:0;padding:0;font:inherit;font-size:12px;font-weight:600;color:var(--plum);cursor:pointer;text-align:left;}
 .upaddbtn:hover{text-decoration:underline;}
 .upaddacts{display:flex;gap:8px;justify-content:flex-end;}
@@ -507,3 +515,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .nremoved{color:var(--blk);}
 .noteremove{color:var(--blk);}
 .noteremoved{text-decoration:line-through;color:var(--ink-3);font-style:italic;}
+
+/* GHL DATE fields cannot store a time — flagged where a field NAME promises one. */
+.datewarn{font-size:10.5px;color:var(--blk);background:var(--blk-soft);border-radius:6px;padding:4px 8px;margin-top:4px;}
+
+/* ── ITEM 2 · in-app confirmation (never window.confirm — a sandboxed GHL
+      iframe swallows it and returns false with no prompt) ── */
+.confirmbox{max-width:460px;}
+.confirmtext{font-size:13px;line-height:1.55;color:var(--ink-2);}
+.ibtn.danger{background:var(--blk);}
+.ibtn.danger:hover{background:var(--blk);filter:brightness(1.15);}
+.ipresetname{display:inline-flex;align-items:center;gap:6px;}
+.ipresetname input{border:1px solid var(--plum);border-radius:7px;padding:5px 9px;font:inherit;font-size:11.5px;outline:none;}

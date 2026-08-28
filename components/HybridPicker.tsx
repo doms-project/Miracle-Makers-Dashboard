@@ -158,8 +158,6 @@ export default function HybridPicker({
   };
 
   const label = selected.length ? selected.join(", ") : "—";
-  const isExt = (name: string) =>
-    !users.some((u) => u.name.trim().toLowerCase() === name.trim().toLowerCase());
 
   return (
     <div className="uppick" ref={boxRef}>
@@ -188,6 +186,59 @@ export default function HybridPicker({
             placeholder={`Filter ${fieldName.toLowerCase()}…`}
             autoFocus
           />
+          {isAdmin ? (
+            <div className="upadd">
+              {adding ? (
+                <>
+                  <input
+                    className="cgsearch"
+                    value={newName}
+                    disabled={busy}
+                    placeholder="Full name"
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addName();
+                    }}
+                    autoFocus
+                  />
+                  <div className="upaddacts">
+                    <button
+                      type="button"
+                      className="ighost"
+                      disabled={busy}
+                      onClick={() => {
+                        setAdding(false);
+                        setErr(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="ibtn"
+                      disabled={busy || !newName.trim()}
+                      onClick={addName}
+                    >
+                      {busy ? "Adding…" : "Add"}
+                    </button>
+                  </div>
+                  <div className="imeta">
+                    Adds the name to this field in GoHighLevel, for every record.
+                  </div>
+                  {err ? <div className="savemsg err">✗ {err}</div> : null}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="upaddbtn"
+                  onClick={() => setAdding(true)}
+                >
+                  + Add name…
+                </button>
+              )}
+            </div>
+          ) : null}
+
           <div className="uplist">
             {!multi ? (
               <button
@@ -271,58 +322,6 @@ export default function HybridPicker({
             ) : null}
           </div>
 
-          {isAdmin ? (
-            <div className="upadd">
-              {adding ? (
-                <>
-                  <input
-                    className="cgsearch"
-                    value={newName}
-                    disabled={busy}
-                    placeholder="Full name"
-                    onChange={(e) => setNewName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") addName();
-                    }}
-                    autoFocus
-                  />
-                  <div className="upaddacts">
-                    <button
-                      type="button"
-                      className="ighost"
-                      disabled={busy}
-                      onClick={() => {
-                        setAdding(false);
-                        setErr(null);
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="ibtn"
-                      disabled={busy || !newName.trim()}
-                      onClick={addName}
-                    >
-                      {busy ? "Adding…" : "Add"}
-                    </button>
-                  </div>
-                  <div className="imeta">
-                    Adds the name to this field in GoHighLevel, for every record.
-                  </div>
-                  {err ? <div className="savemsg err">✗ {err}</div> : null}
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="upaddbtn"
-                  onClick={() => setAdding(true)}
-                >
-                  + Add name…
-                </button>
-              )}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>
