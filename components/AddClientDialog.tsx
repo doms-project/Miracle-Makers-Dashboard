@@ -3,7 +3,85 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import UserPicker, { type PickableUser } from "./UserPicker";
 import { divisionLabel } from "@/lib/division";
-import type { ContactMatch } from "@/lib/types";
+import type { ContactMatch, EditableFieldDef } from "@/lib/types";
+
+const norm = (s: string): string => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// ITEM 3 — the three "more details" fields are NOT free text in GHL:
+//   Office                 MULTIPLE_OPTIONS  (Northeast Philly, Lansdowne, …)
+//   County                 SINGLE_OPTIONS
+//   Referral Source Type   SINGLE_OPTIONS
+// They were rendered as <input> here, which lets staff type a value no filter,
+// no report and no GHL workflow can read. Each now renders from its REAL field
+// definition — checkboxes for the multi, a select for the singles — exactly as
+// the record panel does, with the options read live from GHL.
+const DETAIL_FIELDS = ["Office", "County", "Referral Source Type"];
+
+function DetailField({
+  def,
+  value,
+  onChange,
+}: {
+  def: EditableFieldDef;
+  value: string | string[];
+  onChange: (v: string | string[]) => void;
+}) {
+  const t = (def.dataType || "").toUpperCase();
+  const cur = Array.isArray(value) ? value : value ? [value] : [];
+
+  if ((t === "MULTIPLE_OPTIONS" || t === "CHECKBOX") && def.options.length)
+    return (
+      <div className="multi">
+        {def.options.map((o) => {
+          const on = cur.includes(o);
+          return (
+            <label key={o} className={`chipbox ${on ? "on" : ""}`}>
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() =>
+                  onChange(on ? cur.filter((x) => x !== o) : [...cur, o])
+                }
+              />
+              {o}
+            </label>
+          );
+        })}
+      </div>
+    );
+
+  if (t === "SINGLE_OPTIONS" && def.options.length)
+    return (
+      <select
+        value={Array.isArray(value) ? value[0] || "" : value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">—</option>
+        {def.options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    );
+
+  // No options came back from GHL — free text is the honest fallback, but say
+  // so rather than silently pretending this is a text field.
+  return (
+    <>
+      <input
+        value={Array.isArray(value) ? value.join(", ") : value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {t.includes("OPTIONS") ? (
+        <div className="imeta">
+          No options came back from GoHighLevel for this field — anything typed
+          here may not match its picklist.
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 // ITEM 3 — Add Client.
 //
@@ -16,6 +94,7 @@ export default function AddClientDialog({
   pipelines,
   stagesByPipeline,
   users,
+  fieldDefs,
   viewerId,
   viewerName,
   isAdmin,
@@ -27,6 +106,7 @@ export default function AddClientDialog({
   pipelines: { id: string; name: string }[];
   stagesByPipeline: Record<string, { id: string; name: string }[]>;
   users: PickableUser[];
+  fieldDefs: EditableFieldDef[];
   viewerId: string;
   viewerName: string;
   isAdmin: boolean;
@@ -53,9 +133,9 @@ export default function AddClientDialog({
   const [oppName, setOppName] = useState("");
   const [oppNameTouched, setOppNameTouched] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [office, setOffice] = useState("");
-  const [county, setCounty] = useState("");
-  const [referral, setReferral] = useState("");
+  // Keyed by field id, because the values are now driven by the real field
+  // definitions rather than three hardcoded text inputs.
+  const [details, setDetails] = useState<Record<string, string | string[]>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -66,6 +146,16 @@ export default function AddClientDialog({
   // Set once they explicitly say "create a new one", so the prompt stops
   // reappearing on every keystroke.
   const [dismissed, setDismissed] = useState(false);
+
+  // The real definitions for Office / County / Referral Source Type, resolved
+  // by NAME from what GHL returned — no hardcoded field ids.
+  const detailDefs = useMemo(
+    () =>
+      DETAIL_FIELDS.map((n) =>
+        fieldDefs.find((d) => norm(d.name) === norm(n)),
+      ).filter(Boolean) as EditableFieldDef[],
+    [fieldDefs],
+  );
 
   const destStages = stagesByPipeline[pipelineId] || [];
   const destName = allowed.find((p) => p.id === pipelineId)?.name || "";
@@ -153,9 +243,13 @@ export default function AddClientDialog({
           assignedTo: isAdmin ? ownerId || undefined : undefined,
           oppName: oppName.trim() || undefined,
           contactId: chosen?.id,
-          office: office.trim() || undefined,
-          county: county.trim() || undefined,
-          referralSource: referral.trim() || undefined,
+          // Sent by field id with the real option values, so what lands in GHL
+          // matches the picklist exactly.
+          details: Object.fromEntries(
+            Object.entries(details).filter(([, v]) =>
+              Array.isArray(v) ? v.length : String(v).trim(),
+            ),
+          ),
         }),
       });
       const j = (await res.json().catch(() => ({}))) as {
@@ -371,21 +465,31 @@ export default function AddClientDialog({
           </button>
           {moreOpen ? (
             <div className="addgrid">
-              <div className="f">
-                <label>Office</label>
-                <input value={office} onChange={(e) => setOffice(e.target.value)} />
-              </div>
-              <div className="f">
-                <label>County</label>
-                <input value={county} onChange={(e) => setCounty(e.target.value)} />
-              </div>
-              <div className="f wide">
-                <label>Referral Source Type</label>
-                <input
-                  value={referral}
-                  onChange={(e) => setReferral(e.target.value)}
-                />
-              </div>
+              {detailDefs.length ? (
+                detailDefs.map((d) => (
+                  <div
+                    className={`f${(d.dataType || "").toUpperCase() === "MULTIPLE_OPTIONS" ? " wide" : ""}`}
+                    key={d.id}
+                  >
+                    <label>{d.name}</label>
+                    <DetailField
+                      def={d}
+                      value={details[d.id] ?? ((d.dataType || "").toUpperCase() === "MULTIPLE_OPTIONS" ? [] : "")}
+                      onChange={(v) =>
+                        setDetails((prev) => ({ ...prev, [d.id]: v }))
+                      }
+                    />
+                  </div>
+                ))
+              ) : (
+                <div className="f wide">
+                  <div className="imeta">
+                    Office, County and Referral Source Type couldn&apos;t be
+                    loaded from GoHighLevel. Add them on the record after it is
+                    created.
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
 

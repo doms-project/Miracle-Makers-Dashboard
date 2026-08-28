@@ -65,6 +65,9 @@ export interface Note {
   // `edited` renders the marker that keeps an overwrite honest.
   authorId?: string;
   edited?: boolean;
+  // ITEM 5 — soft-deleted. The note stays in history, struck through, showing
+  // who removed it and when; the original text is not kept.
+  removed?: boolean;
 }
 
 // Add Client (item 3) — what the modal posts. `assignedTo` is ADVISORY: the
@@ -79,9 +82,11 @@ export interface NewClientPayload {
   assignedTo?: string;
   oppName?: string;
   contactId?: string; // set when the user picked an existing contact
-  office?: string;
-  county?: string;
-  referralSource?: string;
+  // ITEM 3 — the collapsed "more details" fields, keyed BY FIELD ID with real
+  // option values. They were three free-text strings; Office is MULTIPLE_OPTIONS
+  // and County / Referral Source Type are SINGLE_OPTIONS, so free text produced
+  // values no filter, report or GHL workflow could read.
+  details?: Record<string, string | string[]>;
 }
 
 export interface ContactMatch {

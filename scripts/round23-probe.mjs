@@ -93,6 +93,27 @@ const cfKeyAndValue = (cf) => {
     `  the key — it is the same class of bug and the reader needs it added.`,
   );
 
+  // The open question from item 1: do the two "…Date and Time" fields actually
+  // carry a time, or is GHL storing them as plain dates like the other eight?
+  console.log(`\n=== B2. EVERY DATE FIELD DEFINED (not just the ones with a value) ===`);
+  const valueById = new Map((opp.customFields || []).map((c) => [c.id, c]));
+  for (const d of defs.filter((x) => (x.dataType || "").toUpperCase() === "DATE")) {
+    const [key, val] = cfKeyAndValue(valueById.get(d.id));
+    const t = val ? new Date(Number(val) || Date.parse(String(val))) : null;
+    const time = t && !isNaN(t) ? t.toISOString().slice(11, 19) : "";
+    console.log(
+      `  ${d.name.padEnd(34)} ${String(val || "(unset)").padEnd(18)} ${key.padEnd(18)} ${
+        time && time !== "00:00:00" && time !== "12:00:00" ? `TIME=${time}` : "(no time)"
+      }`,
+    );
+  }
+  console.log(
+    `\n  This answers the date-vs-datetime question with data: if "AAA In Person Date\n` +
+    `  and Time" and "MCO In Person Date and Time" show TIME=, they carry a real time\n` +
+    `  and the datetime editor is right. If every row says (no time), GHL is storing\n` +
+    `  them as plain dates and the two field NAMES are misleading, not the code.`,
+  );
+
   // ---- C. duplicates ------------------------------------------------------
   const contactId = opp.contactId || opp.contact?.id || "";
   if (contactId) {

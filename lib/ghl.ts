@@ -452,7 +452,7 @@ export async function getLocationUserIds(): Promise<Set<string>> {
 // transient failure (or a PIT missing the users scope) permanent for the life of
 // that warm lambda: every later request on that instance silently rendered raw
 // ids. Now a failure is logged loudly and NOT cached, so the next request retries.
-async function getUserMap(): Promise<Map<string, string>> {
+export async function getUserMap(): Promise<Map<string, string>> {
   if (cache.userMap) return cache.userMap;
   const { locationId } = requireEnv();
   const map = new Map<string, string>();
@@ -585,6 +585,12 @@ export function toGhlDate(value: unknown): string {
   const s = String(value).trim();
   if (!s) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T12:00:00.000Z`;
+  // ITEM 1 — <input type="datetime-local"> yields "2026-08-28T14:30" with NO
+  // zone, which `new Date()` reads as LOCAL time. The panel renders these
+  // inputs FROM UTC, so parsing them back as local would shift every
+  // appointment time by the server's offset on each save. Read it as UTC.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s))
+    return new Date(`${s}${s.length === 16 ? ":00" : ""}Z`).toISOString();
   const d = new Date(s);
   if (isNaN(d.getTime())) return s; // let GHL reject it rather than silently blanking
   return d.toISOString();
@@ -945,6 +951,7 @@ export interface OppNote {
   // viewer's OWN notes, but the server re-checks it and is the real boundary.
   authorId: string;
   edited: boolean;
+  removed: boolean; // ITEM 5 — soft-deleted: the text is a removal record
 }
 
 function fmtNoteDate(iso?: string): string {
@@ -993,6 +1000,7 @@ export async function listOpportunityNotes(
         txt: parsed.text,
         authorId: n.userId || "",
         edited: parsed.edited,
+        removed: parsed.removed,
       };
     });
 }
@@ -1017,25 +1025,35 @@ const DIVISION_TAG = /^\s*\[([^\]]{1,40})\]\s*/;
 // The original timestamp is kept for free: an edit sends ONLY the body, and GHL
 // does not touch `dateAdded` on update. Nothing recomputes it on read.
 const EDITED_TAG = "edited";
+// ITEM 5 — SOFT delete. The note is never erased: its text is replaced with a
+// removal record, and the tag is what tells the reader (and the UI) that this
+// slot held something. A hard delete would leave no trace that a note ever
+// existed, which is exactly the failure mode that got deletion rejected the
+// first time — on a transferred case the notes are the receiving rep's only
+// account of what happened.
+const REMOVED_TAG = "removed";
 
 export function parseNoteBody(body: string): {
   division: string;
   text: string;
   edited: boolean;
+  removed: boolean;
 } {
   let rest = body || "";
   let division = "";
   let edited = false;
+  let removed = false;
   for (;;) {
     const m = DIVISION_TAG.exec(rest);
     if (!m) break;
-    const tag = m[1].trim();
-    if (tag.toLowerCase() === EDITED_TAG) edited = true;
-    else if (!division) division = tag;
-    else break; // a third tag isn't ours — leave it in the text
+    const tag = m[1].trim().toLowerCase();
+    if (tag === EDITED_TAG) edited = true;
+    else if (tag === REMOVED_TAG) removed = true;
+    else if (!division) division = m[1].trim();
+    else break; // a further tag isn't ours — leave it in the text
     rest = rest.slice(m[0].length);
   }
-  return { division, text: rest, edited };
+  return { division, text: rest, edited, removed };
 }
 
 // Re-apply the tags a note carries. Used on edit so the division stamped at
@@ -1045,9 +1063,12 @@ export function buildNoteBody(
   text: string,
   division: string,
   edited: boolean,
+  removed = false,
 ): string {
   const clean = (division || "").replace(/[[\]]/g, "").trim();
-  return `${clean ? `[${clean}] ` : ""}${edited ? `[${EDITED_TAG}] ` : ""}${text}`;
+  return `${clean ? `[${clean}] ` : ""}${edited ? `[${EDITED_TAG}] ` : ""}${
+    removed ? `[${REMOVED_TAG}] ` : ""
+  }${text}`;
 }
 
 export function stampDivision(body: string, division: string): string {
@@ -1085,6 +1106,7 @@ export async function addOpportunityNote(
     txt: parsed.text,
     authorId: userId || "",
     edited: parsed.edited,
+    removed: parsed.removed,
   };
 }
 
@@ -1121,6 +1143,7 @@ export async function updateOpportunityNote(
     txt: parsed.text,
     authorId: userId || "",
     edited: parsed.edited,
+    removed: parsed.removed,
   };
 }
 
@@ -1460,6 +1483,57 @@ export async function upsertContact(fields: {
     body,
   );
   return { id: res.contact?.id || "", isNew: res.new !== false };
+}
+
+// ---------------------------------------------------------------------------
+// ITEM 4 — the hybrid picker's write half.
+//
+// Fields like Onboarding Rep / Case Manager / Sales Rep Assistant / HR-Assigned
+// Team are SINGLE_OPTIONS (or MULTIPLE_OPTIONS) holding a plain string. Most of
+// the people who belong in them ARE GHL users, so the picker lists those
+// automatically. But some — subcontractors, staff without a login — are not, and
+// those names have to live in the field's own picklist.
+//
+// Appending is ADMIN ONLY and gated in the route. This function does the write:
+// read the current options, append, PUT the whole list back (GHL replaces the
+// array, so it must be sent complete or existing options are destroyed).
+// ---------------------------------------------------------------------------
+export async function addFieldOption(
+  fieldId: string,
+  option: string,
+): Promise<string[]> {
+  const value = option.trim();
+  if (!value) throw new GhlError("An option needs a name.", 400);
+
+  const { locationId } = requireEnv();
+  const defs = await getFieldDefinitions();
+  const def = defs.find((d) => d.id === fieldId);
+  if (!def) throw new GhlError("That field does not exist.", 404, fieldId);
+
+  const t = String(def.dataType || "").toUpperCase();
+  if (t !== "SINGLE_OPTIONS" && t !== "MULTIPLE_OPTIONS")
+    throw new GhlError(
+      "That field does not have an option list.",
+      400,
+      `${def.name} is ${def.dataType}.`,
+    );
+
+  const current = optionStrings(def);
+  // Case-insensitive: "jhune" and "Jhune" must not both end up in the list.
+  if (current.some((o) => o.trim().toLowerCase() === value.toLowerCase()))
+    return current;
+
+  const options = [...current, value];
+  await ghlSend(
+    "PUT",
+    `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`,
+    { name: def.name, options },
+  );
+  // The definitions cache now holds a stale option list; drop it so the next
+  // read sees the new name rather than the panel showing an option that isn't
+  // in its own dropdown.
+  cache.fieldDefs = undefined;
+  return options;
 }
 
 // Generic contact typeahead, for the Add Client duplicate check. Same endpoint
