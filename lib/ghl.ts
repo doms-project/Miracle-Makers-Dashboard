@@ -521,17 +521,32 @@ interface RawOpportunity {
 
 // Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
 //
-// ITEM 1 (read side). This used to read exactly four fixed keys. GHL returns a
-// custom field's value under a key that varies by dataType and API surface
-// (fieldValueString / fieldValueArray / fieldValue / value — and typed variants
-// such as fieldValueDate / fieldValueNumber appear on some responses). Any key
-// outside that fixed list read back as "" — which is INDISTINGUISHABLE from
-// "never written". A stamp could land in GHL and still show blank here.
+// ITEM 1 (read side) — SETTLED, live.
 //
-// So: try the known keys first (order matters — array before string), then fall
-// back to ANY `fieldValue*` property that holds a value. The unknown key is
-// logged once so we learn the real shape instead of guessing at it.
-const KNOWN_CF_KEYS = ["fieldValueArray", "fieldValueString", "fieldValue", "value"];
+// This used to read exactly four fixed keys. GHL returns a custom field's value
+// under a key that varies by dataType, and DATE fields come back under
+// **fieldValueDate** — which was not in the list, so every DATE read back as ""
+// and was INDISTINGUISHABLE from "never written".
+//
+// That was the whole of the Transferred Date bug. The write was correct all
+// along; the READ was blind. Confirmed by the fallback below firing in
+// production:
+//   [ghl] custom-field value found under the unhandled key "fieldValueDate"
+//         (field XheOieRRGOFtSZc4TBWi)
+// The same applied to all ten Milestone dates — they were storing fine and
+// showing empty.
+//
+// fieldValueDate is now a KNOWN key, placed ahead of the generic ones so an
+// empty-but-present fieldValueString/fieldValue can never shadow it. The
+// `fieldValue*` fallback stays: it is what caught this, and it will catch the
+// next typed variant (fieldValueNumber, …) instead of silently blanking it.
+const KNOWN_CF_KEYS = [
+  "fieldValueArray",
+  "fieldValueDate",
+  "fieldValueString",
+  "fieldValue",
+  "value",
+];
 const _loggedCfKeys = new Set<string>();
 
 function cfRaw(cf: RawCustomField): unknown {
@@ -925,6 +940,11 @@ export interface OppNote {
   who: string; // author name
   when: string; // formatted date
   txt: string; // body text
+  // ITEM 4 — note editing. `authorId` is what the edit gate compares against;
+  // it is sent to the client so the UI can show the affordance only on the
+  // viewer's OWN notes, but the server re-checks it and is the real boundary.
+  authorId: string;
+  edited: boolean;
 }
 
 function fmtNoteDate(iso?: string): string {
@@ -961,15 +981,20 @@ export async function listOpportunityNotes(
         new Date(b.dateAdded || 0).getTime() -
         new Date(a.dateAdded || 0).getTime(),
     )
-    .map((n) => ({
-      id: n.id || "",
-      who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
-      when: fmtNoteDate(n.dateAdded),
-      // The division stamped at write time — NOT looked up now, so a later
-      // division change can never rewrite history.
-      division: parseNoteBody(n.body || "").division,
-      txt: parseNoteBody(n.body || "").text,
-    }));
+    .map((n) => {
+      const parsed = parseNoteBody(n.body || "");
+      return {
+        id: n.id || "",
+        who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
+        when: fmtNoteDate(n.dateAdded),
+        // The division stamped at write time — NOT looked up now, so a later
+        // division change can never rewrite history.
+        division: parsed.division,
+        txt: parsed.text,
+        authorId: n.userId || "",
+        edited: parsed.edited,
+      };
+    });
 }
 
 // ITEM 6 — the author's DIVISION AT WRITE TIME.
@@ -980,10 +1005,49 @@ export async function listOpportunityNotes(
 // Read back with parseNoteBody(); the tag is stripped for display.
 const DIVISION_TAG = /^\s*\[([^\]]{1,40})\]\s*/;
 
-export function parseNoteBody(body: string): { division: string; text: string } {
-  const m = DIVISION_TAG.exec(body || "");
-  if (!m) return { division: "", text: body || "" };
-  return { division: m[1].trim(), text: (body || "").slice(m[0].length) };
+// ITEM 4 — the "edited" marker.
+//
+// GHL's note object carries body / userId / dateAdded / relations and nothing
+// else we can hang metadata on, so the marker goes where the division already
+// goes: a leading bracket tag. Notes may now carry EITHER or BOTH, in either
+// order — `[OLTL] [edited] text` — so the parser consumes every leading tag and
+// classifies them, which keeps every pre-existing `[OLTL] text` note reading
+// exactly as before.
+//
+// The original timestamp is kept for free: an edit sends ONLY the body, and GHL
+// does not touch `dateAdded` on update. Nothing recomputes it on read.
+const EDITED_TAG = "edited";
+
+export function parseNoteBody(body: string): {
+  division: string;
+  text: string;
+  edited: boolean;
+} {
+  let rest = body || "";
+  let division = "";
+  let edited = false;
+  for (;;) {
+    const m = DIVISION_TAG.exec(rest);
+    if (!m) break;
+    const tag = m[1].trim();
+    if (tag.toLowerCase() === EDITED_TAG) edited = true;
+    else if (!division) division = tag;
+    else break; // a third tag isn't ours — leave it in the text
+    rest = rest.slice(m[0].length);
+  }
+  return { division, text: rest, edited };
+}
+
+// Re-apply the tags a note carries. Used on edit so the division stamped at
+// ORIGINAL write time survives — an edit must not relabel who wrote it or from
+// where, only what it says.
+export function buildNoteBody(
+  text: string,
+  division: string,
+  edited: boolean,
+): string {
+  const clean = (division || "").replace(/[[\]]/g, "").trim();
+  return `${clean ? `[${clean}] ` : ""}${edited ? `[${EDITED_TAG}] ` : ""}${text}`;
 }
 
 export function stampDivision(body: string, division: string): string {
@@ -1013,12 +1077,65 @@ export async function addOpportunityNote(
   );
   const userMap = await getUserMap();
   const n = res.note || {};
+  const parsed = parseNoteBody(n.body || body);
   return {
     id: n.id || "",
     who: (userId && userMap.get(userId)) || "You",
     when: fmtNoteDate(n.dateAdded) || "just now",
-    txt: n.body || body,
+    txt: parsed.text,
+    authorId: userId || "",
+    edited: parsed.edited,
   };
+}
+
+// ITEM 4 — edit a note IN PLACE.
+//
+// Decided deliberately, and the limits are real:
+//   - the AUTHOR only. Not admins: on a transferred case the notes are the
+//     receiving rep's account of what happened, and someone else rewriting them
+//     is worse than a typo.
+//   - NO delete. A gap nobody can see is worse than a visible correction.
+//   - this OVERWRITES the original text, so it is NOT a true audit trail. It is
+//     for typos, which is the actual need. The "[edited]" marker is what keeps
+//     it honest — a reader can always tell the text changed.
+//   - only `body` is sent, so GHL leaves `dateAdded` alone and the original
+//     timestamp stands.
+export async function updateOpportunityNote(
+  contactId: string,
+  noteId: string,
+  body: string,
+  userId: string,
+): Promise<OppNote> {
+  const res = await ghlSend<{ note?: RawNote }>(
+    "PUT",
+    `/contacts/${encodeURIComponent(contactId)}/notes/${encodeURIComponent(noteId)}`,
+    { body, ...(userId ? { userId } : {}) },
+  );
+  const userMap = await getUserMap();
+  const n = res.note || {};
+  const parsed = parseNoteBody(n.body || body);
+  return {
+    id: n.id || noteId,
+    who: (userId && userMap.get(userId)) || "You",
+    when: fmtNoteDate(n.dateAdded) || "",
+    txt: parsed.text,
+    authorId: userId || "",
+    edited: parsed.edited,
+  };
+}
+
+// Fetch ONE note raw, so the edit route can verify authorship and recover the
+// division stamped at original write time. Never trust the client for either.
+export async function getRawNote(
+  contactId: string,
+  noteId: string,
+): Promise<{ id: string; body: string; userId: string } | null> {
+  const data = await ghlGet<{ notes?: RawNote[] }>(
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+  );
+  const hit = (data.notes || []).find((n) => n.id === noteId);
+  if (!hit) return null;
+  return { id: hit.id || "", body: hit.body || "", userId: hit.userId || "" };
 }
 
 // Fetch + normalize a single opportunity (used by the save route to re-check
@@ -1345,6 +1462,28 @@ export async function upsertContact(fields: {
   return { id: res.contact?.id || "", isNew: res.new !== false };
 }
 
+// Generic contact typeahead, for the Add Client duplicate check. Same endpoint
+// and body shape as searchCaregiverContacts (proven live), minus the Record Type
+// filter — here we WANT every match, because the point is to notice that the
+// person already exists before creating them a second time.
+export async function searchContacts(
+  query: string,
+): Promise<{ id: string; name: string; email: string; phone: string }[]> {
+  const { locationId } = requireEnv();
+  if (!query.trim()) return [];
+  const data = await ghlSend<{ contacts?: RawContact[] }>(
+    "POST",
+    "/contacts/search",
+    { locationId, page: 1, pageLimit: 10, query: query.trim() },
+  );
+  return (data.contacts || []).map((c) => ({
+    id: String(c.id ?? c.contactId ?? ""),
+    name: contactDisplay(c),
+    email: String(c.email ?? ""),
+    phone: String(c.phone ?? ""),
+  }));
+}
+
 export async function createOpportunity(o: {
   pipelineId: string;
   stageId: string;
@@ -1352,6 +1491,7 @@ export async function createOpportunity(o: {
   name: string;
   source?: string;
   status?: string;
+  assignedTo?: string; // Add Client — the owner, forced server-side for reps
   customFields?: { id: string; value: unknown }[];
 }): Promise<string> {
   const { locationId } = requireEnv();
@@ -1363,6 +1503,7 @@ export async function createOpportunity(o: {
     name: o.name,
     status: o.status || "open",
   };
+  if (o.assignedTo) body.assignedTo = o.assignedTo;
   if (o.source) body.source = o.source;
   if (o.customFields?.length) body.customFields = o.customFields;
   const res = await ghlSend<{ opportunity?: { id?: string }; id?: string }>(
@@ -1539,7 +1680,7 @@ function matchOption(options: string[], value: string): string | null {
 //
 // Division stays a normal EDITABLE field: Move only ensures it is right by
 // default when the pipeline changes. It is deliberately NOT in READ_ONLY_FIELDS.
-async function divisionCustomField(
+export async function divisionCustomField(
   destPipelineName: string,
 ): Promise<{ id: string; value: unknown }[]> {
   const defs = await getFieldDefinitions();
@@ -1613,13 +1754,27 @@ export async function moveOpportunity(args: {
         "Add a TRANSFERRED IN stage to that pipeline before transferring into it.",
       );
     destStageId = ti.id;
+    if (!args.newOwnerId)
+      throw new GhlError("New owner is not a user of this location.", 400, "");
     const validUsers = await getLocationUserIds();
-    if (!args.newOwnerId || !validUsers.has(args.newOwnerId))
+    // Same trap as withGrants: getUserMap() swallows a failure and returns an
+    // EMPTY map, so a PIT missing `users.readonly` would make this reject EVERY
+    // transfer with a flatly untrue message ("not a user of this location") that
+    // sends you looking at the wrong thing entirely. An empty list means we
+    // cannot verify, not that the user is invalid — let GoHighLevel be the
+    // authority and reject it on the write if it really is bad.
+    if (!validUsers.size) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[move] cannot verify that "${args.newOwnerId}" is a location user — the users lookup is empty (check the PIT's users.readonly scope). Proceeding; GoHighLevel will reject the owner change if the id is invalid.`,
+      );
+    } else if (!validUsers.has(args.newOwnerId)) {
       throw new GhlError(
         "New owner is not a user of this location.",
         400,
-        String(args.newOwnerId ?? ""),
+        String(args.newOwnerId),
       );
+    }
   } else {
     if (!destStageId) {
       const first = (dest.stages || [])[0];

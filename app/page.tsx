@@ -27,6 +27,8 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import UserPicker from "@/components/UserPicker";
+import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import { divisionLabel } from "@/lib/division";
 
@@ -614,6 +616,13 @@ export default function Dashboard() {
   // Persistent notes (stored on the contact, scoped to the opportunity).
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [noteDraft, setNoteDraft] = useState("");
+  // ITEM 3 — Add Client modal.
+  const [addOpen, setAddOpen] = useState(false);
+  // ITEM 4 — the note currently being edited, and its working text.
+  const [editingNote, setEditingNote] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesErr, setNotesErr] = useState<string | null>(null);
   const [noteBusy, setNoteBusy] = useState(false);
@@ -797,11 +806,12 @@ export default function Dashboard() {
         if (!cancelled)
           setNotes((prev) => ({
             ...prev,
-            [selId]: (j.notes || []).map((n) => ({
-              who: n.who,
-              when: n.when,
-              txt: n.txt,
-            })),
+            // Keep the WHOLE note. This used to rebuild it as
+            // { who, when, txt } — which silently dropped `division`, so the
+            // panel's `n.division ? …` badge could never render even when the
+            // server had stamped it correctly. It now also carries `id`,
+            // `authorId` and `edited`, which the edit affordance needs.
+            [selId]: j.notes || [],
           }));
       })
       .catch((e) => {
@@ -1257,7 +1267,9 @@ export default function Dashboard() {
       const n = j.note;
       setNotes((prev) => ({
         ...prev,
-        [selId]: [{ who: n.who, when: n.when, txt: n.txt }, ...(prev[selId] || [])],
+        // Same as the loader: keep the whole note, or the new note loses its
+        // division badge and its id (and so cannot be edited until a reload).
+        [selId]: [n, ...(prev[selId] || [])],
       }));
       setNoteDraft(""); // clear only on success — never lose typed input
     } catch (e) {
@@ -1268,6 +1280,50 @@ export default function Dashboard() {
   };
 
   const selNotes = (selId && notes[selId]) || [];
+
+  // ITEM 4 — save an edit to the viewer's OWN note. The affordance is only shown
+  // on their own notes; the route re-checks authorship and is the real gate.
+  const saveNoteEdit = async (noteId: string) => {
+    const v = editDraft.trim();
+    if (!v || !selId || editBusy) return;
+    setEditBusy(true);
+    setEditErr(null);
+    try {
+      const res = await fetch(
+        `/api/opportunities/${selId}/notes/${encodeURIComponent(noteId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", ...ssoHeader() },
+          body: JSON.stringify({
+            ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            body: v,
+          }),
+        },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        note?: Note;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok || !j.ok)
+        throw new Error(j.detail || j.error || `HTTP ${res.status}`);
+      setNotes((prev) => ({
+        ...prev,
+        [selId]: (prev[selId] || []).map((n) =>
+          n.id === noteId
+            ? { ...n, txt: j.note?.txt ?? v, edited: true }
+            : n,
+        ),
+      }));
+      setEditingNote(null);
+      setEditDraft("");
+    } catch (e) {
+      setEditErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
 
   // ---- Phase 2 save: optimistic update, revert on failure ----
   const skey = (id: string, fk: string) => `${id}:${fk}`;
@@ -1537,6 +1593,17 @@ export default function Dashboard() {
               <span title={sso.reason}>No SSO session</span>
             )}
           </div>
+          {/* ITEM 3 — Add Client. Beside the tabs, but deliberately NOT one of
+              them: it opens a modal you complete and leave, the same shape as
+              Move. A tab would imply somewhere to return to. */}
+          <button
+            type="button"
+            className="addclientbtn"
+            onClick={() => setAddOpen(true)}
+            title="Create a new client and their case"
+          >
+            + Add Client
+          </button>
           <div className="seg">
             <button
               className={view === "list" ? "on" : ""}
@@ -2115,6 +2182,31 @@ export default function Dashboard() {
         />
       ) : null}
 
+      {/* Add Client (item 3) */}
+      {addOpen ? (
+        <AddClientDialog
+          pipelines={pipelines}
+          stagesByPipeline={stagesByPipeline}
+          users={users}
+          viewerId={viewerId || ""}
+          viewerName={
+            (sso.status === "ready" ? sso.session.userName : "") ||
+            (viewerId ? userLabel(viewerId).split(" — ")[0] : "") ||
+            "you"
+          }
+          isAdmin={isAdminViewer}
+          homePipelineIds={homePipelineIds}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          onClose={() => setAddOpen(false)}
+          onCreated={(oppId) => {
+            // Refresh, then OPEN the new record so they can fill in the rest.
+            load().then(() => {
+              if (oppId) setSelId(oppId);
+            });
+          }}
+        />
+      ) : null}
+
       {/* email composer (Task 5) */}
       {selected && emailOpen ? (
         <EmailComposer
@@ -2313,40 +2405,29 @@ export default function Dashboard() {
               <div className="grid">
                 <div className="f">
                   <label>Sales Rep (Owner)</label>
-                  <select
-                    className="v edit"
+                  {/* ITEM 2 — was a native <select> rendering
+                      "Jhune Manalaysay - Onboarding — —" on one unstyleable
+                      line. UserPicker puts the name on its own line with the
+                      division as a muted chip, and adds a filter (25 users).
+                      Owner still lists EVERYONE — a rep must be able to
+                      reassign to a colleague. */}
+                  <UserPicker
+                    users={users}
                     value={selected.ownerId}
                     disabled={savingFk(selected.id, "owner")}
-                    onChange={(e) =>
+                    onChange={(id) =>
                       saveField(
                         selected,
                         "owner",
-                        { assignedTo: e.target.value || null },
+                        { assignedTo: id || null },
                         (r) => ({
                           ...r,
-                          ownerId: e.target.value,
-                          rep:
-                            users.find((u) => u.id === e.target.value)?.name ||
-                            "—",
+                          ownerId: id,
+                          rep: users.find((u) => u.id === id)?.name || "—",
                         }),
                       )
                     }
-                  >
-                    <option value="">Unassigned</option>
-                    {/* Owner lists EVERYONE — a rep must be able to reassign to
-                        a colleague. Division label after each name. */}
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} —{" "}
-                        {u.divisions?.length ? u.divisions.join(" · ") : "—"}
-                      </option>
-                    ))}
-                    {/* An owner who no longer exists still renders, never blank. */}
-                    {selected.ownerId &&
-                    !users.some((u) => u.id === selected.ownerId) ? (
-                      <option value={selected.ownerId}>Former user</option>
-                    ) : null}
-                  </select>
+                  />
                   {saveMsgFor(selected.id, "owner")}
                 </div>
                 <div className="f wide">
@@ -2383,32 +2464,23 @@ export default function Dashboard() {
                           <span className="muted">No followers</span>
                         )}
                       </div>
-                      <select
-                        className="v edit"
+                      {/* ITEM 2 — same treatment. This one is an ACTION rather
+                          than a value, so the trigger keeps its fixed label. */}
+                      <UserPicker
+                        users={users.filter(
+                          (u) =>
+                            u.id !== selected.ownerId &&
+                            !selected.followerIds.includes(u.id),
+                        )}
                         value=""
+                        allowUnassigned={false}
+                        triggerLabel="+ Add follower…"
+                        emptyLabel="Everyone is already the owner or a follower."
                         disabled={savingFk(selected.id, "followers")}
-                        onChange={(e) => {
-                          if (e.target.value)
-                            saveFollowers(selected, { add: [e.target.value] });
-                          e.target.value = "";
+                        onChange={(id) => {
+                          if (id) saveFollowers(selected, { add: [id] });
                         }}
-                      >
-                        <option value="">+ Add follower…</option>
-                        {users
-                          .filter(
-                            (u) =>
-                              u.id !== selected.ownerId &&
-                              !selected.followerIds.includes(u.id),
-                          )
-                          .map((u) => (
-                            <option key={u.id} value={u.id}>
-                              {u.name} —{" "}
-                              {u.divisions?.length
-                                ? u.divisions.join(" · ")
-                                : "—"}
-                            </option>
-                          ))}
-                      </select>
+                      />
                       {saveMsgFor(selected.id, "followers")}
                     </div>
                   ) : (
@@ -2474,20 +2546,88 @@ export default function Dashboard() {
                     <p className="savemsg err">✗ {notesErr}</p>
                   </div>
                 ) : selNotes.length ? (
-                  selNotes.map((n, i) => (
-                    <div className="note" key={i}>
-                      <div className="nh">
-                        <b>{n.who}</b>
-                        {/* ITEM 6 — division AT WRITE TIME, stamped into the
-                            note when it was created, never looked up now. */}
-                        {n.division ? (
-                          <span className="ndiv"> ({n.division})</span>
-                        ) : null}{" "}
-                        · {n.when}
+                  selNotes.map((n, i) => {
+                    // ITEM 4 — the author may edit their OWN note. Not admins:
+                    // on a transferred case these notes are the receiving rep's
+                    // account of what happened.
+                    const mine = !!viewerId && n.authorId === viewerId;
+                    const editing = editingNote === n.id && !!n.id;
+                    return (
+                      <div className="note" key={n.id || i}>
+                        <div className="nh">
+                          <b>{n.who}</b>
+                          {/* ITEM 6 — division AT WRITE TIME, stamped into the
+                              note when it was created, never looked up now. */}
+                          {n.division ? (
+                            <span className="ndiv"> ({n.division})</span>
+                          ) : null}{" "}
+                          {/* The original timestamp, kept across edits. */}
+                          · {n.when}
+                          {n.edited ? (
+                            <span
+                              className="nedited"
+                              title="This note was edited after it was written. The original text is not kept."
+                            >
+                              edited
+                            </span>
+                          ) : null}
+                          {mine && n.id && !editing ? (
+                            <button
+                              type="button"
+                              className="noteedit"
+                              onClick={() => {
+                                setEditingNote(n.id);
+                                setEditDraft(n.txt);
+                                setEditErr(null);
+                              }}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
+                        </div>
+                        {editing ? (
+                          <div className="noteeditbox">
+                            <textarea
+                              value={editDraft}
+                              disabled={editBusy}
+                              onChange={(e) => setEditDraft(e.target.value)}
+                              rows={3}
+                            />
+                            <div className="noteeditacts">
+                              <button
+                                type="button"
+                                className="ighost"
+                                disabled={editBusy}
+                                onClick={() => {
+                                  setEditingNote(null);
+                                  setEditErr(null);
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                className="ibtn"
+                                disabled={editBusy || !editDraft.trim()}
+                                onClick={() => saveNoteEdit(n.id)}
+                              >
+                                {editBusy ? "Saving…" : "Save"}
+                              </button>
+                            </div>
+                            <div className="imeta">
+                              Editing replaces the text — the original isn&apos;t
+                              kept. Notes can&apos;t be deleted.
+                            </div>
+                            {editErr ? (
+                              <div className="savemsg err">✗ {editErr}</div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p>{n.txt}</p>
+                        )}
                       </div>
-                      <p>{n.txt}</p>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="note">
                     <p className="muted">No notes yet.</p>

@@ -41,6 +41,30 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   try {
     userIds = await getLocationUserIds();
     pipelineIds = new Set((await listPipelines()).map((p) => p.id));
+    // getLocationUserIds() is built on getUserMap(), which SWALLOWS a failure and
+    // returns an EMPTY map (deliberately — it must not take down the read path).
+    // So a PIT missing `users.readonly` does not throw here; it succeeds with
+    // zero users, and buildGrants then validates every stored grant against an
+    // empty set and discards ALL of them as stale. That is how a users-scope 401
+    // silently wipes the entire pipeline access map: no division on Move notes,
+    // and every non-admin browsing nothing.
+    //
+    // An EMPTY list is "unavailable", not "nothing exists". Treat it exactly like
+    // the throw below — skip validation, keep the grants.
+    if (!userIds.size) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[grants] the users lookup returned ZERO users (usually a PIT missing the users.readonly scope) — SKIPPING grant validation so the access map is not wiped. Grant that scope: owner/follower names, the pickers and transfer owner-validation all depend on it.",
+      );
+      userIds = undefined;
+    }
+    if (!pipelineIds.size) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[grants] the pipeline list came back EMPTY — SKIPPING grant validation rather than discarding every grant.",
+      );
+      pipelineIds = undefined;
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(
