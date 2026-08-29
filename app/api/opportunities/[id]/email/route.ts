@@ -11,6 +11,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord } from "@/lib/visibility";
 import { EMAIL_TEMPLATES } from "@/lib/emailTemplates";
 import type { ApiError, EmailRecipient, EmailSendResult } from "@/lib/types";
+import { withGrants } from "@/lib/withGrants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -94,7 +95,7 @@ function fail(e: unknown): NextResponse {
 }
 
 // GET — recipients (client + caregivers, with emails) + templates for the composer.
-export async function GET(
+async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -158,7 +159,7 @@ export async function GET(
 }
 
 // POST { ssoKey?, recipientContactIds[], subject, html, cc? } — send per recipient.
-export async function POST(
+async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -235,4 +236,23 @@ export async function POST(
   } catch (e) {
     return fail(e);
   }
+}
+
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => getHandler(request, ctx));
+}
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => postHandler(request, ctx));
 }

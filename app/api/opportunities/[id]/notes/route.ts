@@ -6,8 +6,11 @@ import {
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
-import { canEditRecord } from "@/lib/visibility";
+import { canEditRecord, isAdminSession } from "@/lib/visibility";
 import type { ApiError, OpportunityRecord } from "@/lib/types";
+import { withGrants } from "@/lib/withGrants";
+import { userDivisions } from "@/lib/pipelineAccess";
+import { listPipelines, stampDivision } from "@/lib/ghl";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,7 +79,7 @@ function errorResponse(e: unknown): Response {
 }
 
 // GET — list this opportunity's notes. SSO blob passed via header.
-export async function GET(
+async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -96,7 +99,7 @@ export async function GET(
 }
 
 // POST — add a note (author = the decrypted session's userId).
-export async function POST(
+async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -123,12 +126,58 @@ export async function POST(
     let userId = "";
     if (ssoConfigured() && blob) userId = decryptSso(blob).userId;
 
-    const note = await addOpportunityNote(gate.contactId, id, text, userId);
+    // Stamp the author's division AT WRITE TIME (ITEM 6). GHL's note object has
+    // no metadata field, so it goes in the body and is parsed back out on read.
+    let division = "";
+    if (userId) {
+      try {
+        division = userDivisions(
+          userId,
+          new Map((await listPipelines()).map((p) => [p.id, p.name])),
+        ).join(" · ");
+        // ITEM 2 — same admin fallback as Move, so a manual note and a Move note
+        // written by the same person never disagree about their division.
+        if (!division && ssoConfigured() && blob) {
+          const s = decryptSso(blob);
+          if (isAdminSession(s.role, s.type)) division = "Admin";
+        }
+      } catch {
+        /* unstamped rather than failing the note */
+      }
+    }
+    const note = await addOpportunityNote(
+      gate.contactId,
+      id,
+      stampDivision(text, division),
+      userId,
+    );
     return NextResponse.json(
-      { ok: true, note },
+      // ITEM 2 — `division` is echoed on the note. addOpportunityNote parses it
+      // OFF the body for display, so without this the optimistic insert in the
+      // panel showed the new note with no division badge until a reload.
+      { ok: true, note: { ...note, division } },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
     return errorResponse(e);
   }
+}
+
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => getHandler(request, ctx));
+}
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => postHandler(request, ctx));
 }
