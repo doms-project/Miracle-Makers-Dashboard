@@ -7,13 +7,14 @@ import {
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord } from "@/lib/visibility";
 import type { ApiError } from "@/lib/types";
+import { withGrants } from "@/lib/withGrants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Typeahead for the add-caregiver picker. Same visibility gate as managing the
 // record (own/follow, or admin). Filters to Record Type = "Caregiver".
-export async function GET(
+async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -65,4 +66,14 @@ export async function GET(
       { status: 500 },
     );
   }
+}
+
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => getHandler(request, ctx));
 }

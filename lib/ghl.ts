@@ -2485,18 +2485,37 @@ export async function createCaregiverRelation(
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
   });
-  // 🔴 DIRECTION WAS INVERTED HERE. This wrote the CLIENT into firstRecordId,
-  // which the association labels as the Caregiver slot, and the caregiver into
-  // secondRecordId, labelled Client. Every link the dashboard created is stored
-  // backwards relative to the association's own definition — see
-  // scripts/relation-direction-audit.mjs, which lists them and can repair them.
-  // Nothing is rewritten automatically: these are HIPAA-scoped case records.
-  const dir = await getAssociationDirection();
+  // ⚠️ SLOT ORDER IS UNRESOLVED — DO NOT "FIX" IT WITHOUT EVIDENCE.
+  //
+  // Report 29 claimed this was inverted and changed it. The claim was made by
+  // reading THIS function alone, without checking the caller, and the only real
+  // relation in the account contradicts it: a link created through the dashboard
+  // audits as OK (caregiver in the caregiver slot).
+  //
+  // What is actually established:
+  //   - the caller passes (a.contactId, body.caregiverContactId), i.e. the
+  //     OPPORTUNITY'S OWN CONTACT first and the picked contact second;
+  //   - so this puts the opportunity's contact in firstRecordId, which the
+  //     definition labels "Caregiver";
+  //   - in the intended flow (open a CLIENT's case, add their caregiver) that
+  //     would store the client in the caregiver slot — inverted;
+  //   - but the one observed relation is OK, which is explainable EITHER by
+  //     GoHighLevel normalising the slots on create, OR by that link having been
+  //     made from the CAREGIVER's own record (so the roles were reversed by the
+  //     user's action, landing correctly by accident).
+  //
+  // Those two explanations demand OPPOSITE fixes, and there is no data to choose
+  // between them. scripts/relation-slot-order-probe.mjs settles it in one write:
+  // POST with a known first/second and read back which slot each landed in.
+  //
+  // Until then this keeps the ORIGINAL ordering, unchanged since the feature
+  // shipped — because flipping it on an unproven theory would invert the one
+  // relation that currently reads correctly.
   const body = {
     locationId,
     associationId: caregiverAssociationId,
-    firstRecordId: dir.firstIsCaregiver ? caregiverContactId : clientContactId,
-    secondRecordId: dir.firstIsCaregiver ? clientContactId : caregiverContactId,
+    firstRecordId: clientContactId,
+    secondRecordId: caregiverContactId,
   };
   const res = await ghlSend<{ relation?: RawRelation; id?: string }>(
     "POST",

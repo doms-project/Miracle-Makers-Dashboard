@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * 🔴 THE CAREGIVER ASSOCIATION IS DIRECTIONAL AND THE DASHBOARD WROTE IT
- *    BACKWARDS. This lists the damage. It repairs nothing unless you ask.
+ * Lists every caregiver_client relation for the contacts you name and judges the
+ * stored direction against each contact's Record Type. Repairs nothing unless
+ * you ask.
  *
- * createCaregiverRelation() used to send:
- *     firstRecordId  = the CLIENT      <- but firstObjectLabel is "Caregiver"
- *     secondRecordId = the CAREGIVER   <- but secondObjectLabel is "Client"
- *
- * So every link the dashboard created is stored inverted relative to the
- * association's own definition. Native GHL reads those slots by label, which is
- * why it shows them the wrong way round. The write is fixed going forward;
- * rows created BEFORE that fix are still inverted and this finds them.
+ * ⚠️ THE WRITE PATH IS NOT KNOWN TO BE INVERTED. An earlier report claimed it
+ * was; the first real audit contradicted that (a dashboard-created relation came
+ * back OK). Run scripts/relation-slot-order-probe.mjs FIRST — it settles whether
+ * GoHighLevel stores the slots as sent or reorders them. Until that is answered,
+ * an INVERTED verdict here means "this row disagrees with the Record Types",
+ * not "the dashboard wrote it backwards".
  *
  *   $env:GHL_PIT="pit-..."
  *   $env:CAREGIVER_ASSOCIATION_ID="6a90455aa6611a60576d1ecc"

@@ -3,11 +3,14 @@ import {
   getOpportunityById,
   getEditableFieldDefs,
   updateOpportunity,
+  explainGhlError,
+  toGhlDate,
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession, canEditRecord } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
+import { withGrants } from "@/lib/withGrants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,10 +37,20 @@ function formatValue(def: EditableFieldDef, value: unknown): unknown {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   }
+  // ITEM 1 — DATE had NO branch here, so it fell through to String(value) and a
+  // date field was written with whatever `<input type="date">` produces:
+  // "2026-08-28". A bare date is not the shape proven to store; a full ISO 8601
+  // string is. Without this, every DATE field in the panel — all ten Milestones
+  // included — writes a value GoHighLevel can drop, with a 200 and no error.
+  // An empty string is passed through unchanged so a date can still be CLEARED.
+  if (t === "DATE") {
+    if (value == null || String(value).trim() === "") return "";
+    return toGhlDate(value);
+  }
   return value == null ? "" : String(value);
 }
 
-export async function PATCH(
+async function patchHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -134,8 +147,14 @@ export async function PATCH(
     }
     if (e instanceof GhlError) {
       const status = e.status >= 400 && e.status < 600 ? e.status : 502;
+      // Surface GHL's own reason (e.g. the pipeline-permission 400 on an owner
+      // change), resolved to real names rather than raw ids.
       return NextResponse.json(
-        { error: e.message, detail: e.detail, status: e.status } as ApiError,
+        {
+          error: "Couldn't save.",
+          detail: await explainGhlError(e),
+          status: e.status,
+        } as ApiError,
         { status },
       );
     }
@@ -147,4 +166,14 @@ export async function PATCH(
       { status: 500 },
     );
   }
+}
+
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function PATCH(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => patchHandler(request, ctx));
 }

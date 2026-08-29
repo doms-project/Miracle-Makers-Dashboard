@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
-import { getOpportunityById, moveOpportunity, GhlError } from "@/lib/ghl";
+import {
+  getOpportunityById,
+  moveOpportunity,
+  explainGhlError,
+  GhlError,
+} from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
-import { canEditRecord, canManageFollowers } from "@/lib/visibility";
+import { canEditRecord, canManageFollowers, isAdminSession } from "@/lib/visibility";
+import { userDivisions, getUserHomePipelines } from "@/lib/pipelineAccess";
+import { listPipelines } from "@/lib/ghl";
 import type { ApiError } from "@/lib/types";
+import { withGrants } from "@/lib/withGrants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,7 +30,68 @@ export const maxDuration = 60;
 //   simple move (owner unchanged) -> canEditRecord (own/follow/admin/home-unassigned)
 //   transfer    (owner changed)   -> owner or admin only; a follower must not be
 //                                    able to hand someone else's case away.
-export async function POST(
+// Resolve the acting user's division for the note stamp, reporting the exact
+// reason when it can't be determined. Never throws — a missing stamp must not
+// fail a Move.
+async function resolveActorDivision(
+  session: { userId: string; role?: string; type?: string } | null,
+): Promise<string> {
+  if (!session?.userId) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[move:division] no SSO session (GHL_SSO_SECRET unset, or no blob sent) — the note will have no [DIVISION] prefix and no author.",
+    );
+    return "";
+  }
+  let pipelineNameById: Map<string, string>;
+  try {
+    pipelineNameById = new Map(
+      (await listPipelines()).map((p) => [p.id, p.name]),
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[move:division] pipelines could not be listed, so home pipelines can't be named:",
+      e instanceof Error ? e.message : String(e),
+    );
+    return "";
+  }
+
+  const home = getUserHomePipelines(session.userId);
+  const divisions = userDivisions(session.userId, pipelineNameById);
+  if (divisions.length) return divisions.join(" · ");
+
+  if (!home.size) {
+    // ITEM 2 — an ADMIN legitimately has no single division: applyAccess
+    // bypasses the map entirely, so most admins have no entry in it at all.
+    // Leaving the stamp empty is *correct* but reads as broken — a gap where
+    // every other note has a label. "(Admin)" is true, and it distinguishes an
+    // admin's action from a rep's, which is worth recording in note history.
+    //
+    // An admin who IS listed in the access map still gets their real division:
+    // grants are checked first, and this is only the fallback.
+    if (isAdminSession(session.role, session.type)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[move:division] user ${session.userId} is an admin with no entry in the access map — stamping "Admin". Add them in the Pipeline Access tab if their notes should read a real division instead.`,
+      );
+      return "Admin";
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[move:division] user ${session.userId} (role "${session.role ?? "—"}") has NO home pipelines in the effective grants — add them in the Pipeline Access tab, or to PIPELINE_ACCESS_MAP. See the [grants] line above for what was loaded.`,
+    );
+    return "";
+  }
+  // Granted, but the ids didn't turn into division labels.
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[move:division] user ${session.userId} is granted ${[...home].join(", ")}, but none resolved to a division label. Known pipelines: ${[...pipelineNameById.entries()].map(([id, n]) => `${id}=${n}`).join(", ")}.`,
+  );
+  return "";
+}
+
+async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -83,6 +152,23 @@ export async function POST(
         );
     }
 
+    // The author's division AT WRITE TIME — resolved now and stamped into the
+    // note body, never looked up on read (that would rewrite history if the
+    // author later changes division).
+    //
+    // ITEM 2. This resolved to "" with no explanation, and stampDivision then
+    // correctly returned the body unprefixed — a silent no-op that looked like a
+    // broken stamp. There are FOUR distinct ways it lands empty, and they need
+    // different fixes, so each one now says which it is:
+    //   a. SSO not configured -> session is null -> no identity at all
+    //   b. the actor has no HOME pipelines in the grants map (note: ADMINS are
+    //      never required to be in that map — applyAccess bypasses it — so an
+    //      admin doing the Move legitimately has no division)
+    //   c. their granted pipeline ids don't resolve to names (deleted pipeline,
+    //      or an id outside listPipelines())
+    //   d. divisionLabel() returned nothing for those names
+    const actorDivision = await resolveActorDivision(session);
+
     const result = await moveOpportunity({
       oppId: id,
       toPipelineId: body.toPipelineId,
@@ -90,24 +176,43 @@ export async function POST(
       newOwnerId: body.newOwnerId ?? undefined,
       reason: body.reason,
       actorUserId: session?.userId || "",
+      actorDivision,
       addSenderAsFollower: !!body.addSenderAsFollower,
     });
 
     // A partial move is reported as 500 WITH the completed steps, so the caller
     // can finish manually instead of believing the move succeeded.
-    if (result.failedStep)
+    if (result.failedStep) {
+      const parts = [
+        `Completed: ${result.steps.join(" → ") || "nothing"}.`,
+      ];
+      if (result.stranded)
+        parts.push(
+          "⚠️ THIS RECORD IS STRANDED: the owner has already changed and followers were cleared, but it is STILL IN THE SOURCE PIPELINE. The new owner will only see it as 'shared' and the previous owner cannot see it at all — nobody will find it by browsing. Move it to the destination pipeline in GoHighLevel now, or re-run this Move (the owner change is already done, so it will be treated as a simple move).",
+        );
+      if (result.attemptedFollowerRemovals?.length)
+        parts.push(
+          `Follower removals attempted (verify in GHL; any still attached keep shared access): ${result.attemptedFollowerRemovals.join(", ")}.`,
+        );
+      if (result.error) parts.push(result.error);
       return NextResponse.json(
         {
-          error: `Move stopped at "${result.failedStep}".`,
-          detail: `Completed: ${result.steps.join(" → ") || "nothing"}. ${result.error ?? ""}`,
+          error: result.stranded
+            ? "Move incomplete — record stranded in the source pipeline."
+            : `Move stopped at "${result.failedStep}".`,
+          detail: parts.join(" "),
           status: 500,
         } as ApiError,
         { status: 500 },
       );
+    }
 
     const record = await getOpportunityById(id);
     return NextResponse.json(
-      { ok: true, ...result, record },
+      // `actorDivision` is echoed so the stamp can be checked from the response
+      // itself — an empty string here is the proof that the prefix was skipped,
+      // without having to go and read the server logs.
+      { ok: true, ...result, actorDivision, record },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
@@ -117,8 +222,10 @@ export async function POST(
         { status: e.status },
       );
     if (e instanceof GhlError)
+      // explainGhlError turns GHL's id-only pipeline-permission 400 into a
+      // named, actionable message; other errors keep their reason.
       return NextResponse.json(
-        { error: e.message, detail: e.detail } as ApiError,
+        { error: "Move failed.", detail: await explainGhlError(e) } as ApiError,
         { status: e.status >= 400 && e.status < 600 ? e.status : 502 },
       );
     return NextResponse.json(
@@ -126,4 +233,14 @@ export async function POST(
       { status: 500 },
     );
   }
+}
+
+
+// Grants are loaded once per request so canSeeRecord/canEditRecord see the
+// live pipeline-access custom value rather than only the env var.
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => postHandler(request, ctx));
 }
