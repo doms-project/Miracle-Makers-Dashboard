@@ -950,7 +950,12 @@ export interface OppNote {
   id: string;
   who: string; // author name
   when: string; // formatted date
-  txt: string; // body text
+  txt: string; // body text (system + reason)
+  // ITEM 2 — a Move note is one note carrying a SYSTEM record and the author's
+  // own words. Only the second half may be edited or withdrawn.
+  isMove: boolean;
+  system: string; // "" for a manual note
+  reason: string; // the whole text for a manual note
   // ITEM 4 — note editing. `authorId` is what the edit gate compares against;
   // it is sent to the client so the UI can show the affordance only on the
   // viewer's OWN notes, but the server re-checks it and is the real boundary.
@@ -1006,6 +1011,11 @@ export async function listOpportunityNotes(
         authorId: n.userId || "",
         edited: parsed.edited,
         removed: parsed.removed,
+        // ITEM 2 — a Move note's two halves, split by the separator Move wrote.
+        // The panel greys the system half and lets the author edit only theirs.
+        isMove: parsed.isMove,
+        system: parsed.system,
+        reason: parsed.reason,
       };
     });
 }
@@ -1038,47 +1048,138 @@ const EDITED_TAG = "edited";
 // account of what happened.
 const REMOVED_TAG = "removed";
 
-export function parseNoteBody(body: string): {
+// ---------------------------------------------------------------------------
+// A Move note carries TWO things in one body:
+//
+//   "Moved from ODP Enrollment to OLTL Enrollment. New owner: Chris." | "test transfer"
+//    └──────────────── SYSTEM record ──────────────────────────────┘   └ rep's words ┘
+//
+// The author may correct or withdraw THEIR words. They may not erase the fact
+// that a transfer happened — the receiving rep would inherit a case with no
+// account of how it got there.
+//
+// THE BOUNDARY MECHANISM: a UNIT SEPARATOR (U+001F) written by Move itself.
+//
+// Not a "Reason: " substring search — a rep can type that inside their own
+// text, and the split would then cut in the wrong place and let them rewrite
+// the system record. U+001F is a non-printing control character: it cannot be
+// typed into the note box, cannot survive a copy-paste of visible text, and
+// renders as nothing in GoHighLevel's own note view. So the split point is
+// unforgeable by anything a user can enter.
+const REASON_SEP = "\u001F";
+
+// Move-written notes are FLAGGED AT CREATION with [move] rather than recognised
+// by their wording — otherwise a rep could type "Moved from X to Y." into a
+// manual note and buy their text the same protection from editing.
+const MOVE_TAG = "move";
+
+// Notes written BEFORE the flag existed have no [move] tag. They are recognised
+// by the sentence Move generated, and ONLY as a fallback for untagged notes —
+// never for new ones. The capture keeps the system sentence intact and hands
+// back whatever followed "Reason: " as the rep's words.
+const LEGACY_MOVE =
+  /^(Moved from .+? to .+?\.(?: New owner: .+?\.)?|Stage changed in .+?\.)\s*(?:Reason:\s*)?([\s\S]*)$/;
+
+export interface NoteParts {
   division: string;
-  text: string;
   edited: boolean;
   removed: boolean;
-} {
+  isMove: boolean; // written by Move — its system half is protected
+  system: string; // the Move sentence; "" for a manual note
+  reason: string; // the author's own words; the WHOLE text for a manual note
+  text: string; // system + reason, for anything that just wants to read it
+}
+
+export function parseNoteBody(body: string): NoteParts {
   let rest = body || "";
   let division = "";
   let edited = false;
   let removed = false;
+  let isMove = false;
   for (;;) {
     const m = DIVISION_TAG.exec(rest);
     if (!m) break;
     const tag = m[1].trim().toLowerCase();
     if (tag === EDITED_TAG) edited = true;
     else if (tag === REMOVED_TAG) removed = true;
+    else if (tag === MOVE_TAG) isMove = true;
     else if (!division) division = m[1].trim();
     else break; // a further tag isn't ours — leave it in the text
     rest = rest.slice(m[0].length);
   }
-  return { division, text: rest, edited, removed };
+
+  let system = "";
+  let reason = rest;
+  const sep = rest.indexOf(REASON_SEP);
+  if (sep >= 0) {
+    // NEW FORMAT. composeNoteBody writes the separator on EVERY note it
+    // creates — a manual note simply has an empty system half — so its presence
+    // is what proves the note is new. That is the whole discriminator: the
+    // legacy fallback below can then never fire on a note this app wrote, and a
+    // rep who types "Moved from A to B." into a manual note gets no protection
+    // they didn't earn. `isMove` comes from the [move] TAG alone, never wording.
+    system = rest.slice(0, sep).trim();
+    reason = rest.slice(sep + REASON_SEP.length).trim();
+  } else {
+    // LEGACY, and only legacy: written before the separator existed, so the
+    // generated sentence is the only signal available. First-run verification
+    // caught this branch being unreachable when the note carried a division tag.
+    const m = LEGACY_MOVE.exec(rest);
+    if (m) {
+      system = m[1].trim();
+      reason = (m[2] || "").trim();
+      isMove = true;
+    }
+  }
+
+  return {
+    division,
+    edited,
+    removed,
+    isMove,
+    system,
+    reason,
+    text: [system, reason].filter(Boolean).join(" "),
+  };
 }
 
-// Re-apply the tags a note carries. Used on edit so the division stamped at
-// ORIGINAL write time survives — an edit must not relabel who wrote it or from
-// where, only what it says.
+// Build a note body from its parts. Every write goes through this, so the tag
+// order and the separator live in exactly one place.
+export function composeNoteBody(p: {
+  division?: string;
+  edited?: boolean;
+  removed?: boolean;
+  isMove?: boolean;
+  system?: string;
+  reason: string;
+}): string {
+  const clean = (p.division || "").replace(/[[\]]/g, "").trim();
+  const tags =
+    (clean ? `[${clean}] ` : "") +
+    (p.edited ? `[${EDITED_TAG}] ` : "") +
+    (p.removed ? `[${REMOVED_TAG}] ` : "") +
+    (p.isMove ? `[${MOVE_TAG}] ` : "");
+  const system = (p.system || "").trim();
+  // The separator is written on EVERY note, including manual ones (where the
+  // system half is empty). It costs nothing — U+001F is non-printing — and it
+  // is what marks a note as new format, so the legacy wording fallback in
+  // parseNoteBody can never misfire on something this app wrote.
+  return `${tags}${system}${REASON_SEP}${p.reason}`;
+}
+
+// Back-compat wrapper for the plain division stamp on manual notes.
+export function stampDivision(body: string, division: string): string {
+  return composeNoteBody({ division, reason: body });
+}
+
+// Kept for the edit route, which rebuilds a note from its stored parts.
 export function buildNoteBody(
   text: string,
   division: string,
   edited: boolean,
   removed = false,
 ): string {
-  const clean = (division || "").replace(/[[\]]/g, "").trim();
-  return `${clean ? `[${clean}] ` : ""}${edited ? `[${EDITED_TAG}] ` : ""}${
-    removed ? `[${REMOVED_TAG}] ` : ""
-  }${text}`;
-}
-
-export function stampDivision(body: string, division: string): string {
-  const clean = (division || "").replace(/[[\]]/g, "").trim();
-  return clean ? `[${clean}] ${body}` : body;
+  return composeNoteBody({ division, edited, removed, reason: text });
 }
 
 // Add a note on the contact, related to both the opportunity and the contact so
@@ -1112,6 +1213,9 @@ export async function addOpportunityNote(
     authorId: userId || "",
     edited: parsed.edited,
     removed: parsed.removed,
+    isMove: parsed.isMove,
+    system: parsed.system,
+    reason: parsed.reason,
   };
 }
 
@@ -1149,6 +1253,9 @@ export async function updateOpportunityNote(
     authorId: userId || "",
     edited: parsed.edited,
     removed: parsed.removed,
+    isMove: parsed.isMove,
+    system: parsed.system,
+    reason: parsed.reason,
   };
 }
 
@@ -1927,17 +2034,23 @@ export async function moveOpportunity(args: {
     // Note the move (with the reason) whenever anything actually changed.
     if (current.contactId && (pipelineChanged || args.reason?.trim())) {
       try {
-        const body =
-          (pipelineChanged
-            ? `Moved from ${
-                pipelines.find((p) => p.id === current.pipelineId)?.name || "—"
-              } to ${dest.name}.`
-            : `Stage changed in ${dest.name}.`) +
-          (args.reason?.trim() ? ` Reason: ${args.reason.trim()}` : "");
+        // ITEM 2 — the SYSTEM half and the rep's words are written as separate
+        // parts, FLAGGED as a Move note at creation. The author may later edit
+        // or withdraw their reason; the system sentence is protected.
+        const system = pipelineChanged
+          ? `Moved from ${
+              pipelines.find((p) => p.id === current.pipelineId)?.name || "—"
+            } to ${dest.name}.`
+          : `Stage changed in ${dest.name}.`;
         await addOpportunityNote(
           current.contactId,
           args.oppId,
-          stampDivision(body, args.actorDivision || ""),
+          composeNoteBody({
+            division: args.actorDivision || "",
+            isMove: true,
+            system,
+            reason: args.reason?.trim() || "",
+          }),
           args.actorUserId,
         );
         steps.push("note written");
@@ -2037,13 +2150,16 @@ export async function moveOpportunity(args: {
   try {
     if (current.contactId) {
       const toName = (await getUserMap()).get(args.newOwnerId!) || args.newOwnerId!;
-      const body =
-        `Moved from ${sourceName || "—"} to ${dest.name}. New owner: ${toName}.` +
-        (args.reason?.trim() ? ` Reason: ${args.reason.trim()}` : "");
+      const system = `Moved from ${sourceName || "—"} to ${dest.name}. New owner: ${toName}.`;
       await addOpportunityNote(
         current.contactId,
         args.oppId,
-        stampDivision(body, args.actorDivision || ""),
+        composeNoteBody({
+          division: args.actorDivision || "",
+          isMove: true,
+          system,
+          reason: args.reason?.trim() || "",
+        }),
         args.actorUserId,
       );
       steps.push("note written");

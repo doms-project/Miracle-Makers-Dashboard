@@ -68,6 +68,12 @@ export interface Note {
   // ITEM 5 — soft-deleted. The note stays in history, struck through, showing
   // who removed it and when; the original text is not kept.
   removed?: boolean;
+  // ITEM 2 — a Move note carries a SYSTEM record plus the author's words. The
+  // author may correct or withdraw only their half; the system half is what
+  // tells the receiving rep how the case got to them.
+  isMove?: boolean;
+  system?: string; // "" for a manual note
+  reason?: string; // the whole text for a manual note
 }
 
 // Add Client (item 3) — what the modal posts. `assignedTo` is ADVISORY: the

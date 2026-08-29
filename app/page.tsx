@@ -959,6 +959,29 @@ export default function Dashboard() {
   // PAYLOAD — never from the pipeline list — so the dropdown can't name a
   // division the viewer holds nothing in. A shared record's pipeline never
   // becomes a division option (it appears only under "Shared with me").
+  // ITEM 1 — the pipeline selector is for ANY viewer holding more than one
+  // pipeline, not just admins. Bill has ODP Enrollment + ODP Transfer and his
+  // list merged both with no way to see one at a time.
+  //
+  // This is NOT a permission change: the server already decided what comes back,
+  // and these options are built from the viewer's OWN home pipelines. An admin
+  // gets the full selected set (they legitimately see everything); a rep gets
+  // only theirs, so the control can never name a pipeline they hold nothing in.
+  const selectablePipelines = useMemo(() => {
+    if (isAdminViewer) return pipelines;
+    const home = new Set(homePipelineIds);
+    return pipelines.filter((p) => home.has(p.id));
+  }, [isAdminViewer, pipelines, homePipelineIds]);
+
+  // Counts come from `data` — the full payload for this viewer — so each option
+  // reads "ODP Transfer (83)" and the totals add up to the "All" figure
+  // regardless of the other filters.
+  const pipelineCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of data) m.set(r.pipelineId, (m.get(r.pipelineId) || 0) + 1);
+    return m;
+  }, [data]);
+
   const scopeOptions = useMemo(() => {
     const divisions = new Set<string>();
     let anyShared = false;
@@ -1098,6 +1121,17 @@ export default function Dashboard() {
   useEffect(() => {
     if (isAdminViewer && scope !== "all") setScope("all");
   }, [isAdminViewer, scope]);
+
+  // Same rule for the pipeline selector: if the chosen pipeline is no longer one
+  // the viewer can select (grants changed, or the selector is now hidden because
+  // they hold only one), clear it rather than leaving an invisible filter on.
+  useEffect(() => {
+    if (
+      adminPipeline !== "all" &&
+      !selectablePipelines.some((p) => p.id === adminPipeline)
+    )
+      setAdminPipeline("all");
+  }, [selectablePipelines, adminPipeline]);
 
   const stageIndex = useCallback(
     (name: string) => {
@@ -1516,6 +1550,9 @@ export default function Dashboard() {
   };
 
   const selNotes = (selId && notes[selId]) || [];
+  // Whether the note pending removal is a Move note — it changes what removal
+  // actually does, so it changes what the dialog promises.
+  const removeIsMove = !!selNotes.find((n) => n.id === removeTarget)?.system;
 
   // ITEM 4 — an admin just added a name to a field's picklist. Patch the cached
   // definition in place so the new option is immediately selectable, instead of
@@ -1549,7 +1586,13 @@ export default function Dashboard() {
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
           n.id === noteId
-            ? { ...n, txt: j.note?.txt ?? "Note removed", removed: true }
+            ? {
+                ...n,
+                txt: j.note?.txt ?? "Note removed",
+                reason: j.note?.reason ?? "Note removed",
+                system: j.note?.system ?? n.system,
+                removed: true,
+              }
             : n,
         ),
       }));
@@ -1594,7 +1637,16 @@ export default function Dashboard() {
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
           n.id === noteId
-            ? { ...n, txt: j.note?.txt ?? v, edited: true }
+            ? {
+                ...n,
+                txt: j.note?.txt ?? v,
+                // Only the author's half changed; the system half is unchanged
+                // and comes back from the server exactly as it was stored.
+                reason: j.note?.reason ?? v,
+                system: j.note?.system ?? n.system,
+                edited: true,
+                removed: false,
+              }
             : n,
         ),
       }));
@@ -2089,7 +2141,10 @@ export default function Dashboard() {
           ) : null}
           {/* Admin-only pipeline selector — convenience; the SERVER decides
               what returns, this only narrows what is already visible. */}
-          {isAdminViewer && pipelines.length > 1 ? (
+          {/* Shown to anyone holding MORE THAN ONE pipeline. A viewer with a
+              single pipeline gets nothing — a selector with one real option
+              looks broken and narrows nothing. */}
+          {selectablePipelines.length > 1 ? (
             <div className="officefilter">
               <label htmlFor="pipeSel">Pipeline</label>
               <select
@@ -2097,10 +2152,10 @@ export default function Dashboard() {
                 value={adminPipeline}
                 onChange={(e) => setAdminPipeline(e.target.value)}
               >
-                <option value="all">All pipelines</option>
-                {pipelines.map((p) => (
+                <option value="all">All ({data.length})</option>
+                {selectablePipelines.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {p.name} ({pipelineCounts.get(p.id) || 0})
                   </option>
                 ))}
               </select>
@@ -2496,15 +2551,26 @@ export default function Dashboard() {
           window.confirm(), which a sandboxed GHL iframe silently swallows. */}
       {removeTarget ? (
         <ConfirmDialog
-          title="Remove this note?"
-          body={
-            <>
-              It will stay on the record struck through, marked{" "}
-              <b>&ldquo;removed by you&rdquo;</b>, and the text won&apos;t be
-              shown. This can&apos;t be undone.
-            </>
+          title={
+            removeIsMove ? "Remove your reason?" : "Remove this note?"
           }
-          confirmLabel="Remove note"
+          body={
+            removeIsMove ? (
+              <>
+                Only <b>your reason</b> is removed. The move record —{" "}
+                <b>which pipeline it came from and who owns it now</b> — stays on
+                the case, so the receiving rep can still see how it got there.
+                This can&apos;t be undone.
+              </>
+            ) : (
+              <>
+                It will stay on the record struck through, marked{" "}
+                <b>&ldquo;removed by you&rdquo;</b>, and the text won&apos;t be
+                shown. This can&apos;t be undone.
+              </>
+            )
+          }
+          confirmLabel={removeIsMove ? "Remove reason" : "Remove note"}
           danger
           busy={editBusy}
           error={editErr}
@@ -2927,7 +2993,11 @@ export default function Dashboard() {
                                 className="noteedit"
                                 onClick={() => {
                                   setEditingNote(n.id);
-                                  setEditDraft(n.txt);
+                                  // ITEM 2 — the form opens on the author's OWN
+                                  // words only. For a manual note that is the
+                                  // whole text; for a Move note the system
+                                  // sentence is shown above it, greyed.
+                                  setEditDraft(n.reason ?? n.txt);
                                   setEditErr(null);
                                 }}
                               >
@@ -2949,6 +3019,14 @@ export default function Dashboard() {
                         </div>
                         {editing ? (
                           <div className="noteeditbox">
+                            {n.system ? (
+                              <div className="notesysro">
+                                {n.system}
+                                <span className="readonly-note">
+                                  system record — can&apos;t be changed
+                                </span>
+                              </div>
+                            ) : null}
                             <textarea
                               value={editDraft}
                               disabled={editBusy}
@@ -2977,16 +3055,28 @@ export default function Dashboard() {
                               </button>
                             </div>
                             <div className="imeta">
-                              Editing replaces the text — the original isn&apos;t
-                              kept. Notes can&apos;t be deleted.
+                              {n.system
+                                ? "You're editing your reason. The move record above stays as written."
+                                : "Editing replaces the text — the original isn't kept."}
                             </div>
                             {editErr ? (
                               <div className="savemsg err">✗ {editErr}</div>
                             ) : null}
                           </div>
                         ) : (
-                          <p className={n.removed ? "noteremoved" : undefined}>
-                            {n.txt}
+                          <p>
+                            {/* ITEM 2 — the SYSTEM half of a Move note. It is
+                                never struck through and never editable: it is
+                                how the receiving rep learns the case moved. */}
+                            {n.system ? (
+                              <span className="notesys">{n.system}</span>
+                            ) : null}
+                            {n.system && (n.reason || n.txt) ? " " : ""}
+                            <span
+                              className={n.removed ? "noteremoved" : undefined}
+                            >
+                              {n.system ? n.reason : n.txt}
+                            </span>
                           </p>
                         )}
                       </div>
