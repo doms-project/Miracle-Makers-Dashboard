@@ -4,7 +4,7 @@ import {
   getRawNote,
   updateOpportunityNote,
   parseNoteBody,
-  buildNoteBody,
+  composeNoteBody,
   getUserMap,
   explainGhlError,
   GhlError,
@@ -104,13 +104,29 @@ async function putHandler(
         { status: 403 },
       );
 
-    // Keep the ORIGINAL division stamp; add the edited marker. Only `body` goes
-    // to GHL, so `dateAdded` — the original timestamp — is untouched.
+    // 🔴 THE SERVER IS THE BOUNDARY, not the form.
+    //
+    // The note is re-read from GoHighLevel and rebuilt from its STORED parts:
+    // the division stamped at original write time, the [move] flag, and — the
+    // one that matters — the SYSTEM half of a Move note. The only thing the
+    // client controls is the reason. Anything it sends for the prefix is
+    // discarded, so a direct API call cannot rewrite the audit trail however
+    // the form is bypassed.
+    //
+    // Only `body` goes to GHL, so `dateAdded` — the original timestamp — is
+    // untouched.
     const original = parseNoteBody(existing.body);
     const note = await updateOpportunityNote(
       record.contactId,
       noteId,
-      buildNoteBody(text, original.division, true),
+      composeNoteBody({
+        division: original.division, // stored
+        edited: true,
+        removed: false, // editing brings a withdrawn reason back
+        isMove: original.isMove, // stored
+        system: original.system, // stored — NEVER from the request
+        reason: text, // the only client-controlled part
+      }),
       existing.userId,
     );
 
@@ -217,15 +233,25 @@ async function deleteHandler(
       year: "numeric",
       timeZone: "UTC",
     });
+    // A MOVE note loses only its reason — the system sentence stays, so the
+    // receiving rep still sees how the case reached them. A MANUAL note has no
+    // system half, so the whole thing becomes the removal record.
+    //
+    // The server builds this itself and accepts no body from the client, for
+    // the same reason as the edit path.
     const note = await updateOpportunityNote(
       record.contactId,
       noteId,
-      buildNoteBody(
-        `Note removed by ${who} · ${when}`,
-        original.division,
-        original.edited,
-        true,
-      ),
+      composeNoteBody({
+        division: original.division,
+        edited: original.edited,
+        removed: true,
+        isMove: original.isMove,
+        system: original.system,
+        reason: original.isMove
+          ? `Reason removed by ${who} · ${when}`
+          : `Note removed by ${who} · ${when}`,
+      }),
       existing.userId,
     );
 

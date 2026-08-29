@@ -534,3 +534,9 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rellink{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 8px;white-space:nowrap;}
 .cghead{display:flex;align-items:center;gap:8px;}
 .cgcount{font-size:10px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
+
+/* ── ITEM 2 · a Move note's SYSTEM half — the record of the transfer itself.
+      Never struck through, never editable: it is how the receiving rep learns
+      how the case reached them. Only the author's reason follows it. ── */
+.notesys{color:var(--ink-3);}
+.notesysro{font-size:12px;color:var(--ink-3);background:var(--line-soft);border-radius:7px;padding:7px 10px;line-height:1.45;}

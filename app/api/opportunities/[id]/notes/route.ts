@@ -145,12 +145,16 @@ async function postHandler(
         /* unstamped rather than failing the note */
       }
     }
-    const note = await addOpportunityNote(
-      gate.contactId,
-      id,
-      stampDivision(text, division),
-      userId,
+    // ITEM 3 — say what was stamped and what was written. Two causes have
+    // already been found and fixed here (the users scope, then a client-side
+    // strip); if a third exists, this line names it instead of another round of
+    // guessing at which layer dropped it.
+    const noteBody = stampDivision(text, division);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[notes] user=${userId || "(none)"} division=${JSON.stringify(division)} -> body=${JSON.stringify(noteBody.slice(0, 120))}`,
     );
+    const note = await addOpportunityNote(gate.contactId, id, noteBody, userId);
     return NextResponse.json(
       // ITEM 2 — `division` is echoed on the note. addOpportunityNote parses it
       // OFF the body for display, so without this the optimistic insert in the
