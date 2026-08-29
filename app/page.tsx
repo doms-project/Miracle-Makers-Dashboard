@@ -2957,6 +2957,26 @@ export default function Dashboard() {
                     // account of what happened.
                     const mine = !!viewerId && n.authorId === viewerId;
                     const editing = editingNote === n.id && !!n.id;
+
+                    // A REMOVED MANUAL note is a tombstone, not a note. There is
+                    // nothing left to show, so the note's whole layout — card,
+                    // author/date header, edited badge, actions — is clutter
+                    // around a single sentence. One muted line instead, sitting
+                    // where the note was so the timeline still reads in order.
+                    //
+                    // It is kept rather than dropped because a hard delete
+                    // leaves no sign anything existed: the record simply has
+                    // less in it than yesterday and nobody can tell.
+                    //
+                    // Move notes are NOT tombstoned — their system half is still
+                    // real content, and only the reason was withdrawn.
+                    if (n.removed && !n.system)
+                      return (
+                        <div className="notegone" key={n.id || i}>
+                          {n.reason || n.txt}
+                        </div>
+                      );
+
                     return (
                       <div className="note" key={n.id || i}>
                         <div className="nh">
@@ -2976,14 +2996,9 @@ export default function Dashboard() {
                               edited
                             </span>
                           ) : null}
-                          {n.removed ? (
-                            <span
-                              className="nedited nremoved"
-                              title="The author removed this note. It stays in the case history so the gap is visible; the original text is not kept."
-                            >
-                              removed
-                            </span>
-                          ) : null}
+                          {/* No "removed" badge: on a Move note the muted line
+                              below already says it, and a manual removed note
+                              never reaches this header at all. */}
                           {/* Author only, and never on an already-removed
                               note — there is nothing left to edit or remove. */}
                           {mine && n.id && !editing && !n.removed ? (
@@ -3071,12 +3086,19 @@ export default function Dashboard() {
                             {n.system ? (
                               <span className="notesys">{n.system}</span>
                             ) : null}
-                            {n.system && (n.reason || n.txt) ? " " : ""}
-                            <span
-                              className={n.removed ? "noteremoved" : undefined}
-                            >
-                              {n.system ? n.reason : n.txt}
-                            </span>
+                            {n.system && !n.removed && (n.reason || n.txt)
+                              ? " "
+                              : ""}
+                            {/* The withdrawn reason on a Move note drops to its
+                                own muted line under the system record, in the
+                                same style as a manual tombstone — not struck
+                                through, because it is the record of the removal
+                                rather than the text that was removed. */}
+                            {n.removed ? (
+                              <span className="notegone">{n.reason}</span>
+                            ) : (
+                              <span>{n.system ? n.reason : n.txt}</span>
+                            )}
                           </p>
                         )}
                       </div>
