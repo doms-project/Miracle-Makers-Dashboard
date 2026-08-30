@@ -548,6 +548,22 @@ function BoardColumn({
 }
 
 // Presentational card content (used by both the in-column card and the overlay).
+// A signed-in non-admin with no pipeline grants and nothing of their own.
+// Deliberately NOT error styling: fail-closed access is working as designed, and
+// the person reading this has done nothing wrong. It exists because "no access"
+// and "your pipelines are empty" produced an identical blank screen, and the
+// first one needs an action from somebody else.
+function NoAccessNotice() {
+  return (
+    <div className="empty noaccess">
+      <b>No pipelines assigned yet</b>
+      <br />
+      You&apos;ll see cases here once an admin gives you access to a pipeline.
+      Anything shared with you directly will appear here too.
+    </div>
+  );
+}
+
 function CardBody({
   r,
   following,
@@ -998,6 +1014,18 @@ export default function Dashboard() {
   //   rep with one home pipeline  -> that pipeline's name
   //   rep with several            -> their division label(s) ("ODP")
   //   no home pipelines           -> "Shared with me"
+  // A signed-in NON-admin with no pipeline grants at all. This is the intended
+  // fail-closed outcome — 21 of 25 users on the account are in it right now —
+  // but an empty list under a "Shared with me" heading reads as a fault rather
+  // than a state. It is only surfaced when they ALSO have nothing of their own:
+  // a rep who owns or follows records has something to look at, and telling them
+  // their access is missing would be both noise and untrue of what they can see.
+  const noPipelineAccess =
+    sso.status === "ready" &&
+    !isAdminViewer &&
+    homePipelineIds.length === 0 &&
+    data.length === 0;
+
   const headerLabel = useMemo(() => {
     if (adminPipeline !== "all")
       return pipelines.find((p) => p.id === adminPipeline)?.name || "Pipeline";
@@ -1008,8 +1036,11 @@ export default function Dashboard() {
       const divs = [...new Set(home.map((p) => divisionLabel(p.name)))];
       return divs.join(" · ");
     }
-    return "Shared with me";
-  }, [adminPipeline, isAdminViewer, pipelines, homePipelineIds]);
+    // No home pipelines. "Shared with me" is right ONLY if something actually
+    // has been shared; with nothing at all it names a thing that doesn't exist,
+    // so fall back to a label that promises nothing.
+    return data.length ? "Shared with me" : "Cases";
+  }, [adminPipeline, isAdminViewer, pipelines, homePipelineIds, data.length]);
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
   // (a new hire must not be invisible); an unknown id renders "Former user".
@@ -2077,16 +2108,29 @@ export default function Dashboard() {
                 {sso.session.role ? ` (${sso.session.role})` : ""}.
               </>
             ) : (
-              <>
-                <span className="tag">
-                  {sso.session.userName || "Your view"}
-                </span>{" "}
-                <b>Your records ({data.length}).</b> In {headerLabel} you see
-                what you own, what you follow, and anything still unassigned —
-                unassigned work is there for you to pick up. Records from other
-                divisions appear only when you own or follow them, marked{" "}
-                <i>shared</i>. Office is a view filter, not a permission.
-              </>
+              noPipelineAccess ? (
+                // The standard rep paragraph describes a view this person does
+                // not have — "what you own, what you follow, anything still
+                // unassigned" is three promises against an empty list.
+                <>
+                  <span className="tag">
+                    {sso.session.userName || "Your view"}
+                  </span>{" "}
+                  <b>No pipelines assigned yet.</b> An admin controls which
+                  pipelines you can see. Nothing is wrong with your sign-in.
+                </>
+              ) : (
+                <>
+                  <span className="tag">
+                    {sso.session.userName || "Your view"}
+                  </span>{" "}
+                  <b>Your records ({data.length}).</b> In {headerLabel} you see
+                  what you own, what you follow, and anything still unassigned —
+                  unassigned work is there for you to pick up. Records from other
+                  divisions appear only when you own or follow them, marked{" "}
+                  <i>shared</i>. Office is a view filter, not a permission.
+                </>
+              )
             )
           ) : (
             <>
@@ -2462,9 +2506,17 @@ export default function Dashboard() {
               </tbody>
             </table>
             {visible.length === 0 ? (
-              <div className="empty">No records match this filter.</div>
+              noPipelineAccess ? (
+                <NoAccessNotice />
+              ) : (
+                <div className="empty">No records match this filter.</div>
+              )
             ) : null}
           </div>
+        ) : noPipelineAccess ? (
+          // The board draws one column per HOME pipeline, so with none it
+          // renders nothing at all — an even blanker screen than the list.
+          <NoAccessNotice />
         ) : (
           <DndContext
             sensors={sensors}
@@ -3142,21 +3194,32 @@ export default function Dashboard() {
                 </div>
               ) : null}
             </div>
-            <div className="panelfoot">
-              <span className="hint">
-                Full record, comms &amp; files live in GoHighLevel
-              </span>
-              <a
-                className="openghl"
-                href={`https://app.gohighlevel.com/v2/location/${LOCATION_ID}/opportunities/list?opp=${selected.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Deep-links to the native GHL opportunity record"
-              >
-                <IconExternal />
-                Open in GoHighLevel
-              </a>
-            </div>
+            {/* ADMINS ONLY — the whole footer, not just the link.
+                This deep-links into the native OPPORTUNITIES module, which reps
+                are having turned off: the link would land on a 404 or an
+                access-denied page. The hint beside it is no better — "Full
+                record, comms & files live in GoHighLevel" sends a rep somewhere
+                they can't go, so hiding the link and keeping the sentence would
+                just move the dead end one step further away.
+                Admins keep both: they need native for settings, pipelines and
+                everything the dashboard doesn't cover. */}
+            {isAdminViewer ? (
+              <div className="panelfoot">
+                <span className="hint">
+                  Full record, comms &amp; files live in GoHighLevel
+                </span>
+                <a
+                  className="openghl"
+                  href={`https://app.gohighlevel.com/v2/location/${LOCATION_ID}/opportunities/list?opp=${selected.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Deep-links to the native GHL opportunity record"
+                >
+                  <IconExternal />
+                  Open in GoHighLevel
+                </a>
+              </div>
+            ) : null}
           </>
         ) : null}
       </aside>
