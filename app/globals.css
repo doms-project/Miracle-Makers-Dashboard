@@ -549,3 +549,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    as intended and the reader has done nothing wrong — so this reads as a state,
    in the normal empty-state voice, not a warning. */
 .empty.noaccess{max-width:460px;margin:0 auto;line-height:1.6;}
+
+/* Board landing view: the board excludes shared records, so a viewer whose only
+   records are shared would otherwise see empty columns and no explanation. */
+.boardhint{max-width:520px;margin:0 auto 14px;line-height:1.6;}
+.linkbtn{background:transparent;border:0;padding:0;font:inherit;color:var(--plum);font-weight:600;cursor:pointer;text-decoration:underline;}

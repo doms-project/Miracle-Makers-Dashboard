@@ -58,7 +58,10 @@ function coerceDetail(
   return { value: v.trim(), rejected: [] };
 }
 
-// ITEM 3 — Add Client. POST creates the contact and its case.
+// ITEM 3 — Add Lead. POST creates the contact and its case.
+//
+// The route path and file names keep "client" deliberately — see the commit
+// message. Only the wording users read changed.
 //
 // 🔴 THE SERVER IS THE BOUNDARY, not the modal. Two rules are enforced here and
 // would hold even if someone POSTed this route directly with curl:
@@ -187,14 +190,14 @@ async function postHandler(request: Request) {
         name: `${firstName} ${lastName}`.trim(),
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
-        source: "Dashboard — Add Client",
+        source: "Dashboard — Add Lead",
       });
       contactId = c.id;
     }
     if (!contactId)
       return NextResponse.json(
         {
-          error: "Could not create the client contact.",
+          error: "Could not create the lead's contact.",
           detail: "GoHighLevel returned no contact id.",
           status: 502,
         } as ApiError,
@@ -210,8 +213,8 @@ async function postHandler(request: Request) {
     if (clash)
       return NextResponse.json(
         {
-          error: "This client already has a case here.",
-          detail: `${firstName} ${lastName} already has a case in "${dest.name}"${clash.stage ? ` (${clash.stage})` : ""}. GoHighLevel allows only one case per client per pipeline — open that one, or pick a different pipeline.`,
+          error: "This lead already has a case here.",
+          detail: `${firstName} ${lastName} already has a case in "${dest.name}"${clash.stage ? ` (${clash.stage})` : ""}. GoHighLevel allows only one case per person per pipeline — open that one, or pick a different pipeline.`,
           status: 409,
         } as ApiError,
         { status: 409 },
@@ -250,7 +253,7 @@ async function postHandler(request: Request) {
       // ni" is exactly what made two different cases look identical earlier.
       name: (body.oppName || "").trim() || `${firstName} ${lastName}`.trim(),
       ...(assignedTo ? { assignedTo } : {}),
-      source: "Dashboard — Add Client",
+      source: "Dashboard — Add Lead",
       ...(customFields.length ? { customFields } : {}),
     });
 
@@ -259,7 +262,7 @@ async function postHandler(request: Request) {
         {
           error: "The case was not created.",
           detail:
-            "The client contact exists, but GoHighLevel returned no opportunity id. Check the pipeline in GoHighLevel before retrying, so you don't create a second contact.",
+            "The lead's contact exists, but GoHighLevel returned no opportunity id. Check the pipeline in GoHighLevel before retrying, so you don't create a second contact.",
           status: 502,
         } as ApiError,
         { status: 502 },
@@ -279,11 +282,11 @@ async function postHandler(request: Request) {
       );
     if (e instanceof GhlError)
       return NextResponse.json(
-        { error: "Could not add the client.", detail: await explainGhlError(e) } as ApiError,
+        { error: "Could not add the lead.", detail: await explainGhlError(e) } as ApiError,
         { status: e.status >= 400 && e.status < 600 ? e.status : 502 },
       );
     return NextResponse.json(
-      { error: "Could not add the client.", detail: String(e) } as ApiError,
+      { error: "Could not add the lead.", detail: String(e) } as ApiError,
       { status: 500 },
     );
   }

@@ -1750,9 +1750,13 @@ export async function createOpportunity(o: {
 //        change: GHL blocks revoking pipeline access from a user who still owns
 //        opportunities in that pipeline.
 //
-// No tag is written: GHL tags are contact-scoped, so a transfer tag on a contact
-// with several opportunities cannot identify which record moved. The
-// opportunity-scoped Transferred From / Transferred Date / note carry the history.
+// A CONTACT TAG is written on the transfer path: `transferred-to-<division>`.
+// This reverses an earlier decision recorded here, and the reason for that
+// decision still stands — tags are contact-scoped, so on a contact with several
+// opportunities the tag cannot say which record moved. It is written anyway
+// because its job is different: it is the handle GHL-side smart lists and
+// workflows use to FIND these people. The opportunity-scoped Transferred From /
+// Transferred Date / note remain the per-record history.
 //
 // There are no transactions — on a step failure we STOP and report exactly which
 // steps completed, rather than silently half-moving.
@@ -2196,6 +2200,26 @@ export async function moveOpportunity(args: {
       steps.push(
         `moved pipeline+stage (TRANSFERRED IN)${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );
+
+      // 5. Tag the CONTACT. Written only HERE — after the pipeline move actually
+      // landed — so the tag can never claim a transfer that stopped half way.
+      // A failure is logged and swallowed: the transfer is complete and correct
+      // at this point, and failing it over a tag would be worse than the missing
+      // tag. The step list records whether it made it.
+      if (current.contactId) {
+        const tag = `transferred-to-${normalizeTag(divisionLabel(dest.name) || dest.name)}`;
+        try {
+          await addContactTags(current.contactId, [tag]);
+          steps.push(`tagged contact "${tag}"`);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `[move] contact tag "${tag}" failed for ${current.contactId} — the transfer itself is complete:`,
+            await explainGhlError(e),
+          );
+          steps.push(`tag "${tag}" FAILED (transfer completed)`);
+        }
+      }
       return { transferred: true, steps };
     } catch (e) {
       lastErr = e;
@@ -2639,6 +2663,44 @@ export async function createCaregiverRelation(
     body,
   );
   return String(res.relation?.id ?? res.id ?? "");
+}
+
+// ---------------------------------------------------------------------------
+// Contact tags.
+//
+// Tags live on the CONTACT — opportunities don't carry them in GoHighLevel — so
+// this is contact-scoped by necessity, not by choice. That has one consequence
+// worth stating plainly: a contact with several opportunities gets one tag for
+// all of them, and the tag cannot say WHICH case moved. It answers "has this
+// person been transferred to ODP", not "which of their three cases went there".
+// The note and the Transferred From / Transferred Date fields remain the
+// per-record history; the tag is the GHL-side handle for smart lists and
+// workflows, which is exactly what it is for.
+//
+// GoHighLevel lowercases tags on its side regardless, so they are normalised
+// here too — otherwise the same tag looks like two different strings in our own
+// logs and comparisons.
+// ---------------------------------------------------------------------------
+export function normalizeTag(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export async function addContactTags(
+  contactId: string,
+  tags: string[],
+): Promise<string[]> {
+  const clean = [...new Set(tags.map(normalizeTag).filter(Boolean))];
+  if (!contactId || !clean.length) return [];
+  const res = await ghlSend<{ tags?: string[] }>(
+    "POST",
+    `/contacts/${encodeURIComponent(contactId)}/tags`,
+    { tags: clean },
+  );
+  return res.tags ?? clean;
 }
 
 // Fetch a contact's display name + email (for email recipients).
