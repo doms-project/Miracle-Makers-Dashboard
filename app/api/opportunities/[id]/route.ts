@@ -11,6 +11,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession, canEditRecord } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { emit } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -134,6 +135,48 @@ async function patchHandler(
 
     // ---- write + return the fresh record ----
     const record = await updateOpportunity(id, put);
+
+    // One event per FIELD, with its name and both values — a consumer shouldn't
+    // have to diff two record snapshots to learn what changed. `target` is the
+    // pre-write read, so the old values are genuinely old.
+    for (const cf of customFields) {
+      const def = defById.get(cf.id);
+      await emit(
+        "field.changed",
+        {
+          actor: { userId: session?.userId || "" },
+          opportunityId: id,
+          contactId: target.contactId,
+        },
+        {
+          fieldId: cf.id,
+          field: def?.name ?? cf.id,
+          from: target.cf[cf.id] ?? null,
+          to: cf.value,
+        },
+      );
+    }
+    if (typeof body.stageId === "string" && body.stageId && body.stageId !== target.stageId)
+      await emit(
+        "field.changed",
+        {
+          actor: { userId: session?.userId || "" },
+          opportunityId: id,
+          contactId: target.contactId,
+        },
+        { field: "Stage", from: target.stage, to: record?.stage ?? "" },
+      );
+    if ("assignedTo" in body && (body.assignedTo || "") !== target.ownerId)
+      await emit(
+        "opportunity.assigned",
+        {
+          actor: { userId: session?.userId || "" },
+          opportunityId: id,
+          contactId: target.contactId,
+        },
+        { oldOwnerId: target.ownerId, newOwnerId: body.assignedTo || "" },
+      );
+
     return NextResponse.json(
       { ok: true, record, rejected },
       { headers: { "Cache-Control": "no-store" } },

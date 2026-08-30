@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { uploadResource, GhlError } from "@/lib/ghl";
+import { uploadResource, listMediaFolders, GhlError } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import type { ApiError } from "@/lib/types";
@@ -54,11 +54,32 @@ export async function POST(request: Request) {
         { status: 413 },
       );
 
+    // ITEM 6c — the destination folder, sent by the picker beside the button.
+    // It is VALIDATED against the live folder list rather than passed straight
+    // through as `parentId`: an unchecked value would let any id at all become
+    // the upload target, including a folder belonging to another part of the
+    // shared media library. An empty value keeps the legacy env-folder path.
+    const folderId = String(form?.get("folderId") || "").trim();
+    if (folderId) {
+      const known = await listMediaFolders();
+      if (!known.some((f) => f.id === folderId))
+        return NextResponse.json(
+          {
+            error: "Unknown folder.",
+            detail:
+              "That folder no longer exists in GoHighLevel. Reload the Resources tab and pick again.",
+            status: 400,
+          } as ApiError,
+          { status: 400 },
+        );
+    }
+
     const buffer = await file.arrayBuffer();
     const result = await uploadResource({
       buffer,
       filename: file.name || "upload",
       contentType: file.type || "application/octet-stream",
+      folderId,
     });
 
     return NextResponse.json(

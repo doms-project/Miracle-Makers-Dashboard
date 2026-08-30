@@ -26,11 +26,50 @@ const BASE_URL = "https://services.leadconnectorhq.com";
 export class GhlError extends Error {
   status: number;
   detail?: string;
-  constructor(message: string, status: number, detail?: string) {
+  // GoHighLevel returns a traceId on its error bodies. It is the ONE field their
+  // support can actually look up, and it was being discarded — ghlMessage() only
+  // ever kept `message`. Carried through the error, the route response and into
+  // the UI's details block so a rep can paste it verbatim.
+  traceId?: string;
+  // GHL's own machine-readable code (e.g. OPPORTUNITY_NO_DUPLICATE). What the
+  // friendly-message mapping keys off, rather than matching on prose.
+  code?: string;
+  constructor(
+    message: string,
+    status: number,
+    detail?: string,
+    meta?: { traceId?: string; code?: string },
+  ) {
     super(message);
     this.name = "GhlError";
     this.status = status;
     this.detail = detail;
+    this.traceId = meta?.traceId;
+    this.code = meta?.code;
+  }
+}
+
+// Pull the machine-readable bits out of a GHL error body. Kept separate from
+// ghlMessage() so the human text and the lookup keys never overwrite each other.
+export function ghlErrorMeta(raw: string): { traceId?: string; code?: string } {
+  try {
+    const j = JSON.parse((raw || "").trim()) as Record<string, unknown>;
+    const traceId =
+      typeof j.traceId === "string"
+        ? j.traceId
+        : typeof j.trace_id === "string"
+          ? j.trace_id
+          : undefined;
+    // The code appears as `error` on some shapes and inside `message` on others
+    // (e.g. "OPPORTUNITY_NO_DUPLICATE: Can not create..."). Take the first
+    // SCREAMING_SNAKE token we find; anything else is prose, not a code.
+    const hay = `${typeof j.error === "string" ? j.error : ""} ${
+      typeof j.message === "string" ? j.message : ""
+    } ${Array.isArray(j.message) ? j.message.join(" ") : ""}`;
+    const m = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+){1,6})\b/.exec(hay);
+    return { traceId, code: m ? m[1] : undefined };
+  } catch {
+    return {};
   }
 }
 
@@ -191,13 +230,14 @@ async function ghlGet<T>(path: string): Promise<T> {
     );
   }
   if (!res.ok) {
-    let detail = "";
+    let raw = "";
     try {
-      detail = ghlMessage(await res.text());
+      raw = await res.text();
     } catch {
       /* ignore */
     }
-    detail = detail.slice(0, 500);
+    let detail = ghlMessage(raw).slice(0, 500);
+    const meta = ghlErrorMeta(raw);
     if (res.status === 401) {
       const scheme = effectiveScheme();
       detail =
@@ -213,6 +253,7 @@ async function ghlGet<T>(path: string): Promise<T> {
       `GoHighLevel returned ${res.status} for ${new URL(url).pathname}.`,
       res.status,
       detail,
+      meta,
     );
   }
   return (await res.json()) as T;
@@ -247,17 +288,21 @@ async function ghlSend<T>(
       /* ignore */
     }
     const detail = ghlMessage(raw);
+    const meta = ghlErrorMeta(raw);
     // Log the failing request body alongside the reason — without it a 400 is
     // undiagnosable from the logs alone.
     // eslint-disable-next-line no-console
     console.error(
-      `[ghl] ${method} ${new URL(url).pathname} -> ${res.status}: ${detail}`,
+      `[ghl] ${method} ${new URL(url).pathname} -> ${res.status}: ${detail}${
+        meta.traceId ? ` traceId=${meta.traceId}` : ""
+      }`,
       JSON.stringify(body)?.slice(0, 800),
     );
     throw new GhlError(
       `GoHighLevel returned ${res.status} for ${method} ${new URL(url).pathname}.`,
       res.status,
       detail,
+      meta,
     );
   }
   return (await res.json()) as T;
@@ -1329,6 +1374,157 @@ interface RawMedia {
   fileSize?: number;
 }
 
+// ---------------------------------------------------------------------------
+// ITEM 6 — Resource FOLDERS. Three endpoints, all Version 2021-07-28:
+//
+//   CREATE  POST   /medias/folder   { name, altId, altType: "location" }
+//   DELETE  DELETE /medias/{id}?altType=location&altId={loc}
+//   LIST    GET    /medias/files?altId=…&altType=location&type=folder
+//
+// NOT /medias/files for create — that is the LISTING endpoint, and posting to
+// it is the kind of near-miss that returns a confusing error rather than an
+// obvious one.
+//
+// 🔴 ORGANISATION, NOT SECURITY. GHL media URLs are publicly reachable once
+// known. Everything here scopes what people SEE in the tab; it cannot stop
+// anyone who already has a URL. Client-specific documents belong on the client's
+// RECORD, where they inherit its permissions — not in a shared folder.
+// ---------------------------------------------------------------------------
+export interface MediaFolder {
+  id: string;
+  name: string;
+}
+
+export async function listMediaFolders(): Promise<MediaFolder[]> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    altId: locationId,
+    altType: "location",
+    type: "folder",
+    limit: "100",
+  });
+  const data = await ghlGet<{ files?: RawMedia[]; medias?: RawMedia[] }>(
+    `/medias/files?${params.toString()}`,
+  );
+  return (data.files || data.medias || [])
+    .map((f) => ({
+      id: String(f.id ?? ""),
+      name: String(f.name ?? f.fileName ?? "Untitled"),
+    }))
+    .filter((f) => f.id)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ⚠️ GHL AUTO-RENAMES ON COLLISION: creating "OLTL" when one exists yields
+// "OLTL (1)" with NO error. So the caller is told the name GHL ACTUALLY
+// assigned, and we re-read the folder list to find it rather than assuming the
+// create response echoes it.
+export async function createMediaFolder(
+  name: string,
+): Promise<{ id: string; name: string; renamed: boolean; requested: string }> {
+  const { locationId } = requireEnv();
+  const requested = name.trim();
+  if (!requested) throw new GhlError("A folder needs a name.", 400);
+
+  const before = await listMediaFolders();
+  const res = await ghlSend<{ id?: string; name?: string; folder?: MediaFolder }>(
+    "POST",
+    "/medias/folder",
+    { name: requested, altId: locationId, altType: "location" },
+  );
+  const id = String(res.folder?.id ?? res.id ?? "");
+  let actual = String(res.folder?.name ?? res.name ?? "");
+
+  if (!actual || !id) {
+    // The response shape isn't guaranteed; find the new folder by diffing.
+    const after = await listMediaFolders();
+    const seen = new Set(before.map((f) => f.id));
+    const fresh = after.find((f) => !seen.has(f.id));
+    if (fresh) return { ...fresh, renamed: fresh.name !== requested, requested };
+  }
+  return {
+    id,
+    name: actual || requested,
+    renamed: !!actual && actual !== requested,
+    requested,
+  };
+}
+
+// 🔴 DELETING A FOLDER REMOVES ITS CONTENTS. The route counts the files first so
+// the confirmation can say how many, and the count is taken SERVER-SIDE — a
+// client-supplied number could be stale or forged.
+export async function countFilesInFolder(folderId: string): Promise<number> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    altId: locationId,
+    altType: "location",
+    type: "file",
+    parentId: folderId,
+    limit: "100",
+  });
+  const data = await ghlGet<{ files?: RawMedia[]; medias?: RawMedia[] }>(
+    `/medias/files?${params.toString()}`,
+  );
+  return (data.files || data.medias || []).filter(
+    (f) => String(f.parentId ?? f.folderId ?? "") === folderId,
+  ).length;
+}
+
+export async function deleteMediaFolder(folderId: string): Promise<void> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    altType: "location",
+    altId: locationId,
+  });
+  const url = `${BASE_URL}/medias/${encodeURIComponent(folderId)}?${params.toString()}`;
+  const res = await fetch(url, { method: "DELETE", headers: headers(), cache: "no-store" });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} deleting the folder.`,
+      res.status,
+      ghlMessage(raw),
+      ghlErrorMeta(raw),
+    );
+  }
+}
+
+// Files in ONE folder. listResources() keeps its single-folder env behaviour for
+// the legacy path; this is what the per-folder tab uses.
+export async function listFolderFiles(folderId: string): Promise<ResourceFile[]> {
+  const { locationId } = requireEnv();
+  const limit = 100;
+  const all: RawMedia[] = [];
+  for (let page = 0, offset = 0; page < 50; page++, offset += limit) {
+    const params = new URLSearchParams({
+      altType: "location",
+      altId: locationId,
+      type: "file",
+      sortBy: "createdAt",
+      sortOrder: "desc",
+      parentId: folderId,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const data = await ghlGet<{ files?: RawMedia[]; medias?: RawMedia[] }>(
+      `/medias/files?${params.toString()}`,
+    );
+    const batch = data.files || data.medias || [];
+    all.push(...batch);
+    if (batch.length < limit) break;
+  }
+  // Filter again in code so a mis-supported parentId can never leak the library.
+  return all
+    .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
+    .map((f) => ({
+      name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
+      url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
+      type: String(f.type ?? f.mimeType ?? f.contentType ?? ""),
+      size: Number(f.size ?? f.fileSize ?? 0) || 0,
+    }))
+    .filter((f) => f.url);
+}
+
 export async function listResources(): Promise<ResourceFile[]> {
   const { locationId, resourcesFolderId } = requireEnv({ resourcesFolder: true });
   const folderId = resourcesFolderId;
@@ -1515,29 +1711,93 @@ async function findAccessCustomValue(): Promise<{
 
 export type AccessGrants = Record<string, string[]>;
 
-// Read the stored grants. Returns null on ANY problem (missing value, bad JSON,
-// failed fetch) so the caller can fall back to the env var rather than locking
-// everyone out — a config read failure must not take the dashboard down.
-export async function fetchPipelineAccessGrants(): Promise<AccessGrants | null> {
+// ---------------------------------------------------------------------------
+// v2 SHAPE. The custom value used to be a FLAT map of userId -> pipelineIds.
+// Items 4 and 6 add two more scopes, so it becomes:
+//
+//   { "pipelines": { "<userId>": ["<pipelineId>"] },
+//     "folders":   { "<userId>": ["<folderId>"]   },
+//     "master":    ["<userId>"] }
+//
+// 🔴 THE LEGACY SHAPE MUST KEEP WORKING. Every pipeline grant on the account
+// today is stored flat. Reading a flat object as v2 would find no `pipelines`
+// key, hand back empty grants, and silently revoke everyone — the exact failure
+// mode that a users-scope 401 caused two rounds ago. So the reader detects the
+// shape and migrates in memory; the first SAVE writes v2.
+//
+// FOLDERS ARE THEIR OWN SCOPE, deliberately not derived from pipeline access: a
+// compliance folder may belong to case managers who hold no pipeline at all.
+// MASTER is a plain list — it grants a VIEW, not a set of records, and the
+// records it shows are still filtered by the viewer's own pipeline access.
+// ---------------------------------------------------------------------------
+export interface AccessGrantsV2 {
+  pipelines: AccessGrants;
+  folders: AccessGrants;
+  master: string[];
+}
+
+const emptyV2 = (): AccessGrantsV2 => ({ pipelines: {}, folders: {}, master: [] });
+
+function asIdMap(v: unknown): AccessGrants {
+  const out: AccessGrants = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [k, ids] of Object.entries(v as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue; // ignores the {"test":"ok"} placeholder
+    out[k] = ids.map(String).filter(Boolean);
+  }
+  return out;
+}
+
+/** Parse either shape. Returns null only when there is nothing usable at all. */
+export function parseAccessValue(raw: string): AccessGrantsV2 | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const o = parsed as Record<string, unknown>;
+
+  // v2 — recognised by ANY of its three keys, so a value holding only folders
+  // (no pipelines yet) is still read as v2 rather than mistaken for legacy.
+  if ("pipelines" in o || "folders" in o || "master" in o) {
+    return {
+      pipelines: asIdMap(o.pipelines),
+      folders: asIdMap(o.folders),
+      master: Array.isArray(o.master) ? o.master.map(String).filter(Boolean) : [],
+    };
+  }
+
+  // Legacy flat map -> pipelines. An empty {} is a REAL state (everyone
+  // unmapped) and must not read as "missing", or we would fall back to the env
+  // var and hand back access the admin deliberately removed.
+  const flat = asIdMap(o);
+  if (Object.keys(flat).length || Object.keys(o).length === 0)
+    return { ...emptyV2(), pipelines: flat };
+  return null;
+}
+
+/** Full v2 grants, or null when the custom value is missing/unreadable. */
+export async function fetchAccessGrantsV2(): Promise<AccessGrantsV2 | null> {
   try {
     const cv = await findAccessCustomValue();
     if (!cv || !cv.value) return null;
-    const parsed = JSON.parse(cv.value) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const out: AccessGrants = {};
-    for (const [userId, pids] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!Array.isArray(pids)) continue; // ignores the {"test":"ok"} placeholder
-      out[userId] = pids.map(String).filter(Boolean);
-    }
-    return Object.keys(out).length || isEmptyGrantsObject(parsed) ? out : null;
+    return parseAccessValue(cv.value);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error(
-      "[access] couldn't read the pipeline-access custom value; falling back to PIPELINE_ACCESS_MAP.",
+      "[access] couldn't read the access custom value; falling back to PIPELINE_ACCESS_MAP.",
       e instanceof Error ? e.message : String(e),
     );
     return null;
   }
+}
+
+// Back-compat: the pipeline half only. Every existing caller keeps working.
+export async function fetchPipelineAccessGrants(): Promise<AccessGrants | null> {
+  const v2 = await fetchAccessGrantsV2();
+  return v2 ? v2.pipelines : null;
 }
 
 // A deliberately-empty saved map ({}) is a real state — everyone unmapped — and
@@ -1552,11 +1812,19 @@ function isEmptyGrantsObject(parsed: unknown): boolean {
 }
 
 // Write the whole map as one JSON value. Creates the custom value if it's absent.
-export async function savePipelineAccessGrants(
-  grants: AccessGrants,
+export async function saveAccessGrantsV2(
+  patch: Partial<AccessGrantsV2>,
 ): Promise<{ id: string }> {
   const { locationId } = requireEnv();
-  const body = JSON.stringify(grants);
+  // MERGE, never replace. The Access tab may save only the folder grid; writing
+  // just that would wipe every pipeline grant on the account.
+  const current = (await fetchAccessGrantsV2()) ?? emptyV2();
+  const next: AccessGrantsV2 = {
+    pipelines: patch.pipelines ?? current.pipelines,
+    folders: patch.folders ?? current.folders,
+    master: patch.master ?? current.master,
+  };
+  const body = JSON.stringify(next);
   const existing = await findAccessCustomValue();
   if (existing?.id) {
     await ghlSend(
@@ -1572,6 +1840,12 @@ export async function savePipelineAccessGrants(
     { name: ACCESS_CUSTOM_VALUE_NAME, value: body },
   );
   return { id: String(res.customValue?.id ?? res.id ?? "") };
+}
+
+export async function savePipelineAccessGrants(
+  grants: AccessGrants,
+): Promise<{ id: string }> {
+  return saveAccessGrantsV2({ pipelines: grants });
 }
 
 // Upsert dedupes by email/phone at GHL; `isNew` distinguishes created vs matched.
@@ -2309,8 +2583,15 @@ export async function uploadResource(file: {
   buffer: ArrayBuffer;
   filename: string;
   contentType: string;
+  // ITEM 6c — WHICH folder. With several visible folders "upload" alone is
+  // ambiguous, and defaulting to the env folder would quietly file a document in
+  // a folder the uploader wasn't looking at. When a folder is named, the env var
+  // is not required at all — that is why requireEnv is called conditionally.
+  folderId?: string;
 }): Promise<{ id: string; url: string; name: string }> {
-  const { resourcesFolderId } = requireEnv({ resourcesFolder: true });
+  const target = (file.folderId || "").trim();
+  const { resourcesFolderId } = requireEnv({ resourcesFolder: !target });
+  const parentId = target || resourcesFolderId;
   const form = new FormData();
   const blob = new Blob([file.buffer], {
     type: file.contentType || "application/octet-stream",
@@ -2319,7 +2600,7 @@ export async function uploadResource(file: {
   form.append("file", blob, file.filename);
   form.append("hosted", "false");
   form.append("name", file.filename);
-  form.append("parentId", resourcesFolderId);
+  form.append("parentId", parentId);
 
   const url = `${BASE_URL}/medias/upload-file`;
   // IMPORTANT: do NOT set Content-Type here — fetch derives the multipart

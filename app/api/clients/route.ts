@@ -15,6 +15,7 @@ import { isAdminSession } from "@/lib/visibility";
 import { getUserHomePipelines } from "@/lib/pipelineAccess";
 import type { ApiError, NewClientPayload } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { emit } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -267,6 +268,23 @@ async function postHandler(request: Request) {
         } as ApiError,
         { status: 502 },
       );
+
+    await emit(
+      "opportunity.created",
+      {
+        actor: { userId: session?.userId || "" },
+        opportunityId: oppId,
+        contactId,
+      },
+      {
+        pipelineId: dest.id,
+        pipelineName: dest.name,
+        stageId,
+        ownerId: assignedTo,
+        name: `${firstName} ${lastName}`.trim(),
+        source: "Dashboard — Add Lead",
+      },
+    );
 
     return NextResponse.json(
       // `rejectedDetails` is reported rather than swallowed: a value that

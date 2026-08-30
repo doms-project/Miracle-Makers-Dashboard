@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "@/components/ErrorMessage";
+import { apiFetch, apiError } from "@/lib/apiFetch";
 import type { ReactNode } from "react";
 import {
   DndContext,
@@ -52,6 +53,16 @@ const STAGE_ORDER = [
   "Auth Received in HH",
   "Authorization Received",
 ];
+
+// ITEM 6c — one Resources section per folder the viewer may see.
+type ResFile = { name: string; url: string; type: string; size: number };
+type ResSection = {
+  id: string;
+  name: string;
+  isPublic?: boolean;
+  failed?: boolean;
+  files: ResFile[];
+};
 
 const clientName = (r: OpportunityRecord) => `${r.first} ${r.last}`.trim();
 // The panel header. The OPPORTUNITY's own name leads — one contact can hold
@@ -107,6 +118,13 @@ const IconBoard = () => (
     <rect x="17" y="4" width="4" height="13" rx="1" />
   </svg>
 );
+// ITEM 4 — Master: several columns seen at once, so a wider grid than the board.
+const IconMaster = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <rect x="3" y="4" width="18" height="16" rx="1" />
+    <path d="M9 4v16M15 4v16M3 9h18" />
+  </svg>
+);
 const IconDoc = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -149,7 +167,12 @@ const BlockPill = ({ b }: { b: string }) => (
 );
 
 // ---- Phase 2 field editors ----
-type SaveState = { status: "saving" | "error"; msg?: string } | undefined;
+// `err` holds the ERROR OBJECT, not a stringified message: per-field saves are
+// exactly where the raw GHL 400 ("stageId must be one of the following values:
+// c4fa7d37-…") was reaching reps, and <ErrorMessage> needs the object to map it.
+type SaveState =
+  | { status: "saving" | "error"; err?: unknown }
+  | undefined;
 
 // Multi-select / long-text fields get a full-width row.
 const isWideField = (dt: string): boolean =>
@@ -519,7 +542,7 @@ function FieldControl({
       {save?.status === "saving" ? (
         <div className="savemsg">Saving…</div>
       ) : save?.status === "error" ? (
-        <div className="savemsg err">✗ {save.msg || "Save failed"}</div>
+        <ErrorMessage error={save.err ?? "Save failed"} />
       ) : null}
     </>
   );
@@ -666,6 +689,111 @@ function BoardCard({
   );
 }
 
+// ITEM 6c — one file card. Lifted out of the Resources tab unchanged so the
+// per-folder sections and the legacy single-folder grid render identically
+// rather than drifting into two near-copies.
+function ResCard({
+  f,
+  kind,
+  onPreview,
+}: {
+  f: ResFile;
+  kind: "pdf" | "image" | null;
+  onPreview: () => void;
+}) {
+  const inner = (
+    <>
+      <span className="ricon">
+        <IconDoc />
+      </span>
+      <span className="rbody">
+        <span className="rname">{f.name}</span>
+        <span className="rmeta">
+          {f.type || "file"}
+          {f.size ? ` · ${fmtSize(f.size)}` : ""}
+        </span>
+      </span>
+      <span className="ropen">{kind ? "Preview" : "Download ↓"}</span>
+    </>
+  );
+  return kind ? (
+    <button type="button" className="rescard" onClick={onPreview}>
+      {inner}
+    </button>
+  ) : (
+    <a
+      className="rescard"
+      href={f.url}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {inner}
+    </a>
+  );
+}
+
+// ITEM 4 — a Master-view card. Deliberately NOT a BoardCard:
+//
+//   * it carries the CURRENT STAGE AS TEXT, because the column no longer says
+//     it. On the board the column IS the stage; here the column is the pipeline,
+//     so without this line a card gives no idea where in the process it sits.
+//   * it does NOT drag. A card here sits in a pipeline column, so dropping it on
+//     another column would mean a CROSS-PIPELINE move — which needs an owner, a
+//     destination stage and a reason, i.e. the Move dialog. A drag can supply
+//     none of those, and silently guessing them is how records end up owned by
+//     the wrong division. Open the record and use Move.
+function MasterCard({
+  r,
+  following,
+  relBadge,
+  onOpen,
+}: {
+  r: OpportunityRecord;
+  following: boolean;
+  relBadge?: string;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="card mcard nodrag" onClick={onOpen}>
+      <div className="cn">
+        {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
+        {following ? (
+          <span
+            className="follow-tag"
+            title="You follow this record (you're not the owner)"
+          >
+            Following
+          </span>
+        ) : null}
+      </div>
+      <div className="cm">{r.rep || "Unassigned"}</div>
+      <div className="mstage" title="Current stage">
+        {r.stage || "—"}
+      </div>
+      <div className="cf">
+        {r.pipelineName ? (
+          <span className="pill divpill" title={r.pipelineName}>
+            {divisionLabel(r.pipelineName)}
+          </span>
+        ) : null}
+        {r.shared ? (
+          <span className="pill" title="Shared with you from another division">
+            Shared
+          </span>
+        ) : null}
+        {relBadge ? (
+          <span
+            className="pill rellink"
+            title="Linked through the caregiver ↔ client association"
+          >
+            ⇄ {relBadge}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
   // (or "none" when not embedded / not configured). Filtering is NOT wired yet
@@ -712,15 +840,34 @@ export default function Dashboard() {
   // draws one column per HOME pipeline, so an unmapped user would otherwise land
   // on a completely blank screen rather than a merely empty one).
   const [view, setView] = useState<
-    "list" | "board" | "resources" | "import" | "access"
+    "list" | "board" | "master" | "resources" | "import" | "access"
   >("board");
   const [selId, setSelId] = useState<string | null>(null);
+  // ITEM 4 — the Master view GRANT, decided server-side (admins always).
+  const [canSeeMaster, setCanSeeMaster] = useState(false);
   // Resources tab (folder-scoped GHL media).
   const [resources, setResources] = useState<
     { name: string; url: string; type: string; size: number }[]
   >([]);
+  // ITEM 6c — one section per folder this viewer may see. `resources` above is
+  // the LEGACY single-folder payload, still served when no folder grants exist,
+  // so this deploy cannot empty the tab for someone who had files yesterday.
+  const [resSections, setResSections] = useState<ResSection[]>([]);
+  const [canManageFolders, setCanManageFolders] = useState(false);
+  const [uploadFolder, setUploadFolder] = useState<string>("");
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderErr, setFolderErr] = useState<unknown>(null);
+  // The folder pending deletion, with the file count the SERVER counted. A
+  // client-side count could be stale, and this call is irreversible.
+  const [delFolder, setDelFolder] = useState<{
+    id: string;
+    name: string;
+    fileCount: number;
+  } | null>(null);
   const [resLoading, setResLoading] = useState(false);
-  const [resErr, setResErr] = useState<string | null>(null);
+  const [resErr, setResErr] = useState<unknown>(null);
   const [resLoaded, setResLoaded] = useState(false);
   const [resQuery, setResQuery] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -747,15 +894,15 @@ export default function Dashboard() {
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [editBusy, setEditBusy] = useState(false);
-  const [editErr, setEditErr] = useState<string | null>(null);
+  const [editErr, setEditErr] = useState<unknown>(null);
   // ITEM 2 — the note pending removal. window.confirm() is never used: this app
   // runs inside a GHL iframe, where a sandboxed frame without `allow-modals`
   // makes confirm() return false with no prompt — the click just dies.
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
-  const [notesErr, setNotesErr] = useState<string | null>(null);
+  const [notesErr, setNotesErr] = useState<unknown>(null);
   const [noteBusy, setNoteBusy] = useState(false);
-  const [noteErr, setNoteErr] = useState<string | null>(null);
+  const [noteErr, setNoteErr] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -793,6 +940,7 @@ export default function Dashboard() {
       if (body.stagesByPipeline) setStagesByPipeline(body.stagesByPipeline);
       if (body.viewer?.homePipelineIds)
         setHomePipelineIds(body.viewer.homePipelineIds);
+      setCanSeeMaster(!!body.viewer?.canSeeMaster);
     } catch (e) {
       setError({
         error: "Could not reach the dashboard API.",
@@ -810,6 +958,31 @@ export default function Dashboard() {
     if (sso.status === "loading") return;
     load();
   }, [sso.status, load]);
+
+  // ITEM 4 — REFRESH ON FOCUS, not polling.
+  //
+  // The Master view is live by construction: it reads the same payload every
+  // other view reads, so a record that moves is already correct the next time
+  // the payload is fetched. What it needed was a reason to re-fetch, and polling
+  // is the wrong one — this runs in a GHL iframe that may sit open on a second
+  // monitor all day, and a timer would keep hitting the API (and GHL behind it)
+  // for a tab nobody is looking at.
+  //
+  // `visibilitychange` fires when the tab comes BACK — which is exactly when the
+  // person is about to read it, and exactly when the data is most likely stale
+  // because they were just editing something in GoHighLevel. Guarded on
+  // `visible` so the hide event doesn't fire a fetch, and skipped while a record
+  // panel is open so a refresh can't yank the record out from under an edit.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (selId) return;
+      if (sso.status === "loading") return;
+      load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [load, selId, sso.status]);
 
   // Escape closes the record panel.
   useEffect(() => {
@@ -835,15 +1008,26 @@ export default function Dashboard() {
       if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
       const res = await fetch("/api/resources", { headers, cache: "no-store" });
       const j = (await res.json().catch(() => ({}))) as {
-        resources?: { name: string; url: string; type: string; size: number }[];
+        resources?: ResFile[];
+        sections?: ResSection[];
+        canManageFolders?: boolean;
         error?: string;
         detail?: string;
       };
-      if (!res.ok) throw new Error(failureMessage(res, j));
+      if (!res.ok) throw apiError(res, j);
       setResources(j.resources || []);
+      const secs = j.sections || [];
+      setResSections(secs);
+      setCanManageFolders(!!j.canManageFolders);
+      // Keep the upload target if it still exists, otherwise fall back to the
+      // first folder. Leaving a stale id selected would send the upload to a
+      // folder that is gone and fail on the server's folder check.
+      setUploadFolder((cur) =>
+        cur && secs.some((s) => s.id === cur) ? cur : (secs[0]?.id ?? ""),
+      );
       setResLoaded(true);
     } catch (e) {
-      setResErr(e instanceof Error ? e.message : String(e));
+      setResErr(e);
     } finally {
       setResLoading(false);
     }
@@ -870,6 +1054,10 @@ export default function Dashboard() {
         if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
         const fd = new FormData();
         fd.append("file", file);
+        // ITEM 6c — the chosen folder rides with the upload. Empty means the
+        // legacy env folder, which is what a location with no folder grants
+        // still uses.
+        if (uploadFolder) fd.append("folderId", uploadFolder);
         const res = await fetch("/api/resources/upload", {
           method: "POST",
           headers,
@@ -880,8 +1068,11 @@ export default function Dashboard() {
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(failureMessage(res, j));
-        setUploadMsg(`✓ Uploaded ${file.name}`);
+        if (!res.ok) throw apiError(res, j);
+        const where = resSections.find((s) => s.id === uploadFolder)?.name;
+        setUploadMsg(
+          `✓ Uploaded ${file.name}${where ? ` to ${where}` : ""}`,
+        );
         setResLoaded(false); // force a fresh list on next tick
         await loadResources();
       } catch (e) {
@@ -890,8 +1081,115 @@ export default function Dashboard() {
         setUploading(false);
       }
     },
-    [sso, loadResources],
+    [sso, loadResources, uploadFolder, resSections],
   );
+
+  // ITEM 6a — create a folder (admin; the server re-checks, that gate is the
+  // real boundary).
+  //
+  // ⚠️ GHL AUTO-RENAMES ON COLLISION: ask for "OLTL" when one exists and you get
+  // "OLTL (1)" with a 200 and no warning. The route reports the name GHL
+  // actually assigned, and we say so — otherwise the admin goes looking for a
+  // folder under the name they typed and doesn't find it.
+  const createFolder = useCallback(async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    setFolderBusy(true);
+    setFolderErr(null);
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      const res = await fetch("/api/resources/folders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ssoKey: sso.status === "ready" ? sso.blob : undefined,
+          name,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        folder?: { id: string; name: string; renamed?: boolean; requested?: string };
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw apiError(res, j);
+      setUploadMsg(
+        j.folder?.renamed
+          ? `✓ Created “${j.folder.name}” — GoHighLevel renamed it (a folder called “${j.folder.requested}” already exists).`
+          : `✓ Created “${j.folder?.name ?? name}”.`,
+      );
+      setNewFolderOpen(false);
+      setNewFolderName("");
+      setResLoaded(false);
+      await loadResources();
+    } catch (e) {
+      setFolderErr(e);
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [newFolderName, sso, loadResources]);
+
+  // ITEM 6a — deletion is TWO calls on purpose. The first (no `confirm`) deletes
+  // nothing and returns the file count the server just counted; only then do we
+  // ask, naming that number. A count sent up from the browser could be stale,
+  // and this removes the folder's CONTENTS irreversibly.
+  const askDeleteFolder = useCallback(
+    async (id: string, name: string) => {
+      setFolderErr(null);
+      try {
+        const headers: Record<string, string> = {};
+        if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+        const res = await fetch(
+          `/api/resources/folders?id=${encodeURIComponent(id)}`,
+          { method: "DELETE", headers },
+        );
+        const j = (await res.json().catch(() => ({}))) as {
+          fileCount?: number;
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok) throw apiError(res, j);
+        setDelFolder({ id, name, fileCount: j.fileCount ?? 0 });
+      } catch (e) {
+        setFolderErr(e);
+        setUploadMsg(`✗ ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [sso],
+  );
+
+  const deleteFolder = useCallback(async () => {
+    if (!delFolder) return;
+    setFolderBusy(true);
+    setFolderErr(null);
+    try {
+      const headers: Record<string, string> = {};
+      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      const res = await fetch(
+        `/api/resources/folders?id=${encodeURIComponent(delFolder.id)}&confirm=1`,
+        { method: "DELETE", headers },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw apiError(res, j);
+      setUploadMsg(
+        `✓ Deleted “${delFolder.name}” and ${delFolder.fileCount} file${
+          delFolder.fileCount === 1 ? "" : "s"
+        }.`,
+      );
+      setDelFolder(null);
+      setResLoaded(false);
+      await loadResources();
+    } catch (e) {
+      setFolderErr(e);
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [delFolder, sso, loadResources]);
 
   // Classify a resource for preview vs download by extension/mime.
   const previewKind = useCallback(
@@ -915,6 +1213,23 @@ export default function Dashboard() {
     return resources.filter((f) => f.name.toLowerCase().includes(t));
   }, [resources, resQuery]);
 
+  // The same search across the folder sections. Sections are KEPT when empty
+  // rather than dropped, so a search that matches nothing in a folder still
+  // shows the folder — otherwise a folder appears to vanish while you type.
+  const visibleSections = useMemo(() => {
+    const t = resQuery.trim().toLowerCase();
+    if (!t) return resSections;
+    return resSections.map((s) => ({
+      ...s,
+      files: s.files.filter((f) => f.name.toLowerCase().includes(t)),
+    }));
+  }, [resSections, resQuery]);
+
+  const sectionFileCount = useMemo(
+    () => resSections.reduce((n, s) => n + s.files.length, 0),
+    [resSections],
+  );
+
   // Load this opportunity's notes when the panel opens (server re-checks access).
   useEffect(() => {
     if (!selId || sso.status === "loading") return;
@@ -931,7 +1246,7 @@ export default function Dashboard() {
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(failureMessage(res, j));
+        if (!res.ok) throw apiError(res, j);
         if (!cancelled)
           setNotes((prev) => ({
             ...prev,
@@ -944,7 +1259,7 @@ export default function Dashboard() {
           }));
       })
       .catch((e) => {
-        if (!cancelled) setNotesErr(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setNotesErr(e);
       })
       .finally(() => {
         if (!cancelled) setNotesLoading(false);
@@ -1476,6 +1791,39 @@ export default function Dashboard() {
     );
   }, [data, q, homePipelineIds, adminPipeline]);
 
+  // ---- ITEM 4: MASTER VIEW ----
+  //
+  // A VIEW, not a sixth pipeline. Nothing is created in GoHighLevel and no
+  // record is duplicated: these are the SAME records the list and board already
+  // show, laid out one column per pipeline instead of one column per stage.
+  //
+  // Because it re-arranges what the server already returned, granting it can
+  // never widen access — the payload was filtered before it reached the browser.
+  //
+  // Columns are the pipelines this viewer can access. `selectablePipelines` is
+  // the viewer's own home set (the full selected set for an admin), so a column
+  // can never name a pipeline they hold nothing in. Records SHARED with the
+  // viewer are included — unlike the board — because a cross-division case is
+  // precisely what this view exists to make visible.
+  const masterColumns = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const match = (r: OpportunityRecord) =>
+      (office === "all" || r.office === office) &&
+      (needle === "" ||
+        `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
+    const byPipeline = new Map<string, OpportunityRecord[]>();
+    for (const r of data) {
+      if (!match(r)) continue;
+      const bucket = byPipeline.get(r.pipelineId);
+      if (bucket) bucket.push(r);
+      else byPipeline.set(r.pipelineId, [r]);
+    }
+    return selectablePipelines.map((p) => ({
+      ...p,
+      records: byPipeline.get(p.id) || [],
+    }));
+  }, [data, selectablePipelines, q, office]);
+
   // Stats (client-requested tiles: total, per office, by source, per rep).
   // Stats read `filtered`, NOT `data`. `data` is every record the server
   // returned across all pipelines; `filtered` is what the admin pipeline
@@ -1568,7 +1916,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok || !j.note)
-        throw new Error(failureMessage(res, j));
+        throw apiError(res, j);
       const n = j.note;
       setNotes((prev) => ({
         ...prev,
@@ -1578,7 +1926,7 @@ export default function Dashboard() {
       }));
       setNoteDraft(""); // clear only on success — never lose typed input
     } catch (e) {
-      setNoteErr(e instanceof Error ? e.message : String(e));
+      setNoteErr(e);
     } finally {
       setNoteBusy(false);
     }
@@ -1616,7 +1964,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(failureMessage(res, j));
+        throw apiError(res, j);
       setNotes((prev) => ({
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
@@ -1635,7 +1983,7 @@ export default function Dashboard() {
       setRemoveTarget(null); // closed only on success; a failure keeps the
                              // dialog open WITH the reason on it
     } catch (e) {
-      setEditErr(e instanceof Error ? e.message : String(e));
+      setEditErr(e);
     } finally {
       setEditBusy(false);
     }
@@ -1667,7 +2015,7 @@ export default function Dashboard() {
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(failureMessage(res, j));
+        throw apiError(res, j);
       setNotes((prev) => ({
         ...prev,
         [selId]: (prev[selId] || []).map((n) =>
@@ -1688,7 +2036,7 @@ export default function Dashboard() {
       setEditingNote(null);
       setEditDraft("");
     } catch (e) {
-      setEditErr(e instanceof Error ? e.message : String(e));
+      setEditErr(e);
     } finally {
       setEditBusy(false);
     }
@@ -1721,7 +2069,7 @@ export default function Dashboard() {
           detail?: string;
         };
         if (!res.ok || !j.ok || !j.record)
-          throw new Error(failureMessage(res, j));
+          throw apiError(res, j);
         // Reflect the server's canonical record (esp. array-wrapped values).
         setData((prev) => prev.map((r) => (r.id === rec.id ? j.record! : r)));
         setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
@@ -1732,7 +2080,7 @@ export default function Dashboard() {
           ...p,
           [skey(rec.id, fk)]: {
             status: "error",
-            msg: e instanceof Error ? e.message : String(e),
+            err: e,
           },
         }));
       }
@@ -1773,7 +2121,7 @@ export default function Dashboard() {
           detail?: string;
         };
         if (!res.ok || !j.ok || !Array.isArray(j.followers))
-          throw new Error(failureMessage(res, j));
+          throw apiError(res, j);
         const ids = j.followers;
         const names = ids.map(
           (uid) => users.find((u) => u.id === uid)?.name || "Former user",
@@ -1789,7 +2137,7 @@ export default function Dashboard() {
           ...p,
           [skey(rec.id, fk)]: {
             status: "error",
-            msg: e instanceof Error ? e.message : String(e),
+            err: e,
           },
         }));
       }
@@ -1889,7 +2237,7 @@ export default function Dashboard() {
     const s = saveState[skey(id, fk)];
     if (s?.status === "saving") return <div className="savemsg">Saving…</div>;
     if (s?.status === "error")
-      return <div className="savemsg err">✗ {s.msg || "Save failed"}</div>;
+      return <ErrorMessage error={s.err ?? "Save failed"} />;
     return null;
   };
   const savingFk = (id: string, fk: string) =>
@@ -1994,6 +2342,22 @@ export default function Dashboard() {
               <IconBoard />
               Board
             </button>
+            {/* ITEM 4 — shown only to viewers the server GRANTED it to. The
+                grant is decided in the Access tab and re-derived server-side on
+                every payload; hiding the tab is convenience, not the boundary
+                (there is nothing to gate here — the view re-arranges records
+                the server already sent). */}
+            {canSeeMaster && (
+              <button
+                className={view === "master" ? "on" : ""}
+                onClick={() => setView("master")}
+                type="button"
+                title="Every pipeline you can access, side by side"
+              >
+                <IconMaster />
+                Master
+              </button>
+            )}
             <button
               className={view === "resources" ? "on" : ""}
               onClick={() => setView("resources")}
@@ -2025,8 +2389,16 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* opportunity-only controls (hidden on the Resources / Import tabs) */}
-        {view !== "resources" && view !== "import" && view !== "access" && (
+        {/* Opportunity controls — LIST and BOARD only.
+            Master is excluded deliberately rather than added to the "hidden on"
+            list: every control here is stage- or pipeline-shaped (the stage
+            chips, the pipeline selector, the stats that count `filtered`), and
+            in Master the COLUMNS are the pipelines and each card names its own
+            stage. Leaving them would mean a stage chip that empties columns it
+            doesn't describe and a stat line that disagrees with what's on
+            screen. Master renders the two filters that do apply — search and
+            office — in its own toolbar below. */}
+        {(view === "list" || view === "board") && (
         <>
         <div className="stats">
           <div className="stat">
@@ -2323,9 +2695,117 @@ export default function Dashboard() {
               The bulk import tool is restricted to admin users.
             </div>
           )
+        ) : view === "master" ? (
+          // ITEM 4 — MASTER VIEW. Every pipeline this viewer can access, side by
+          // side. Not a sixth pipeline: nothing is created in GoHighLevel, and
+          // these are the same records the list already returns.
+          !canSeeMaster ? (
+            <div className="empty">
+              <b>Not enabled for you</b>
+              <br />
+              The Master view is granted per user in the Access tab.
+            </div>
+          ) : loading ? (
+            <div className="statewrap">
+              <div className="statecard">
+                <div className="spinner" />
+                <h3>Loading opportunities…</h3>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="statewrap">
+              <div className="statecard">
+                <h3>
+                  <span className="errdot">●</span> Couldn&apos;t load
+                  opportunities
+                </h3>
+                <p>{error.error}</p>
+                {error.detail ? (
+                  <div className="detail">{error.detail}</div>
+                ) : null}
+                <button className="retry" onClick={load} type="button">
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : masterColumns.length === 0 ? (
+            <NoAccessNotice />
+          ) : (
+            <>
+              <div className="toolbar mtoolbar">
+                <div className="search">
+                  <IconSearch />
+                  <input
+                    placeholder="Search by client name…"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                  />
+                </div>
+                <div className="officefilter">
+                  <label htmlFor="mofficeSel">Office</label>
+                  <select
+                    id="mofficeSel"
+                    value={office}
+                    onChange={(e) => setOffice(e.target.value)}
+                  >
+                    <option value="all">All offices</option>
+                    {offices.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <span className="count">
+                  {masterColumns.reduce((n, c) => n + c.records.length, 0)} across{" "}
+                  {masterColumns.length} pipeline
+                  {masterColumns.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {/* Says the one thing that is not obvious from looking at it: why
+                  the cards don't drag. Without this, "the board lets me drag and
+                  this doesn't" reads as a bug. */}
+              <div className="mnote">
+                Every pipeline you can access, side by side. Cards don&apos;t drag
+                here — a column is a <b>pipeline</b>, so moving between them is a
+                transfer that needs an owner and a reason. Open a record and use{" "}
+                <b>Move</b>.
+              </div>
+              <div className="board masterboard">
+                {masterColumns.map((c) => (
+                  <div className="col" key={c.id}>
+                    <div className="colhead">
+                      <span>{c.name}</span>
+                      <span className="pill">{c.records.length}</span>
+                    </div>
+                    <div className="colbody">
+                      {c.records.length ? (
+                        c.records.map((r) => (
+                          <MasterCard
+                            key={r.id}
+                            r={r}
+                            following={followsNotOwns(r)}
+                            relBadge={relBadge(r)}
+                            onOpen={() => setSelId(r.id)}
+                          />
+                        ))
+                      ) : (
+                        <div
+                          className="empty"
+                          style={{ padding: "18px 4px", fontSize: 11 }}
+                        >
+                          Empty
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )
         ) : view === "resources" ? (
           <div className="scroll reswrap">
-            {/* toolbar: search + admin upload */}
+            {/* toolbar: search + folder picker + admin upload / new folder */}
             <div className="restoolbar">
               <div className="search">
                 <IconSearch />
@@ -2335,6 +2815,41 @@ export default function Dashboard() {
                   onChange={(e) => setResQuery(e.target.value)}
                 />
               </div>
+              {/* ITEM 6c — UPLOAD ASKS WHICH FOLDER. With several folders on
+                  screen, an "Upload" button alone can only guess, and a document
+                  filed into a folder the uploader wasn't looking at is worse
+                  than a refused upload. Shown once there is a real choice; with
+                  one folder there is nothing to ask. */}
+              {canManageFolders && resSections.length > 1 ? (
+                <div className="officefilter">
+                  <label htmlFor="upFolder">Upload to</label>
+                  <select
+                    id="upFolder"
+                    value={uploadFolder}
+                    onChange={(e) => setUploadFolder(e.target.value)}
+                    disabled={uploading}
+                  >
+                    {resSections.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              {canManageFolders ? (
+                <button
+                  type="button"
+                  className="ighost resnewfolder"
+                  onClick={() => {
+                    setNewFolderOpen(true);
+                    setNewFolderName("");
+                    setFolderErr(null);
+                  }}
+                >
+                  + New folder
+                </button>
+              ) : null}
               {isAdminViewer ? (
                 <label className={`resupload ${uploading ? "busy" : ""}`}>
                   <input
@@ -2373,7 +2888,7 @@ export default function Dashboard() {
                   <h3>
                     <span className="errdot">●</span> Couldn&apos;t load resources
                   </h3>
-                  <p>{resErr}</p>
+                  <ErrorMessage error={resErr} className="errbody" />
                   <button
                     className="retry"
                     onClick={loadResources}
@@ -2383,65 +2898,123 @@ export default function Dashboard() {
                   </button>
                 </div>
               </div>
-            ) : resources.length === 0 ? (
-              <div className="empty">
-                <b>No resources yet</b>
+            ) : resSections.length === 0 && resources.length === 0 ? (
+              // ITEM 6c — NO GRANTS gets the SAME empty-state pattern as no
+              // pipeline access: this is fail-closed working correctly, and the
+              // person reading it has done nothing wrong. Admins see every
+              // folder, so for them an empty tab genuinely means no folders.
+              <div className="empty noaccess">
+                <b>
+                  {canManageFolders
+                    ? "No resource folders yet"
+                    : "No folders shared with you yet"}
+                </b>
                 <br />
-                {isAdminViewer
-                  ? "Upload a document above, or add files to the Resources folder in GoHighLevel."
-                  : "Add documents to the Resources folder in GoHighLevel."}
+                {canManageFolders
+                  ? "Create a folder above, then grant it to people in the Access tab."
+                  : "You'll see documents here once an admin gives you access to a folder."}
               </div>
-            ) : visibleResources.length === 0 ? (
-              <div className="empty">
-                <b>No matches</b>
-                <br />
-                No resource name contains “{resQuery}”.
-              </div>
+            ) : resSections.length === 0 ? (
+              // Legacy single-folder path — still served when the location has
+              // no folder grants and RESOURCES_FOLDER_ID is set, so nobody who
+              // had files yesterday loses them to this deploy.
+              visibleResources.length === 0 ? (
+                <div className="empty">
+                  <b>No matches</b>
+                  <br />
+                  No resource name contains “{resQuery}”.
+                </div>
+              ) : (
+                <div className="resgrid">
+                  {visibleResources.map((f, i) => (
+                    <ResCard
+                      key={`${f.url}-${i}`}
+                      f={f}
+                      kind={previewKind(f)}
+                      onPreview={() => {
+                        const kind = previewKind(f);
+                        if (kind) setPreview({ name: f.name, url: f.url, kind });
+                      }}
+                    />
+                  ))}
+                </div>
+              )
             ) : (
-              <div className="resgrid">
-                {visibleResources.map((f, i) => {
-                  const kind = previewKind(f);
-                  const common = (
-                    <>
-                      <span className="ricon">
-                        <IconDoc />
-                      </span>
-                      <span className="rbody">
-                        <span className="rname">{f.name}</span>
-                        <span className="rmeta">
-                          {f.type || "file"}
-                          {f.size ? ` · ${fmtSize(f.size)}` : ""}
+              // ITEM 6c — SECTIONS PER FOLDER, not a selector. A selector shows
+              // one folder at a time and hides the fact that the others exist;
+              // sections make the whole shared set readable in one scroll, which
+              // is what people are actually doing on this tab.
+              <>
+                {resQuery.trim() && sectionFileCount > 0 &&
+                visibleSections.every((s) => s.files.length === 0) ? (
+                  <div className="empty">
+                    <b>No matches</b>
+                    <br />
+                    No resource name contains “{resQuery}”.
+                  </div>
+                ) : null}
+                {visibleSections.map((s) => (
+                  <section className="ressection" key={s.id}>
+                    <div className="ressechead">
+                      <h3>{s.name}</h3>
+                      {s.isPublic ? (
+                        <span
+                          className="respill"
+                          title="Marked visible to everyone in the location."
+                        >
+                          everyone
                         </span>
+                      ) : null}
+                      <span className="rescount">
+                        {s.files.length} file{s.files.length === 1 ? "" : "s"}
                       </span>
-                      <span className="ropen">
-                        {kind ? "Preview" : "Download ↓"}
-                      </span>
-                    </>
-                  );
-                  return kind ? (
-                    <button
-                      key={`${f.url}-${i}`}
-                      type="button"
-                      className="rescard"
-                      onClick={() =>
-                        setPreview({ name: f.name, url: f.url, kind })
-                      }
-                    >
-                      {common}
-                    </button>
-                  ) : (
-                    <a
-                      key={`${f.url}-${i}`}
-                      className="rescard"
-                      href={f.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {common}
-                    </a>
-                  );
-                })}
-              </div>
+                      {canManageFolders ? (
+                        <button
+                          type="button"
+                          className="resdel"
+                          onClick={() => askDeleteFolder(s.id, s.name)}
+                          title="Delete this folder and everything in it"
+                        >
+                          Delete folder
+                        </button>
+                      ) : null}
+                    </div>
+                    {s.failed ? (
+                      <div className="empty">
+                        Couldn&apos;t read this folder&apos;s files. The other
+                        folders above are unaffected.
+                      </div>
+                    ) : s.files.length === 0 ? (
+                      <div className="empty">
+                        {resQuery.trim() ? "No matches here." : "Empty."}
+                      </div>
+                    ) : (
+                      <div className="resgrid">
+                        {s.files.map((f, i) => (
+                          <ResCard
+                            key={`${f.url}-${i}`}
+                            f={f}
+                            kind={previewKind(f)}
+                            onPreview={() => {
+                              const kind = previewKind(f);
+                              if (kind)
+                                setPreview({ name: f.name, url: f.url, kind });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                ))}
+                {/* 🔴 ORGANISATION, NOT SECURITY — said here, where people
+                    upload, rather than only in the admin tab. */}
+                <div className="imeta">
+                  These folders decide what is <b>listed</b> here. A GoHighLevel
+                  media link works for anyone who has it, so{" "}
+                  <b>client-specific documents belong on the client&apos;s
+                  record</b>, not in a shared folder.
+                </div>
+              </>
             )}
           </div>
         ) : loading ? (
@@ -2656,6 +3229,79 @@ export default function Dashboard() {
           onCancel={() => {
             setRemoveTarget(null);
             setEditErr(null);
+          }}
+        />
+      ) : null}
+
+      {/* ITEM 6a — new folder. An in-app dialog, never window.prompt(), which a
+          sandboxed GHL iframe returns null from without ever asking. */}
+      {newFolderOpen ? (
+        <ConfirmDialog
+          title="New resource folder"
+          body={
+            <>
+              <p style={{ margin: "0 0 10px" }}>
+                Creates a folder in the GoHighLevel media library. Nobody sees it
+                until you grant it in the <b>Access</b> tab.
+              </p>
+              <input
+                className="foldername"
+                autoFocus
+                placeholder="Folder name"
+                value={newFolderName}
+                disabled={folderBusy}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newFolderName.trim() && !folderBusy)
+                    createFolder();
+                }}
+              />
+              <p className="fnote">
+                If a folder with this name already exists, GoHighLevel creates
+                “{newFolderName.trim() || "Name"} (1)” instead — without an
+                error. We&apos;ll tell you the name it actually used.
+              </p>
+            </>
+          }
+          confirmLabel="Create folder"
+          busy={folderBusy}
+          error={folderErr}
+          onConfirm={createFolder}
+          onCancel={() => {
+            setNewFolderOpen(false);
+            setFolderErr(null);
+          }}
+        />
+      ) : null}
+
+      {/* ITEM 6a — folder deletion. The count comes from the SERVER's first
+          call, which deleted nothing; this asks with that number in front of
+          the admin. */}
+      {delFolder ? (
+        <ConfirmDialog
+          title={`Delete “${delFolder.name}”?`}
+          body={
+            <>
+              This deletes the folder <b>and the {delFolder.fileCount} file
+              {delFolder.fileCount === 1 ? "" : "s"} inside it</b> from
+              GoHighLevel. Anyone linking to those files loses them. This
+              can&apos;t be undone.
+            </>
+          }
+          confirmLabel={
+            delFolder.fileCount
+              ? `Delete folder and ${delFolder.fileCount} file${
+                  delFolder.fileCount === 1 ? "" : "s"
+                }`
+              : "Delete folder"
+          }
+          danger
+          busy={folderBusy}
+          error={folderErr}
+          onConfirm={deleteFolder}
+          onCancel={() => {
+            setDelFolder(null);
+            setFolderErr(null);
           }}
         />
       ) : null}
@@ -3026,7 +3672,7 @@ export default function Dashboard() {
                   </div>
                 ) : notesErr ? (
                   <div className="note">
-                    <p className="savemsg err">✗ {notesErr}</p>
+                    <ErrorMessage error={notesErr} className="savemsg err" />
                   </div>
                 ) : selNotes.length ? (
                   selNotes.map((n, i) => {
@@ -3153,7 +3799,7 @@ export default function Dashboard() {
                                 : "Editing replaces the text — the original isn't kept."}
                             </div>
                             {editErr ? (
-                              <div className="savemsg err">✗ {editErr}</div>
+                              <ErrorMessage error={editErr} className="savemsg err" />
                             ) : null}
                           </div>
                         ) : (
@@ -3196,9 +3842,7 @@ export default function Dashboard() {
                   does nothing". Errors from a removal now surface here, outside
                   the edit box. */}
               {editErr && editingNote === null ? (
-                <div className="savemsg err" style={{ marginTop: 6 }}>
-                  ✗ {editErr}
-                </div>
+                <ErrorMessage error={editErr} className="savemsg err" style={{ marginTop: 6 }} />
               ) : null}
               <div className="addnote">
                 <input
@@ -3215,9 +3859,7 @@ export default function Dashboard() {
                 </button>
               </div>
               {noteErr ? (
-                <div className="savemsg err" style={{ marginTop: 6 }}>
-                  ✗ {noteErr}
-                </div>
+                <ErrorMessage error={noteErr} className="savemsg err" style={{ marginTop: 6 }} />
               ) : null}
             </div>
             {/* ADMINS ONLY — the whole footer, not just the link.

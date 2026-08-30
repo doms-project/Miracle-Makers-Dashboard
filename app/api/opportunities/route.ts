@@ -6,6 +6,7 @@ import {
   applyAccess,
   userDivisions,
   getUserHomePipelines,
+  hasMasterView,
 } from "@/lib/pipelineAccess";
 import { withGrants } from "@/lib/withGrants";
 import type { OpportunitiesResponse, ApiError } from "@/lib/types";
@@ -55,6 +56,7 @@ async function buildResponse(blob: string | null): Promise<Response> {
         total: records.length,
         // Open/setup mode behaves like an admin: every selected pipeline is home.
         homePipelineIds: pipelines.map((p) => p.id),
+        canSeeMaster: true,
       },
       ...meta,
     };
@@ -93,6 +95,12 @@ async function buildResponse(blob: string | null): Promise<Response> {
       homePipelineIds: admin
         ? pipelines.map((p) => p.id)
         : [...getUserHomePipelines(session.userId)],
+      // ITEM 4 — the Master view is a GRANT, not a role. It shows the records
+      // this viewer can ALREADY see, laid out by pipeline, so granting it can
+      // never widen access — only how it is presented. That is also what solves
+      // the carve-out cleanly: someone sees reassigned-out records because they
+      // were GRANTED the view, not through an exception in the access rule.
+      canSeeMaster: hasMasterView(session.userId, admin),
     },
     ...meta,
   };

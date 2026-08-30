@@ -554,3 +554,56 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    records are shared would otherwise see empty columns and no explanation. */
 .boardhint{max-width:520px;margin:0 auto 14px;line-height:1.6;}
 .linkbtn{background:transparent;border:0;padding:0;font:inherit;color:var(--plum);font-weight:600;cursor:pointer;text-decoration:underline;}
+
+/* ── Layered error display: plain sentence always visible, verbatim technical
+      detail behind a disclosure. Both halves matter — a rep can't act on a
+      status code, and we can't diagnose without the exact string + traceId. ── */
+.errmsg{line-height:1.5;}
+.errdetails{margin-top:6px;}
+.errdetails summary{cursor:pointer;font-size:10.5px;font-weight:600;color:var(--ink-3);list-style:none;user-select:none;}
+.errdetails summary::-webkit-details-marker{display:none;}
+.errdetails summary::before{content:"▸ ";}
+.errdetails[open] summary::before{content:"▾ ";}
+.errdetails summary:hover{color:var(--ink-2);}
+.errnew{margin-left:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--blk);background:var(--blk-soft);border-radius:20px;padding:1px 6px;}
+.errpre{margin:6px 0 4px;padding:8px 10px;background:var(--line-soft);border-radius:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;user-select:text;max-height:220px;overflow:auto;}
+.errcopy{background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 9px;font:inherit;font-size:10.5px;font-weight:600;color:var(--ink-2);cursor:pointer;}
+.errcopy:hover{border-color:var(--plum);color:var(--plum);}
+.errbody .errmsg{font-size:13px;}
+
+/* ── ITEM 4: MASTER VIEW ──────────────────────────────────────────────────
+   The board's own layout, with the columns meaning something else: a column
+   is a PIPELINE, not a stage. Wider columns because the card carries one more
+   line (the stage, which the column no longer says). */
+.masterboard{align-items:flex-start;}
+.masterboard .col{flex:0 0 288px;}
+.mtoolbar{border-bottom:1px solid var(--line);}
+.mnote{padding:10px 22px 0;font-size:11.5px;line-height:1.6;color:var(--ink-3);}
+.mnote b{color:var(--ink-2);}
+/* No drag here — a cross-pipeline move needs an owner, a stage and a reason,
+   so the cursor must not promise one. */
+.card.mcard{cursor:pointer;}
+.card.mcard .cm{margin-bottom:6px;}
+.mstage{font-size:11.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:7px;padding:4px 8px;margin-bottom:8px;}
+.pill.divpill{background:var(--gold-soft);color:var(--gold-ink);font-weight:700;text-transform:uppercase;font-size:9.5px;letter-spacing:.05em;}
+
+/* ── ITEM 6c: RESOURCES, ONE SECTION PER FOLDER ───────────────────────────
+   Sections rather than a folder selector: a selector shows one folder at a
+   time and hides that the others exist. */
+.ressection{margin-bottom:22px;}
+.ressechead{display:flex;align-items:center;gap:10px;margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line);}
+.ressechead h3{margin:0;font-size:13px;font-weight:700;color:var(--ink);}
+.rescount{font-size:11px;color:var(--ink-3);}
+.respill{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);background:var(--ok-soft);border-radius:20px;padding:1px 8px;}
+.resdel{margin-left:auto;background:transparent;border:1px solid var(--line);border-radius:7px;padding:3px 10px;font:inherit;font-size:11px;font-weight:600;color:var(--ink-3);cursor:pointer;}
+.resdel:hover{border-color:var(--blk);color:var(--blk);background:var(--blk-soft);}
+.resnewfolder{white-space:nowrap;}
+.foldername{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13px;background:var(--bg);color:var(--ink);}
+.foldername:focus{outline:none;border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.fnote{margin:8px 0 0;font-size:11px;line-height:1.55;color:var(--ink-3);}
+
+/* ── ITEM 6b: the folder grid, and the Master column in the pipeline grid ── */
+.pah2{margin:26px 0 10px;font-size:14px;font-weight:700;color:var(--ink);}
+.pagrid th.pamasterhead{border-left:2px solid var(--line);}
+.pagrid td.pamastercell{border-left:2px solid var(--line-soft);}
+.papublic{display:block;margin-top:3px;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);}

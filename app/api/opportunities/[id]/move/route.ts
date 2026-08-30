@@ -11,6 +11,7 @@ import { userDivisions, getUserHomePipelines } from "@/lib/pipelineAccess";
 import { listPipelines } from "@/lib/ghl";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { emit } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -208,6 +209,44 @@ async function postHandler(
     }
 
     const record = await getOpportunityById(id);
+
+    // ITEM 5 — ONE event for what GoHighLevel sees as several unrelated writes.
+    // This is the whole reason outbound webhooks exist rather than GHL triggers:
+    // only the dashboard knows these writes were a single transfer, and that
+    // knowledge is gone by the time GHL sees them. Fire and forget — emit()
+    // never throws, so a webhook failure cannot fail a completed move.
+    await emit(
+      "opportunity.moved",
+      {
+        actor: { userId: session?.userId || "", name: undefined },
+        opportunityId: id,
+        contactId: target.contactId,
+      },
+      {
+        transferred: !!result.transferred,
+        fromPipelineId: target.pipelineId,
+        fromPipelineName: target.pipelineName,
+        toPipelineId: body.toPipelineId,
+        fromStage: target.stage,
+        toStage: record?.stage ?? "",
+        fromOwnerId: target.ownerId,
+        toOwnerId: record?.ownerId ?? target.ownerId,
+        reason: body.reason ?? "",
+        actorDivision,
+        steps: result.steps,
+      },
+    );
+    if (result.transferred && (record?.ownerId ?? "") !== target.ownerId)
+      await emit(
+        "opportunity.assigned",
+        {
+          actor: { userId: session?.userId || "" },
+          opportunityId: id,
+          contactId: target.contactId,
+        },
+        { oldOwnerId: target.ownerId, newOwnerId: record?.ownerId ?? "" },
+      );
+
     return NextResponse.json(
       // `actorDivision` is echoed so the stamp can be checked from the response
       // itself — an empty string here is the proof that the prefix was skipped,

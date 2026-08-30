@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
 import readXlsxFile from "read-excel-file";
 import Papa from "papaparse";
 import type {
@@ -32,13 +33,13 @@ export default function ImportWizard({
   ssoBlob: string | null;
 }) {
   const [meta, setMeta] = useState<ImportMeta | null>(null);
-  const [metaErr, setMetaErr] = useState<string | null>(null);
+  const [metaErr, setMetaErr] = useState<unknown>(null);
 
   const [step, setStep] = useState<StepIdx>(0);
 
   const [fileName, setFileName] = useState("");
   const [parsed, setParsed] = useState<Parsed | null>(null);
-  const [parseErr, setParseErr] = useState<string | null>(null);
+  const [parseErr, setParseErr] = useState<unknown>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const [pipelineId, setPipelineId] = useState("");
@@ -50,7 +51,7 @@ export default function ImportWizard({
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
-  const [importErr, setImportErr] = useState<string | null>(null);
+  const [importErr, setImportErr] = useState<unknown>(null);
   const [presetNames, setPresetNames] = useState<string[]>([]);
   const [namingPreset, setNamingPreset] = useState(false);
   const [presetName, setPresetName] = useState("");
@@ -67,11 +68,11 @@ export default function ImportWizard({
     fetch("/api/import/meta", { headers: ssoHeader(), cache: "no-store" })
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(failureMessage(res, j));
+        if (!res.ok) throw apiError(res, j);
         if (!cancelled) setMeta(j as ImportMeta);
       })
       .catch((e) => {
-        if (!cancelled) setMetaErr(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setMetaErr(e);
       });
     return () => {
       cancelled = true;
@@ -170,7 +171,7 @@ export default function ImportWizard({
       setAutoMapped(auto);
       setStep(1);
     } catch (e) {
-      setParseErr(e instanceof Error ? e.message : String(e));
+      setParseErr(e);
       setParsed(null);
     }
   };
@@ -205,7 +206,7 @@ export default function ImportWizard({
           }),
         });
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(failureMessage(res, j));
+        if (!res.ok) throw apiError(res, j);
         agg.created += j.created || 0;
         agg.skipped += j.skipped || 0;
         agg.failed += j.failed || 0;
@@ -214,7 +215,7 @@ export default function ImportWizard({
         setSummary({ ...agg });
       }
     } catch (e) {
-      setImportErr(e instanceof Error ? e.message : String(e));
+      setImportErr(e);
     } finally {
       setImporting(false);
     }
@@ -299,7 +300,7 @@ export default function ImportWizard({
           <h3>
             <span className="errdot">●</span> Couldn&apos;t start import
           </h3>
-          <p>{metaErr}</p>
+          <ErrorMessage error={metaErr} className="errbody" />
           <p className="detail">
             Import is admin-only and needs the PIT to have contacts + opportunities
             write scope.
@@ -357,7 +358,7 @@ export default function ImportWizard({
             </div>
             <div className="idrop-s">or click to browse</div>
           </div>
-          {parseErr ? <div className="savemsg err">✗ {parseErr}</div> : null}
+          {parseErr ? <ErrorMessage error={parseErr} className="savemsg err" /> : null}
           {parsed ? (
             <div className="imeta">
               ✓ {parsed.rows.length} rows · {parsed.columns.length} columns parsed
@@ -587,7 +588,7 @@ export default function ImportWizard({
               {importing ? "Importing…" : `Import ${parsed.rows.length} rows`}
             </button>
           )}
-          {importErr ? <div className="savemsg err">✗ {importErr}</div> : null}
+          {importErr ? <ErrorMessage error={importErr} className="savemsg err" /> : null}
 
           {summary ? (
             <div className="iresult">

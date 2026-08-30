@@ -9,6 +9,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord, isAdminSession } from "@/lib/visibility";
 import type { ApiError, OpportunityRecord } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { emit } from "@/lib/webhooks";
 import { userDivisions } from "@/lib/pipelineAccess";
 import { listPipelines, stampDivision } from "@/lib/ghl";
 
@@ -155,6 +156,11 @@ async function postHandler(
       `[notes] user=${userId || "(none)"} division=${JSON.stringify(division)} -> body=${JSON.stringify(noteBody.slice(0, 120))}`,
     );
     const note = await addOpportunityNote(gate.contactId, id, noteBody, userId);
+    await emit(
+      "note.added",
+      { actor: { userId }, opportunityId: id, contactId: gate.contactId },
+      { text, division, noteId: note.id },
+    );
     return NextResponse.json(
       // ITEM 2 — `division` is echoed on the note. addOpportunityNote parses it
       // OFF the body for display, so without this the optimistic insert in the

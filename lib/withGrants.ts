@@ -1,9 +1,14 @@
 import {
-  fetchPipelineAccessGrants,
+  fetchAccessGrantsV2,
   getLocationUserIds,
   listPipelines,
 } from "./ghl";
-import { buildGrants, runWithGrants } from "./pipelineAccess";
+import {
+  buildGrants,
+  buildIdMap,
+  runWithGrants,
+  runWithExtraGrants,
+} from "./pipelineAccess";
 
 // Loads the pipeline-access grants ONCE for this request and runs the handler
 // with them installed, so getUserHomePipelines() (and therefore canSeeRecord,
@@ -21,11 +26,19 @@ import { buildGrants, runWithGrants } from "./pipelineAccess";
 //     treating every id as stale — failing open on VALIDATION, never on access.
 export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   let stored: Record<string, string[]> | null = null;
+  // ITEM 4 + 6 — folder and master grants ride the same custom value and the
+  // same single read. Loading them separately would double the request count on
+  // every API call for two rarely-changing maps.
+  let folderGrants: Record<string, string[]> = {};
+  let masterUsers: string[] = [];
   let userIds: Set<string> | undefined;
   let pipelineIds: Set<string> | undefined;
 
   try {
-    stored = await fetchPipelineAccessGrants();
+    const v2 = await fetchAccessGrantsV2();
+    stored = v2 ? v2.pipelines : null;
+    folderGrants = v2?.folders ?? {};
+    masterUsers = v2?.master ?? [];
   } catch (e) {
     // ITEM 2 root-cause trail. This was a bare `catch {}`: when the custom-value
     // read failed, the request fell back to the env var with NOTHING said. If
@@ -97,5 +110,7 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
     );
   }
 
-  return runWithGrants(grants, fn);
+  return runWithGrants(grants, () =>
+    runWithExtraGrants(buildIdMap(folderGrants), new Set(masterUsers), fn),
+  );
 }
