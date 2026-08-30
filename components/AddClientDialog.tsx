@@ -84,7 +84,8 @@ function DetailField({
   );
 }
 
-// ITEM 3 — Add Client.
+// ITEM 3 — Add Lead (the route and this file keep their `client` names; see
+// the header button in app/page.tsx for why).
 //
 // A MODAL, not a tab: it is an action you complete and leave, the same shape as
 // Move. A tab would imply somewhere to return to.
@@ -200,7 +201,7 @@ export default function AddClientDialog({
         };
         setMatches(res.ok ? j.matches || [] : []);
       } catch {
-        setMatches([]); // a failed search must never block creating a client
+        setMatches([]); // a failed search must never block creating a lead
       } finally {
         setSearching(false);
       }
@@ -274,7 +275,7 @@ export default function AddClientDialog({
     <div className="previewmodal" onClick={onClose}>
       <div className="movebox addbox" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
-          <span className="previewname">Add a new client</span>
+          <span className="previewname">Add a new lead</span>
           <button className="x" type="button" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -283,11 +284,11 @@ export default function AddClientDialog({
         <div className="movebody">
           <div className="imeta" style={{ marginTop: 0 }}>
             {isAdmin
-              ? "Creates the client and their case."
-              : "Creates the client and their case. You'll be the owner."}
+              ? "Creates the lead and their case."
+              : "Creates the lead and their case. You'll be the owner."}
           </div>
 
-          <div className="addsec">Client</div>
+          <div className="addsec">Lead</div>
           <div className="addgrid">
             <div className="f">
               <label>First name *</label>
@@ -321,7 +322,7 @@ export default function AddClientDialog({
 
           {/* Search before creating. */}
           {searching && !chosen ? (
-            <div className="imeta">Checking for an existing client…</div>
+            <div className="imeta">Checking for an existing lead…</div>
           ) : null}
           {!chosen && !dismissed && matches.length ? (
             <div className="dupbox">
@@ -397,7 +398,7 @@ export default function AddClientDialog({
                   return (
                     <option key={p.id} value={p.id} disabled={!!b}>
                       {p.name}
-                      {b ? " — already has a case for this client" : ""}
+                      {b ? " — already has a case for this lead" : ""}
                     </option>
                   );
                 })}
@@ -405,7 +406,7 @@ export default function AddClientDialog({
             )}
             {blocked ? (
               <div className="savemsg err" style={{ marginTop: 6 }}>
-                ✗ {chosen?.name || "This client"} already has a case in{" "}
+                ✗ {chosen?.name || "This lead"} already has a case in{" "}
                 <b>{blocked}</b>. Pick a different pipeline, or open the existing
                 case.
               </div>
@@ -453,7 +454,7 @@ export default function AddClientDialog({
                 setOppName(e.target.value);
                 setOppNameTouched(true);
               }}
-              placeholder={defaultOppName || "The client's name"}
+              placeholder={defaultOppName || "The lead's name"}
             />
           </div>
 
@@ -506,7 +507,7 @@ export default function AddClientDialog({
               disabled={busy || !canSubmit}
               onClick={submit}
             >
-              {busy ? "Adding…" : "Add Client"}
+              {busy ? "Adding…" : "Add Lead"}
             </button>
           </div>
         </div>

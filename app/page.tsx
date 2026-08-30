@@ -707,9 +707,13 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [groupKey, setGroupKey] = useState<string | null>(null);
+  // The Kanban board is the landing view. Safe because the board already renders
+  // the no-access empty state (added in report 33 for exactly this reason: it
+  // draws one column per HOME pipeline, so an unmapped user would otherwise land
+  // on a completely blank screen rather than a merely empty one).
   const [view, setView] = useState<
     "list" | "board" | "resources" | "import" | "access"
-  >("list");
+  >("board");
   const [selId, setSelId] = useState<string | null>(null);
   // Resources tab (folder-scoped GHL media).
   const [resources, setResources] = useState<
@@ -730,7 +734,7 @@ export default function Dashboard() {
   // Persistent notes (stored on the contact, scoped to the opportunity).
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [noteDraft, setNoteDraft] = useState("");
-  // ITEM 3 — Add Client modal.
+  // ITEM 3 — Add Lead modal.
   const [addOpen, setAddOpen] = useState(false);
   // BUG 2 — caregiver/client link counts, keyed by contactId, for the row and
   // card badges. Loaded AFTER the list, for the records actually on screen:
@@ -1962,16 +1966,16 @@ export default function Dashboard() {
               <span title={sso.reason}>No SSO session</span>
             )}
           </div>
-          {/* ITEM 3 — Add Client. Beside the tabs, but deliberately NOT one of
+          {/* ITEM 3 — Add Lead. Beside the tabs, but deliberately NOT one of
               them: it opens a modal you complete and leave, the same shape as
               Move. A tab would imply somewhere to return to. */}
           <button
             type="button"
             className="addclientbtn"
             onClick={() => setAddOpen(true)}
-            title="Create a new client and their case"
+            title="Create a new lead and their case"
           >
-            + Add Client
+            + Add Lead
           </button>
           <div className="seg">
             <button
@@ -2525,6 +2529,28 @@ export default function Dashboard() {
             onDragCancel={() => setDragId(null)}
             onDragEnd={onDragEnd}
           >
+            {/* The board deliberately excludes SHARED records — it is the
+                division's own work queue. That was fine as an opt-in view, but
+                it becomes a trap as the LANDING view: someone whose only records
+                are shared with them lands on columns with nothing in them and no
+                clue that their records exist one tab away. Say so. */}
+            {boardVisible.length === 0 && data.length > 0 ? (
+              <div className="empty boardhint">
+                <b>Nothing in your own pipelines</b>
+                <br />
+                You have {data.length} record{data.length === 1 ? "" : "s"}{" "}
+                shared with you or owned in another division. The board shows
+                only your own division&apos;s work —{" "}
+                <button
+                  type="button"
+                  className="linkbtn"
+                  onClick={() => setView("list")}
+                >
+                  see them in the list
+                </button>
+                .
+              </div>
+            ) : null}
             <div className="board">
               {boardStages.map((st) => {
                 const inCol = boardVisible.filter((r) => r.stage === st);
@@ -2634,7 +2660,7 @@ export default function Dashboard() {
         />
       ) : null}
 
-      {/* Add Client (item 3) */}
+      {/* Add Lead (item 3) */}
       {addOpen ? (
         <AddClientDialog
           pipelines={pipelines}
