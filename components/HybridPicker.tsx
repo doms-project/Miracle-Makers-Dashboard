@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
 
 export interface HybridUser {
   id: string;
@@ -58,7 +59,7 @@ export default function HybridPicker({
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(
@@ -147,7 +148,7 @@ export default function HybridPicker({
       setAdding(false);
       pick(v); // adding a name almost always means you want to select it
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(e);
     } finally {
       setBusy(false);
     }
@@ -221,7 +222,7 @@ export default function HybridPicker({
                   <div className="imeta">
                     Adds the name to this field in GoHighLevel, for every record.
                   </div>
-                  {err ? <div className="savemsg err">✗ {err}</div> : null}
+                  <ErrorMessage error={err} />
                 </>
               ) : (
                 <button

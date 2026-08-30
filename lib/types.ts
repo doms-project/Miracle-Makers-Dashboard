@@ -115,6 +115,9 @@ export interface Viewer {
   // v2 — the viewer's HOME pipelines (admins: all selected). Drives the board
   // (home pipelines only) and the division filter.
   homePipelineIds?: string[];
+  // ITEM 4 — Master view grant. Not a role: it changes the LAYOUT of records the
+  // viewer can already see, never which records those are.
+  canSeeMaster?: boolean;
 }
 
 export interface OpportunitiesResponse {

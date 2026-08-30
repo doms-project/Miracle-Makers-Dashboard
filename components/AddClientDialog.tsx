@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
 import UserPicker, { type PickableUser } from "./UserPicker";
 import { divisionLabel } from "@/lib/division";
 import type { ContactMatch, EditableFieldDef } from "@/lib/types";
@@ -139,7 +140,7 @@ export default function AddClientDialog({
   // definitions rather than three hardcoded text inputs.
   const [details, setDetails] = useState<Record<string, string | string[]>>({});
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
 
   // Duplicate handling — search as they type a phone or email.
   const [matches, setMatches] = useState<ContactMatch[]>([]);
@@ -261,11 +262,11 @@ export default function AddClientDialog({
         detail?: string;
       };
       if (!res.ok || !j.ok)
-        throw new Error(failureMessage(res, j));
+        throw apiError(res, j);
       onCreated(j.opportunityId || "");
       onClose();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(e);
     } finally {
       setBusy(false);
     }
@@ -495,7 +496,7 @@ export default function AddClientDialog({
             </div>
           ) : null}
 
-          {err ? <div className="savemsg err">✗ {err}</div> : null}
+          {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
 
           <div className="inav">
             <button type="button" className="ighost" onClick={onClose} disabled={busy}>

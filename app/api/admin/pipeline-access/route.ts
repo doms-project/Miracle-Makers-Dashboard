@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import {
   listLocationUsers,
   listPipelines,
-  fetchPipelineAccessGrants,
-  savePipelineAccessGrants,
+  fetchAccessGrantsV2,
+  saveAccessGrantsV2,
+  listMediaFolders,
   pipelineIds,
   explainGhlError,
   GhlError,
@@ -62,10 +63,14 @@ export async function GET(request: Request) {
     const denied = gate(request);
     if (denied) return denied;
 
-    const [users, pipelines, stored] = await Promise.all([
+    // ITEM 6b — folders are a SECOND grid in this tab, from the same custom
+    // value under its own key. Fetched here so the admin grants pipelines,
+    // folders and the Master view in one place and one save.
+    const [users, pipelines, stored, folders] = await Promise.all([
       listLocationUsers(),
       listPipelines(),
-      fetchPipelineAccessGrants(),
+      fetchAccessGrantsV2(),
+      listMediaFolders().catch(() => []),
     ]);
     const loaded = new Set(pipelineIds());
 
@@ -79,7 +84,13 @@ export async function GET(request: Request) {
           // PIPELINE_IDS for grants here to have any effect.
           inDashboard: loaded.has(p.id),
         })),
-        grants: stored ?? {},
+        // Folders read LIVE from GHL — a folder created in GHL appears here
+        // with no code change, same as users and pipelines.
+        folders,
+        grants: stored?.pipelines ?? {},
+        folderGrants: stored?.folders ?? {},
+        masterUsers: stored?.master ?? [],
+        publicFolderId: (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim(),
         // true => nothing readable is stored yet, so the env var is what's
         // actually in force until the first save.
         usingEnvFallback: stored === null,
@@ -97,29 +108,62 @@ export async function PUT(request: Request) {
     const body = (await request.json().catch(() => ({}))) as {
       ssoKey?: string;
       grants?: Record<string, string[]>;
+      folderGrants?: Record<string, string[]>;
+      masterUsers?: string[];
     };
     const denied = gate(request, body.ssoKey);
     if (denied) return denied;
 
-    const g = body.grants;
-    if (!g || typeof g !== "object" || Array.isArray(g))
+    // Each scope is OPTIONAL and saved independently. saveAccessGrantsV2 merges
+    // against what is stored, so a request carrying only `folderGrants` cannot
+    // wipe every pipeline grant on the account — which a naive whole-object
+    // write would do the first time the folders grid saves on its own.
+    const norm = (
+      g: Record<string, string[]> | undefined,
+    ): Record<string, string[]> | undefined => {
+      if (g === undefined) return undefined;
+      if (!g || typeof g !== "object" || Array.isArray(g)) return undefined;
+      const clean: Record<string, string[]> = {};
+      for (const [userId, ids] of Object.entries(g)) {
+        if (!userId || !Array.isArray(ids)) continue;
+        const list = [...new Set(ids.map(String).filter(Boolean))];
+        if (list.length) clean[userId] = list; // drop empties; keeps it readable
+      }
+      return clean;
+    };
+
+    const pipelinesPatch = norm(body.grants);
+    const foldersPatch = norm(body.folderGrants);
+    const masterPatch = Array.isArray(body.masterUsers)
+      ? [...new Set(body.masterUsers.map(String).filter(Boolean))]
+      : undefined;
+
+    if (!pipelinesPatch && !foldersPatch && !masterPatch)
       return NextResponse.json(
-        { error: "grants must be an object of userId -> pipelineId[]." } as ApiError,
+        {
+          error: "Nothing to save.",
+          detail:
+            "Send `grants` (userId -> pipelineId[]), `folderGrants` (userId -> folderId[]) or `masterUsers` (userId[]).",
+        } as ApiError,
         { status: 400 },
       );
 
-    // Normalize: drop empty selections so the stored map stays readable, and
-    // coerce everything to strings.
-    const clean: Record<string, string[]> = {};
-    for (const [userId, pids] of Object.entries(g)) {
-      if (!userId || !Array.isArray(pids)) continue;
-      const list = [...new Set(pids.map(String).filter(Boolean))];
-      if (list.length) clean[userId] = list;
-    }
-
-    const { id } = await savePipelineAccessGrants(clean);
+    const { id } = await saveAccessGrantsV2({
+      ...(pipelinesPatch ? { pipelines: pipelinesPatch } : {}),
+      ...(foldersPatch ? { folders: foldersPatch } : {}),
+      ...(masterPatch ? { master: masterPatch } : {}),
+    });
+    // Echo the MERGED state, not just what was sent — the caller needs to see
+    // what is actually stored now, including the scopes it didn't touch.
+    const saved = await fetchAccessGrantsV2();
     return NextResponse.json(
-      { ok: true, id, grants: clean },
+      {
+        ok: true,
+        id,
+        grants: saved?.pipelines ?? {},
+        folderGrants: saved?.folders ?? {},
+        masterUsers: saved?.master ?? [],
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {

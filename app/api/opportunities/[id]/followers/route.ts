@@ -11,6 +11,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canManageFollowers } from "@/lib/visibility";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { emit } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -90,6 +91,19 @@ async function patchHandler(
     // Remove first, then add (so a same-tick add wins if both are sent).
     if (remove.length) await removeOpportunityFollowers(id, remove);
     if (add.length) await addOpportunityFollowers(id, add);
+    // One event per follower, so a consumer doesn't have to diff two arrays.
+    for (const uid of add)
+      await emit(
+        "follower.added",
+        { actor: { userId: session?.userId || "" }, opportunityId: id, contactId: target.contactId },
+        { followerId: uid },
+      );
+    for (const uid of remove)
+      await emit(
+        "follower.removed",
+        { actor: { userId: session?.userId || "" }, opportunityId: id, contactId: target.contactId },
+        { followerId: uid },
+      );
 
     // Recompute the final set from the known-current followers so the result
     // never depends on the GHL response shape.

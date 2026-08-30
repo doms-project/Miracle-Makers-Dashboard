@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
 import type {
   EmailRecipient,
   EmailSendResult,
@@ -27,7 +28,7 @@ export default function EmailComposer({
   const [templatesSource, setTemplatesSource] = useState<"ghl" | "config">(
     "config",
   );
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [loadErr, setLoadErr] = useState<unknown>(null);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cc, setCc] = useState("");
@@ -38,7 +39,7 @@ export default function EmailComposer({
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState<EmailSendResult[] | null>(null);
-  const [sendErr, setSendErr] = useState<string | null>(null);
+  const [sendErr, setSendErr] = useState<unknown>(null);
 
   const headers = useCallback((): Record<string, string> => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -54,7 +55,7 @@ export default function EmailComposer({
     })
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(failureMessage(res, j));
+        if (!res.ok) throw apiError(res, j);
         if (cancelled) return;
         const recs: EmailRecipient[] = j.recipients || [];
         setRecipients(recs);
@@ -66,7 +67,7 @@ export default function EmailComposer({
         );
       })
       .catch((e) => {
-        if (!cancelled) setLoadErr(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setLoadErr(e);
       });
     return () => {
       cancelled = true;
@@ -137,10 +138,10 @@ export default function EmailComposer({
         }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(failureMessage(res, j));
+      if (!res.ok) throw apiError(res, j);
       setResults(j.results || []);
     } catch (e) {
-      setSendErr(e instanceof Error ? e.message : String(e));
+      setSendErr(e);
     } finally {
       setSending(false);
     }
@@ -169,7 +170,7 @@ export default function EmailComposer({
           </div>
 
           {loadErr ? (
-            <div className="savemsg err">✗ {loadErr}</div>
+            <ErrorMessage error={loadErr} className="savemsg err" />
           ) : recipients === null ? (
             <div className="cgmuted">Loading recipients…</div>
           ) : results ? (
@@ -225,7 +226,7 @@ export default function EmailComposer({
                   <div className="epbody">{body}</div>
                 )}
               </div>
-              {sendErr ? <div className="savemsg err">✗ {sendErr}</div> : null}
+              {sendErr ? <ErrorMessage error={sendErr} className="savemsg err" /> : null}
               <div className="inav">
                 <button
                   type="button"

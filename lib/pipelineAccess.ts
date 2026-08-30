@@ -146,3 +146,47 @@ export function applyAccess(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// ITEM 4 + 6 — the two scopes that are NOT pipelines.
+//
+// Held in the same request-scoped store as the pipeline grants (same reasons:
+// never a module variable, never a cached failure), but kept SEPARATE from them
+// on purpose:
+//
+//   FOLDERS  a compliance folder may belong to case managers who hold no
+//            pipeline at all, so deriving folder access from pipeline access
+//            would either over-grant or make that impossible.
+//   MASTER   grants a VIEW, not records. The records shown in it are still
+//            filtered by the viewer's own pipeline access — so granting Master
+//            can never widen what someone can see, only how they see it.
+// ---------------------------------------------------------------------------
+const folderStore = new AsyncLocalStorage<AccessMap>();
+const masterStore = new AsyncLocalStorage<Set<string>>();
+
+export function runWithExtraGrants<T>(
+  folders: AccessMap,
+  master: Set<string>,
+  fn: () => T,
+): T {
+  return folderStore.run(folders, () => masterStore.run(master, fn));
+}
+
+export function getUserFolders(userId: string): Set<string> {
+  return folderStore.getStore()?.get(userId) ?? new Set<string>();
+}
+
+export function hasMasterView(userId: string, isAdmin: boolean): boolean {
+  // Admins always have it — the Master view shows what they can already see,
+  // and requiring an admin to grant themselves a view they can't be excluded
+  // from would be a footgun with no upside.
+  if (isAdmin) return true;
+  return masterStore.getStore()?.has(userId) ?? false;
+}
+
+export function buildIdMap(stored: Record<string, string[]> | undefined): AccessMap {
+  const map: AccessMap = new Map();
+  for (const [k, ids] of Object.entries(stored || {}))
+    map.set(k, new Set(ids.filter(Boolean)));
+  return map;
+}

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
 import type { OpportunityRecord } from "@/lib/types";
 
 // ITEM 4 — one of the contact's OTHER open cases. GoHighLevel allows only ONE
@@ -48,11 +49,11 @@ export default function MoveDialog({
   const [reason, setReason] = useState("");
   const [addSender, setAddSender] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
   // ITEM 4 — the contact's other cases, fetched when the dialog opens.
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [conflictsLoading, setConflictsLoading] = useState(true);
-  const [conflictsErr, setConflictsErr] = useState<string | null>(null);
+  const [conflictsErr, setConflictsErr] = useState<unknown>(null);
 
   // Fetch the duplicate pre-check. A failure here NEVER blocks the Move: we
   // simply lose the ability to grey out destinations, and the server-side error
@@ -71,12 +72,12 @@ export default function MoveDialog({
           error?: string;
           detail?: string;
         };
-        if (!res.ok) throw new Error(failureMessage(res, j));
+        if (!res.ok) throw apiError(res, j);
         if (!cancelled) setConflicts(j.conflicts || []);
       })
       .catch((e) => {
         if (!cancelled)
-          setConflictsErr(e instanceof Error ? e.message : String(e));
+          setConflictsErr(e);
       })
       .finally(() => {
         if (!cancelled) setConflictsLoading(false);
@@ -133,7 +134,7 @@ export default function MoveDialog({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok)
-        throw new Error(failureMessage(res, j));
+        throw apiError(res, j);
       // ITEM 3. This was gated on `j.record`: if the re-read after the move came
       // back empty, onMoved never fired, so the panel was never told to close
       // and kept showing the pre-move record. The move HAS happened by this
@@ -142,7 +143,7 @@ export default function MoveDialog({
       onMoved((j.record as OpportunityRecord) || record, !!j.transferred);
       onClose();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(e);
     } finally {
       setBusy(false);
     }
@@ -203,9 +204,10 @@ export default function MoveDialog({
             ) : null}
             {conflictsErr ? (
               <div className="imeta">
-                Couldn&apos;t check the client&apos;s other cases ({conflictsErr}
-                ). The move will still be attempted — GoHighLevel will reject it
-                if a case already exists in the destination.
+                Couldn&apos;t check the client&apos;s other cases. The move
+                will still be attempted — GoHighLevel will reject it if a case
+                already exists in the destination.
+                <ErrorMessage error={conflictsErr} className="imeta" />
               </div>
             ) : null}
 
@@ -285,7 +287,7 @@ export default function MoveDialog({
             </div>
           )}
 
-          {err ? <div className="savemsg err">✗ {err}</div> : null}
+          {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
 
           <div className="inav">
             <button type="button" className="ighost" onClick={onClose} disabled={busy}>

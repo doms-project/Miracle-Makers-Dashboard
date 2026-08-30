@@ -1,5 +1,7 @@
 "use client";
 
+import ErrorMessage from "./ErrorMessage";
+
 // ITEM 2 — an in-app confirmation, same shape as the Move dialog.
 //
 // This replaces `window.confirm()`, which was wrong here for three reasons, the
@@ -33,7 +35,7 @@ export default function ConfirmDialog({
   cancelLabel?: string;
   danger?: boolean;
   busy?: boolean;
-  error?: string | null;
+  error?: unknown;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -59,7 +61,7 @@ export default function ConfirmDialog({
         </div>
         <div className="movebody">
           <div className="confirmtext">{body}</div>
-          {error ? <div className="savemsg err">✗ {error}</div> : null}
+          <ErrorMessage error={error} />
           <div className="inav">
             <button
               type="button"

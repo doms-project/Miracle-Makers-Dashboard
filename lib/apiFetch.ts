@@ -126,6 +126,19 @@ export async function apiFetch<T = unknown>(
 // which was the actual complaint. Prefer apiFetch() for new code; this exists so
 // the twenty existing call sites could be fixed without restructuring flows that
 // can't be runtime-tested from here.
+// Preferred over failureMessage(): returns the ERROR OBJECT rather than a
+// string, so status / url / body survive to the UI and <ErrorMessage> can map a
+// sentence and still show the verbatim detail. ApiError extends Error, so every
+// existing `catch (e) { e instanceof Error }` path keeps working unchanged.
+export function apiError(res: Response, j: unknown, raw?: string): ApiError {
+  return new ApiError(
+    failureMessage(res, j),
+    res.status,
+    res.url,
+    raw ?? (j == null ? undefined : JSON.stringify(j)),
+  );
+}
+
 export function failureMessage(res: Response, j: unknown): string {
   const e = (j ?? {}) as { error?: string; detail?: string };
   if (e.detail || e.error) return [e.error, e.detail].filter(Boolean).join(" — ");

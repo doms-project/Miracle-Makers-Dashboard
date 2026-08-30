@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { failureMessage } from "@/lib/apiFetch";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
 import type { Caregiver } from "@/lib/types";
 
 const LOCATION_ID =
@@ -37,14 +38,14 @@ export default function CaregiversSection({
   canManage: boolean;
 }) {
   const [caregivers, setCaregivers] = useState<Caregiver[] | null>(null);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [loadErr, setLoadErr] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
-  const [actionErr, setActionErr] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<unknown>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const headers = useCallback((): Record<string, string> => {
@@ -61,10 +62,10 @@ export default function CaregiversSection({
         { headers: headers(), cache: "no-store" },
       );
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(failureMessage(res, j));
+      if (!res.ok) throw apiError(res, j);
       setCaregivers(j.caregivers || []);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(e);
       setCaregivers([]);
     }
   }, [opportunityId, headers]);
@@ -119,13 +120,13 @@ export default function CaregiversSection({
         body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, caregiverContactId: hit.id }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(failureMessage(res, j));
+      if (!res.ok) throw apiError(res, j);
       setCaregivers(j.caregivers || []);
       setQ("");
       setHits([]);
       setOpen(false);
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : String(e));
+      setActionErr(e);
     } finally {
       setBusy(false);
     }
@@ -141,10 +142,10 @@ export default function CaregiversSection({
         body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, relationId: c.relationId }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(failureMessage(res, j));
+      if (!res.ok) throw apiError(res, j);
       setCaregivers(j.caregivers || []);
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : String(e));
+      setActionErr(e);
     } finally {
       setBusy(false);
     }
@@ -171,7 +172,7 @@ export default function CaregiversSection({
       {caregivers === null ? (
         <div className="cgmuted">Loading…</div>
       ) : loadErr ? (
-        <div className="savemsg err">✗ {loadErr}</div>
+        <ErrorMessage error={loadErr} className="savemsg err" />
       ) : caregivers.length === 0 ? (
         <div className="cgmuted">No caregivers assigned yet.</div>
       ) : (
@@ -246,7 +247,7 @@ export default function CaregiversSection({
               )}
             </div>
           ) : null}
-          {actionErr ? <div className="savemsg err">✗ {actionErr}</div> : null}
+          {actionErr ? <ErrorMessage error={actionErr} className="savemsg err" /> : null}
         </div>
       ) : null}
     </div>
