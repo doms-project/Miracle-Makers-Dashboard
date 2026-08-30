@@ -544,3 +544,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
       how the case reached them. Only the author's reason follows it. ── */
 .notesys{color:var(--ink-3);}
 .notesysro{font-size:12px;color:var(--ink-3);background:var(--line-soft);border-radius:7px;padding:7px 10px;line-height:1.45;}
+
+/* A viewer with no pipeline grants. Not an error: fail-closed access is working
+   as intended and the reader has done nothing wrong — so this reads as a state,
+   in the normal empty-state voice, not a warning. */
+.empty.noaccess{max-width:460px;margin:0 auto;line-height:1.6;}

@@ -6,6 +6,15 @@ import type { Caregiver } from "@/lib/types";
 
 const LOCATION_ID =
   process.env.NEXT_PUBLIC_GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X";
+// DELIBERATELY NOT hidden from reps, unlike the panel's "Open in GoHighLevel"
+// link. That one targets /opportunities/ — the module reps are having switched
+// off. This targets /contacts/detail/, which is a SEPARATE GoHighLevel module
+// with its own permission, and a rep who has lost Opportunities may well keep
+// Contacts. Hiding it on the assumption they lost both would remove a working
+// link and leave the caregiver name unopenable for no reason.
+//
+// If reps also lose Contacts, this needs the same treatment — that is an account
+// setting, not something the code can determine.
 const contactUrl = (contactId: string) =>
   `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${contactId}`;
 
