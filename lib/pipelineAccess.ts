@@ -184,6 +184,22 @@ export function hasMasterView(userId: string, isAdmin: boolean): boolean {
   return masterStore.getStore()?.has(userId) ?? false;
 }
 
+// ITEM 5b — WHO holds the Master view, not just whether one person does.
+//
+// 🔴 READ LIVE, EVERY TIME. This comes from the request-scoped store that
+// withGrants fills from the custom value on every request — never a module
+// cache, never a list carried over from a previous reassign. That is exactly
+// what makes a newly-granted user work with no backfill: anyone granted access
+// BEFORE a reassign happens is in that reassign's follower list, because the
+// list is built at the moment of the reassign from the map as it then stands.
+//
+// Admins are NOT included. They see every record already, so adding them as
+// followers would add nothing and would put them on the GHL notification for
+// every reassign on the account.
+export function getMasterUsers(): string[] {
+  return [...(masterStore.getStore() ?? [])];
+}
+
 export function buildIdMap(stored: Record<string, string[]> | undefined): AccessMap {
   const map: AccessMap = new Map();
   for (const [k, ids] of Object.entries(stored || {}))

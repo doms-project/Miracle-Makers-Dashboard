@@ -83,7 +83,12 @@ export const LOST_REASON_OVERRIDES: Record<string, string> = {
 // duplicates the Move note, and the note is strictly better: it carries author
 // + timestamp, and it is per-transfer, whereas the field is overwritten by the
 // next move. The field still exists in GHL; it just isn't shown.
-const HIDDEN_NAMES = ["Transfer Reason"];
+// ITEM 5c — "Reassign Followers" holds the raw user ids THIS dashboard added as
+// followers during a reassign, so a claim can remove exactly those. It is
+// bookkeeping, not information: to a rep it is a string of meaningless ids that
+// reads as a fault. Hidden ENTIRELY — not in System info either — while staying
+// visible in native GoHighLevel for debugging.
+const HIDDEN_NAMES = ["Transfer Reason", "Reassign Followers"];
 const HIDDEN_SET = new Set(HIDDEN_NAMES.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")));
 
 const SYSTEM_INFO_NAMES = [
