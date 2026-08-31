@@ -31,6 +31,14 @@ async function buildResponse(blob: string | null): Promise<Response> {
   const labelledUsers = users.map((u) => ({
     ...u,
     divisions: userDivisions(u.id, pipelineNameById),
+    // ITEM 1 — the PIPELINE IDS this user actually holds.
+    //
+    // `divisions` is a DIVISION label ("OLTL"), which is lossy: it cannot tell
+    // OLTL Enrollment from OLTL Transfer, so an owner-access warning built on it
+    // stayed silent for exactly the case that matters — someone who holds one
+    // pipeline of a division being made owner in the other. Ids are exact and
+    // need no string matching at all.
+    pipelineIds: [...getUserHomePipelines(u.id)],
   }));
   const meta = {
     stages,

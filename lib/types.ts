@@ -135,7 +135,7 @@ export interface OpportunitiesResponse {
   stages?: { id: string; name: string }[]; // union of stages across pipelines (deduped by id)
   // Location users for the owner/follower pickers. `divisions` labels each user
   // (empty = none mapped -> the picker shows "—", never hides them).
-  users?: { id: string; name: string; divisions?: string[] }[];
+  users?: { id: string; name: string; divisions?: string[]; pipelineIds?: string[] }[];
   // Multi-pipeline (v2).
   pipelines?: { id: string; name: string }[]; // the selected pipelines, in order
   stagesByPipeline?: Record<string, { id: string; name: string }[]>; // pipelineId -> its stages
@@ -149,6 +149,9 @@ export interface ApiError {
 
 // Resources tab — a file in the OLTL Resources media folder.
 export interface ResourceFile {
+  // ITEM 11 — needed to delete one file. "" when GHL sent no id, and the UI
+  // hides the delete affordance in that case rather than sending a blank id.
+  id: string;
   name: string;
   url: string;
   type: string;

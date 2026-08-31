@@ -12,7 +12,7 @@ import {
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
-import { isAdminSession, canEditRecord } from "@/lib/visibility";
+import { isAdminSession, canEditRecord, canChangeOwner } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
@@ -94,6 +94,27 @@ async function patchHandler(
         status: 403,
       };
       return NextResponse.json(err, { status: 403 });
+    }
+
+    // ITEM 14 — a follower may edit FIELDS but not the OWNER. Enforced HERE,
+    // server-side: hiding the dropdown is convenience, and this would hold
+    // against a direct PATCH.
+    if (
+      enforce &&
+      session &&
+      "assignedTo" in body &&
+      (body.assignedTo || "") !== (target.ownerId || "") &&
+      !canChangeOwner(target, session)
+    ) {
+      return NextResponse.json(
+        {
+          error: "Not permitted.",
+          detail:
+            "Only the record owner or an admin can change who owns a case. You can still edit its fields.",
+          status: 403,
+        } as ApiError,
+        { status: 403 },
+      );
     }
 
     // ---- build the PUT body (strip blocklist, format per dataType) ----

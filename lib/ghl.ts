@@ -1517,6 +1517,14 @@ export async function countFilesInFolder(folderId: string): Promise<number> {
   ).length;
 }
 
+// ITEM 11 — delete ONE file. Same endpoint as the folder delete: GoHighLevel's
+// media rows are files or folders alike, so /medias/{id} removes either. Kept
+// as a separate named function anyway — the call sites mean different things
+// and one of them destroys a folder's whole contents.
+export async function deleteMediaFile(fileId: string): Promise<void> {
+  return deleteMediaFolder(fileId);
+}
+
 export async function deleteMediaFolder(folderId: string): Promise<void> {
   const { locationId } = requireEnv();
   const params = new URLSearchParams({
@@ -1564,6 +1572,8 @@ export async function listFolderFiles(folderId: string): Promise<ResourceFile[]>
   return all
     .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
     .map((f) => ({
+      // Same _id/id trap as the folder list — read both.
+      id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
       url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
       type: String(f.type ?? f.mimeType ?? f.contentType ?? ""),
@@ -1599,6 +1609,8 @@ export async function listResources(): Promise<ResourceFile[]> {
   return all
     .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
     .map((f) => ({
+      // Same _id/id trap as the folder list — read both.
+      id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
       url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
       type: String(f.type ?? f.mimeType ?? f.contentType ?? ""),
