@@ -648,3 +648,11 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* ITEM 1 — an operational warning, not a block. Deliberately not error-red: the
    move is allowed and often correct. */
 .ownerwarn{font-size:12px;line-height:1.55;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:9px 12px;margin-top:10px;}
+
+/* The Refresh button that replaced refresh-on-focus. Sits beside Add Lead:
+   deliberately visible, because the data is now only as fresh as the last
+   press and that has to be obvious. */
+.refreshbtn{display:inline-flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px 13px;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;transition:border-color .12s,color .12s;}
+.refreshbtn svg{width:14px;height:14px;}
+.refreshbtn:hover:not(:disabled){border-color:var(--plum);color:var(--plum);}
+.refreshbtn:disabled{opacity:.55;cursor:default;}

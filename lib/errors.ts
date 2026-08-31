@@ -167,6 +167,13 @@ export function explainError(e: unknown): FriendlyError {
   )
     return hit("That stage isn't part of this pipeline. Reload and try again.");
 
+  // Rate limited. Named plainly: "too many requests" means nothing to a rep,
+  // and the honest action is simply to wait a moment.
+  if (p.status === 429 || /\b429\b|too many requests/i.test(hay))
+    return hit(
+      "GoHighLevel is busy right now. Wait a few seconds and try again.",
+    );
+
   // 🔴 GHL'S OWN TIMEOUT ARRIVES AS A 401.
   //
   //   {"statusCode":401,"message":"Command timed out"}

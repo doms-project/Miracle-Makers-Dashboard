@@ -235,6 +235,24 @@ function isGhlTimeout(status: number, body: string): boolean {
   return status === 401 && /timed?\s*out/i.test(body);
 }
 
+// ⚠️ A MITIGATION, NOT THE FIX. GoHighLevel allows ~100 requests per 10s, and
+// the real remedy was to stop making requests nobody asked for (refresh-on-focus
+// is gone). But a burst can still coincide with somebody else's, and a 429 that
+// reaches the UI breaks the page over something that would have succeeded a
+// moment later.
+//
+// One retry, after a pause. GHL sends Retry-After on some 429s; when it does we
+// obey it, capped so a long value can't hang the request past the serverless
+// timeout. Otherwise a flat 1.2s, which clears a 10-second window's worth of
+// burst without making a failure feel like a hang.
+function retryAfterMs(res: Response): number {
+  const h = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(h) && h > 0) return Math.min(h * 1000, 4000);
+  return 1200;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
@@ -256,6 +274,16 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
     }
     let detail = ghlMessage(raw).slice(0, 500);
     const meta = ghlErrorMeta(raw);
+
+    if (res.status === 429 && attempt === 1) {
+      const wait = retryAfterMs(res);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] 429 on ${new URL(url).pathname} — rate limited. Retrying once in ${wait}ms.`,
+      );
+      await sleep(wait);
+      return ghlGet<T>(path, 2);
+    }
 
     // ONE retry, then give up. Retrying further would turn a GHL wobble into a
     // request that hangs for the user instead of failing cleanly.
@@ -338,6 +366,16 @@ async function ghlSend<T>(
     // increment or an append — so applying it twice reaches the same place.
     // The one exception is note creation, which appends; a duplicated note is
     // visible and harmless, whereas a lost one is not.
+    if (res.status === 429 && attempt === 1) {
+      const wait = retryAfterMs(res);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] 429 on ${method} ${new URL(url).pathname} — rate limited. Retrying once in ${wait}ms.`,
+      );
+      await sleep(wait);
+      return ghlSend<T>(method, path, body, 2);
+    }
+
     if (isGhlTimeout(res.status, raw) && attempt === 1) {
       // eslint-disable-next-line no-console
       console.warn(
