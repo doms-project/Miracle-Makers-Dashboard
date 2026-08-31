@@ -147,6 +147,25 @@ export function explainError(e: unknown): FriendlyError {
   )
     return hit("That stage isn't part of this pipeline. Reload and try again.");
 
+  // A MISSING PIT SCOPE is not an expired session, and telling someone to
+  // reload the page for one wastes a round — reloading can never fix it. Added
+  // as a KNOWN CASE after the folder bug: the Access tab's folder read fails
+  // exactly this way when the Private Integration lacks medias/media, and it
+  // was rendering as the generic "Something went wrong".
+  if (/\/medias\b|medias\/media/i.test(`${hay} ${p.url}`)) {
+    // The status may be 0 here: these arrive as a plain detail STRING from the
+    // route, not as an ApiError, so the code is only in the wording.
+    const denied =
+      p.status === 401 ||
+      p.status === 403 ||
+      /\b(401|403)\b/.test(hay) ||
+      /scope/i.test(hay);
+    if (denied)
+      return hit(
+        "The GoHighLevel integration isn't allowed to read the media library. An admin needs to add the medias/media scope to the Private Integration token — reloading won't fix this.",
+      );
+  }
+
   if (p.status === 401 || p.status === 403 || /sign-in required/i.test(raw)) {
     // A 403 from OUR routes is a permission rule, not a dead session, and the
     // server already words those for a person. Telling someone to reload when

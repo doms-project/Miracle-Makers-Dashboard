@@ -30,6 +30,7 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import MarkLostDialog from "@/components/MarkLostDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -732,29 +733,135 @@ function ResCard({
   );
 }
 
+// ---- ITEM 2: the Master view's CATEGORY columns ----
+//
+// The columns stopped being pipelines and became the client's own five words.
+// Each is a PREDICATE over the records the viewer can already see — nothing is
+// created in GoHighLevel and no record is duplicated.
+//
+// Everything is derived LIVE from the pipeline's own name and the record's own
+// stage/owner. No pipeline ids are hardcoded, so a sixth pipeline called
+// "XYZ Enrollment" lands in ENROLLMENT the day it is created, with no redeploy.
+type MasterCatId =
+  | "new"
+  | "enrollment"
+  | "transfer"
+  | "reassign"
+  | "sentout"
+  | "other";
+
+const isLostRec = (r: OpportunityRecord) =>
+  (r.stage || "").trim().toUpperCase() === "LOST" ||
+  (r.status || "").trim().toLowerCase() === "lost";
+const isNewLeadRec = (r: OpportunityRecord) =>
+  (r.stage || "").trim().toUpperCase() === "NEW LEAD" && !r.ownerId;
+const isEnrollmentPipe = (name: string) => /enroll/i.test(name);
+const isTransferPipe = (name: string) => /transfer/i.test(name);
+
+// ORDER IS THE DEFINITION — the first match wins, and every record lands in
+// exactly one column. The sequence is not arbitrary:
+//   LOST first        a rejected enrolment is SENT OUT, not ENROLLMENT.
+//   NEW LEAD next     both it and REASSIGN are unowned; the stage separates them.
+//   REASSIGN next     "unassigned, put there by someone else" — being unowned
+//                     outranks which pipeline it sits in, which is the whole
+//                     point of the column.
+//   then the pipeline-name columns.
+function masterCategory(r: OpportunityRecord): MasterCatId {
+  if (isLostRec(r)) return "sentout";
+  if (isNewLeadRec(r)) return "new";
+  if (!r.ownerId) return "reassign";
+  if (isEnrollmentPipe(r.pipelineName)) return "enrollment";
+  if (isTransferPipe(r.pipelineName)) return "transfer";
+  return "other";
+}
+
+const MASTER_COLUMNS: {
+  id: MasterCatId;
+  label: string;
+  hint: string;
+  droppable: boolean;
+}[] = [
+  {
+    id: "new",
+    label: "New lead",
+    hint: "At NEW LEAD with nobody on it — not picked up yet.",
+    // Dropping INTO New lead would mean un-working a lead, which has no
+    // meaning. Refused at the drop rather than opened and then rejected.
+    droppable: false,
+  },
+  {
+    id: "enrollment",
+    label: "Enrollment",
+    hint: "In an Enrollment pipeline.",
+    droppable: true,
+  },
+  {
+    id: "transfer",
+    label: "Transfer",
+    hint: "In a Transfer pipeline.",
+    droppable: true,
+  },
+  {
+    id: "reassign",
+    label: "Reassign",
+    hint: "In a pipeline but still unassigned — waiting for that department to claim it. It leaves this column automatically once someone takes ownership.",
+    droppable: true,
+  },
+  {
+    id: "sentout",
+    label: "Sent out",
+    hint: "At LOST — rejected, no longer worked.",
+    droppable: true,
+  },
+];
+
+// Days since the record last changed stage. Returns null when GoHighLevel sent
+// no timestamp — the caller renders nothing rather than "0 days".
+function daysInStage(r: OpportunityRecord): number | null {
+  if (!r.stageChangedAt) return null;
+  const t = Date.parse(r.stageChangedAt);
+  if (!Number.isFinite(t)) return null;
+  const d = Math.floor((Date.now() - t) / 86_400_000);
+  return d >= 0 ? d : null;
+}
+
 // ITEM 4 — a Master-view card. Deliberately NOT a BoardCard:
 //
 //   * it carries the CURRENT STAGE AS TEXT, because the column no longer says
 //     it. On the board the column IS the stage; here the column is the pipeline,
 //     so without this line a card gives no idea where in the process it sits.
-//   * it does NOT drag. A card here sits in a pipeline column, so dropping it on
-//     another column would mean a CROSS-PIPELINE move — which needs an owner, a
-//     destination stage and a reason, i.e. the Move dialog. A drag can supply
-//     none of those, and silently guessing them is how records end up owned by
-//     the wrong division. Open the record and use Move.
+//   * it does NOT commit a drag. Dragging is enabled (item 3) but a drop OPENS
+//     THE MOVE DIALOG — it never moves the card. A column here is a CATEGORY,
+//     so a drop can't decide by itself which pipeline is meant, and nothing has
+//     happened until the dialog is submitted.
 function MasterCard({
   r,
   following,
   relBadge,
+  canDrag,
   onOpen,
 }: {
   r: OpportunityRecord;
   following: boolean;
   relBadge?: string;
+  canDrag: boolean;
   onOpen: () => void;
 }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `m:${r.id}`,
+    disabled: !canDrag,
+  });
+  const age = daysInStage(r);
   return (
-    <div className="card mcard nodrag" onClick={onOpen}>
+    <div
+      ref={setNodeRef}
+      className={`card mcard${canDrag ? " draggable" : " nodrag"}${
+        isDragging ? " ghost" : ""
+      }`}
+      onClick={onOpen}
+      {...(canDrag ? listeners : {})}
+      {...attributes}
+    >
       <div className="cn">
         {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
         {following ? (
@@ -769,11 +876,28 @@ function MasterCard({
       <div className="cm">{r.rep || "Unassigned"}</div>
       <div className="mstage" title="Current stage">
         {r.stage || "—"}
+        {/* ⬜ Days-in-stage. Rendered ONLY when GoHighLevel actually sent a
+            timestamp — "0 days" on a record whose history we don't have would
+            be a confident lie, and this view exists to surface exactly the
+            opposite: the lead that has been sitting for three weeks. */}
+        {age != null ? (
+          <span
+            className={`mage${age >= 14 ? " stale" : ""}`}
+            title="Days since this record last changed stage"
+          >
+            {age}d
+          </span>
+        ) : null}
       </div>
       <div className="cf">
+        {/* 🔴 THE PIPELINE, NOT THE DIVISION. This showed divisionLabel() — "ODP"
+            — which was enough when the column WAS the pipeline. With category
+            columns it isn't: a card in ENROLLMENT could be OLTL Enrollment or
+            ODP Enrollment and the column can't say which. r.pipelineName already
+            carries the full name. */}
         {r.pipelineName ? (
-          <span className="pill divpill" title={r.pipelineName}>
-            {divisionLabel(r.pipelineName)}
+          <span className="pill pipepill" title={r.pipelineName}>
+            {r.pipelineName}
           </span>
         ) : null}
         {r.shared ? (
@@ -790,6 +914,47 @@ function MasterCard({
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+// A category column that accepts a drop. `disabled` columns (New lead) still
+// render as a column but never highlight and never report themselves as a
+// target.
+function MasterColumn({
+  cat,
+  count,
+  droppable,
+  children,
+}: {
+  cat: MasterCatId;
+  count: number;
+  droppable: boolean;
+  children: ReactNode;
+}) {
+  // Registered as a drop target even when it can't RECEIVE one.
+  //
+  // `disabled: !droppable` was wrong: dnd-kit then leaves the column out of the
+  // collision set entirely, so a drop on New lead resolved to `over === null`
+  // and the handler returned at its "dropped on nothing" guard — the card
+  // snapped back correctly but in complete silence, and a refusal that says
+  // nothing is indistinguishable from a broken drag. It accepts the drop event
+  // and the handler refuses it out loud; only the highlight is withheld, so it
+  // never LOOKS like a valid target.
+  const { setNodeRef, isOver } = useDroppable({ id: `mcol:${cat}` });
+  const def = MASTER_COLUMNS.find((c) => c.id === cat);
+  return (
+    <div
+      ref={setNodeRef}
+      className={`col mcol${isOver && droppable ? " dropover" : ""}`}
+    >
+      <div className="colhead" title={def?.hint}>
+        <span>{def?.label ?? cat}</span>
+        {/* The client asked to see "how many were transferred, how many are
+            in…" — so the count is part of the header, not a hover. */}
+        <span className="pill">{count}</span>
+      </div>
+      <div className="colbody">{children}</div>
     </div>
   );
 }
@@ -845,6 +1010,24 @@ export default function Dashboard() {
   const [selId, setSelId] = useState<string | null>(null);
   // ITEM 4 — the Master view GRANT, decided server-side (admins always).
   const [canSeeMaster, setCanSeeMaster] = useState(false);
+  // ITEM 3 — a card dropped on a Master category column, held while its dialog
+  // is open.
+  //
+  // 🔴 THIS IS THE OPPOSITE OF THE KANBAN BOARD. On the board a drop commits
+  // immediately with optimistic UI. Here NOTHING has happened on a drop: the
+  // record is not touched, `data` is not mutated, and the card stays in the
+  // column it came from. Cancel, Escape or clicking away leaves it exactly
+  // where it was, because it never left. Only a SUCCESSFUL move re-renders it
+  // elsewhere — and a FAILED one leaves it put, with the error in the dialog.
+  //
+  // A card that visually moves and then silently doesn't is how records stop
+  // being findable, which is worse than having no drag at all.
+  const [masterDrop, setMasterDrop] = useState<{
+    record: OpportunityRecord;
+    cat: MasterCatId;
+  } | null>(null);
+  // Why a drop was refused (New lead), shown briefly instead of nothing.
+  const [dropRefused, setDropRefused] = useState<string | null>(null);
   // Resources tab (folder-scoped GHL media).
   const [resources, setResources] = useState<
     { name: string; url: string; type: string; size: number }[]
@@ -1800,29 +1983,61 @@ export default function Dashboard() {
   // Because it re-arranges what the server already returned, granting it can
   // never widen access — the payload was filtered before it reached the browser.
   //
-  // Columns are the pipelines this viewer can access. `selectablePipelines` is
-  // the viewer's own home set (the full selected set for an admin), so a column
-  // can never name a pipeline they hold nothing in. Records SHARED with the
-  // viewer are included — unlike the board — because a cross-division case is
-  // precisely what this view exists to make visible.
+  // ITEM 2 — columns are the client's five CATEGORIES, not the pipelines.
+  // Records SHARED with the viewer are included — unlike the board — because a
+  // cross-division case is precisely what this view exists to make visible.
+  //
+  // "other" is a SIXTH column that renders only when it has something in it. It
+  // is a deliberate addition to the five: a record with an owner in a pipeline
+  // named neither "…Enrollment" nor "…Transfer" matches no category, and the
+  // alternative to showing it here is dropping it off the board silently. A
+  // visible bucket you can ask about beats a record nobody can find.
   const masterColumns = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const match = (r: OpportunityRecord) =>
       (office === "all" || r.office === office) &&
       (needle === "" ||
         `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
-    const byPipeline = new Map<string, OpportunityRecord[]>();
+    const byCat = new Map<MasterCatId, OpportunityRecord[]>();
     for (const r of data) {
       if (!match(r)) continue;
-      const bucket = byPipeline.get(r.pipelineId);
+      const c = masterCategory(r);
+      const bucket = byCat.get(c);
       if (bucket) bucket.push(r);
-      else byPipeline.set(r.pipelineId, [r]);
+      else byCat.set(c, [r]);
     }
-    return selectablePipelines.map((p) => ({
-      ...p,
-      records: byPipeline.get(p.id) || [],
+    const cols = MASTER_COLUMNS.map((c) => ({
+      ...c,
+      records: byCat.get(c.id) || [],
     }));
-  }, [data, selectablePipelines, q, office]);
+    const other = byCat.get("other") || [];
+    if (other.length)
+      cols.push({
+        id: "other",
+        label: "Uncategorised",
+        hint: "Owned, but in a pipeline whose name is neither Enrollment nor Transfer — so it matches none of the five categories. Shown so it can't go missing.",
+        droppable: false,
+        records: other,
+      });
+    return cols;
+  }, [data, q, office]);
+
+  // ITEM 3 — the pipelines a drop on each category may choose between. Derived
+  // from the live pipeline NAMES, never hardcoded ids.
+  const pipelinesFor = useCallback(
+    (cat: MasterCatId): string[] => {
+      if (cat === "enrollment")
+        return selectablePipelines
+          .filter((p) => isEnrollmentPipe(p.name))
+          .map((p) => p.id);
+      if (cat === "transfer")
+        return selectablePipelines
+          .filter((p) => isTransferPipe(p.name))
+          .map((p) => p.id);
+      return selectablePipelines.map((p) => p.id); // reassign: any pipeline
+    },
+    [selectablePipelines],
+  );
 
   // Stats (client-requested tiles: total, per office, by source, per rep).
   // Stats read `filtered`, NOT `data`. `data` is every record the server
@@ -2184,6 +2399,47 @@ export default function Dashboard() {
       { stageId: target.id },
       (r) => ({ ...r, stage: targetStage, stageId: target.id }),
     );
+  };
+
+  // ITEM 3 — a drop on a MASTER category column.
+  //
+  // Note what this does NOT do: it does not call saveField, does not touch
+  // `data`, and does not move the card. It only records what was dropped and
+  // opens a dialog. Every exit path from here that isn't a successful submit
+  // leaves the board exactly as it was.
+  const onMasterDragEnd = (e: DragEndEvent) => {
+    setDragId(null);
+    const { active, over } = e;
+    if (!over) return; // dropped on nothing — the card stays put
+    const overId = String(over.id);
+    if (!overId.startsWith("mcol:")) return;
+    const cat = overId.slice(5) as MasterCatId;
+    const rec = data.find((x) => `m:${x.id}` === String(active.id));
+    if (!rec) return;
+    if (masterCategory(rec) === cat) return; // already there — nothing to ask
+    if (!canEdit(rec)) {
+      setDropRefused("You can only move records you own or follow.");
+      return;
+    }
+    const def = MASTER_COLUMNS.find((c) => c.id === cat);
+    if (!def?.droppable) {
+      setDropRefused(
+        cat === "new"
+          ? "A lead can't be dropped back into New lead — that would mean un-working it."
+          : "That column can't receive a card.",
+      );
+      return;
+    }
+    // For a real MOVE we need somewhere to move it to. Say so up front rather
+    // than opening a dialog with an empty pipeline dropdown.
+    if (cat !== "sentout" && pipelinesFor(cat).length === 0) {
+      setDropRefused(
+        `You have no ${def.label} pipeline available, so there's nowhere to move this to.`,
+      );
+      return;
+    }
+    setDropRefused(null);
+    setMasterDrop({ record: rec, cat });
   };
 
   // Board columns = the FULL stage list of the board's pipeline(s) (incl. empty
@@ -2757,28 +3013,41 @@ export default function Dashboard() {
                   </select>
                 </div>
                 <span className="count">
-                  {masterColumns.reduce((n, c) => n + c.records.length, 0)} across{" "}
-                  {masterColumns.length} pipeline
-                  {masterColumns.length === 1 ? "" : "s"}
+                  {masterColumns.reduce((n, c) => n + c.records.length, 0)} record
+                  {masterColumns.reduce((n, c) => n + c.records.length, 0) === 1
+                    ? ""
+                    : "s"}
                 </span>
               </div>
-              {/* Says the one thing that is not obvious from looking at it: why
-                  the cards don't drag. Without this, "the board lets me drag and
-                  this doesn't" reads as a bug. */}
+              {/* Says the one thing that isn't obvious from looking at it: a
+                  drop here ASKS, it doesn't move. */}
               <div className="mnote">
-                Every pipeline you can access, side by side. Cards don&apos;t drag
-                here — a column is a <b>pipeline</b>, so moving between them is a
-                transfer that needs an owner and a reason. Open a record and use{" "}
-                <b>Move</b>.
+                Everything you can see, by category. <b>Dragging a card opens
+                Move</b> — a column is a category, not a pipeline, so the card
+                doesn&apos;t move until you confirm which one. Cancel and it stays
+                exactly where it is.
               </div>
-              <div className="board masterboard">
-                {masterColumns.map((c) => (
-                  <div className="col" key={c.id}>
-                    <div className="colhead">
-                      <span>{c.name}</span>
-                      <span className="pill">{c.records.length}</span>
-                    </div>
-                    <div className="colbody">
+              {dropRefused ? (
+                <div className="mnote refused">✗ {dropRefused}</div>
+              ) : null}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCorners}
+                onDragStart={(e) => {
+                  setDropRefused(null); // a new attempt clears the last refusal
+                  setDragId(String(e.active.id).replace(/^m:/, ""));
+                }}
+                onDragCancel={() => setDragId(null)}
+                onDragEnd={onMasterDragEnd}
+              >
+                <div className="board masterboard">
+                  {masterColumns.map((c) => (
+                    <MasterColumn
+                      key={c.id}
+                      cat={c.id}
+                      count={c.records.length}
+                      droppable={c.droppable}
+                    >
                       {c.records.length ? (
                         c.records.map((r) => (
                           <MasterCard
@@ -2786,6 +3055,7 @@ export default function Dashboard() {
                             r={r}
                             following={followsNotOwns(r)}
                             relBadge={relBadge(r)}
+                            canDrag={canEdit(r)}
                             onOpen={() => setSelId(r.id)}
                           />
                         ))
@@ -2797,10 +3067,26 @@ export default function Dashboard() {
                           Empty
                         </div>
                       )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    </MasterColumn>
+                  ))}
+                </div>
+                <DragOverlay dropAnimation={null}>
+                  {(() => {
+                    const r = dragId
+                      ? data.find((x) => x.id === dragId)
+                      : null;
+                    return r ? (
+                      <div className="card mcard dragging" style={{ width: 262 }}>
+                        <div className="cn">
+                          {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
+                        </div>
+                        <div className="cm">{r.rep || "Unassigned"}</div>
+                        <div className="mstage">{r.stage || "—"}</div>
+                      </div>
+                    ) : null;
+                  })()}
+                </DragOverlay>
+              </DndContext>
             </>
           )
         ) : view === "resources" ? (
@@ -3229,6 +3515,70 @@ export default function Dashboard() {
           onCancel={() => {
             setRemoveTarget(null);
             setEditErr(null);
+          }}
+        />
+      ) : null}
+
+      {/* ITEM 3 — the dialog a Master-view DROP opens.
+          Every one of these closes by setting masterDrop back to null and
+          nothing else: the card was never moved, so cancelling has nothing to
+          undo. Only onMoved/onDone re-renders the board. */}
+      {masterDrop && masterDrop.cat === "sentout" ? (
+        <MarkLostDialog
+          key={`lost-${masterDrop.record.id}`}
+          record={masterDrop.record}
+          stagesByPipeline={stagesByPipeline}
+          fieldDefs={fieldDefs}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          onClose={() => setMasterDrop(null)}
+          onDone={(rec) => {
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+            setMasterDrop(null);
+            load();
+          }}
+        />
+      ) : masterDrop ? (
+        <MoveDialog
+          key={`drop-${masterDrop.record.id}-${masterDrop.cat}`}
+          record={masterDrop.record}
+          pipelines={pipelines}
+          stagesByPipeline={stagesByPipeline}
+          users={users}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          allowedPipelineIds={pipelinesFor(masterDrop.cat)}
+          forceUnassigned={masterDrop.cat === "reassign"}
+          intro={
+            masterDrop.cat === "reassign" ? (
+              <>
+                You&apos;re sending{" "}
+                <b>
+                  {masterDrop.record.oppName ||
+                    `${masterDrop.record.first} ${masterDrop.record.last}`.trim()}
+                </b>{" "}
+                to <b>Reassign</b> — unassigned, for a department to claim.{" "}
+                <b>Which pipeline?</b>
+              </>
+            ) : (
+              <>
+                You&apos;re moving{" "}
+                <b>
+                  {masterDrop.record.oppName ||
+                    `${masterDrop.record.first} ${masterDrop.record.last}`.trim()}
+                </b>{" "}
+                to{" "}
+                <b>
+                  {MASTER_COLUMNS.find((c) => c.id === masterDrop.cat)?.label}
+                </b>
+                . <b>Which one?</b>
+              </>
+            )
+          }
+          onClose={() => setMasterDrop(null)}
+          onMoved={(rec, transferred) => {
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+            setMasterDrop(null);
+            if (transferred) setSelId(null);
+            load();
           }}
         />
       ) : null}
