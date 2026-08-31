@@ -32,6 +32,7 @@ export default function MoveDialog({
   onMoved,
   allowedPipelineIds,
   forceUnassigned,
+  requireOwner,
   intro,
 }: {
   record: OpportunityRecord;
@@ -53,9 +54,22 @@ export default function MoveDialog({
   // defaulted — a stray click that re-assigns it would take the record straight
   // back out of the column it was just dropped into.
   forceUnassigned?: boolean;
+  // ITEM 3 STEP 2 — OUT of Reassign, the exact opposite of step 1: an owner is
+  // MANDATORY, because the whole point is handing the case to a person. It also
+  // turns on a STAGE picker scoped to the chosen destination pipeline, which a
+  // transfer normally doesn't get (a transfer always lands in TRANSFERRED IN).
+  // Same component, configured by direction.
+  requireOwner?: boolean;
   // "You're moving Sandra Gonzalez to Enrollment. Which one?"
   intro?: React.ReactNode;
 }) {
+  if (requireOwner && forceUnassigned)
+    // These are the two directions of the same journey and cannot both hold.
+    // Better a loud failure here than a dialog that silently strips an owner
+    // on the path whose only purpose is to set one.
+    throw new Error(
+      "MoveDialog: requireOwner and forceUnassigned are mutually exclusive.",
+    );
   // When a drop narrows the choice, the dropdown must not offer the others at
   // all. Filtering the LIST (rather than disabling options) also guarantees the
   // initial value below can never be a pipeline this drop disallows.
@@ -71,7 +85,10 @@ export default function MoveDialog({
       ? pipelines[0]?.id || record.pipelineId
       : record.pipelineId,
   );
-  const [toStageId, setToStageId] = useState(record.stageId);
+  // On the claim path the record's CURRENT stage is REASSIGN, which is exactly
+  // the one value that must not be submitted — so start empty and make the
+  // person choose. Everywhere else the current stage is a sensible default.
+  const [toStageId, setToStageId] = useState(requireOwner ? "" : record.stageId);
   // Owner is PREFILLED with the current owner — changing it is what makes this
   // a transfer.
   const [newOwnerId, setNewOwnerId] = useState(
@@ -128,7 +145,16 @@ export default function MoveDialog({
   const blocked = conflictByPipeline.get(toPipelineId) || null;
 
   const isTransfer = (newOwnerId || "") !== (record.ownerId || "");
-  const destStages = stagesByPipeline[toPipelineId] || [];
+  const rawDestStages = stagesByPipeline[toPipelineId] || [];
+  // ⚠️ On the step-2 (claim) path REASSIGN must not be offered AT ALL. Filtering
+  // it only inside the transfer branch was not enough: the dialog opens with the
+  // owner still empty, so `isTransfer` is false and the plain stage select — the
+  // unfiltered one — renders first. Picking a stage before picking an owner then
+  // selected REASSIGN and moved the card straight back into the column it was
+  // being claimed out of. Filtered once, at the source, so every branch sees it.
+  const destStages = requireOwner
+    ? rawDestStages.filter((s2) => s2.name.trim().toUpperCase() !== "REASSIGN")
+    : rawDestStages;
   const transferredIn = useMemo(
     () =>
       destStages.find((s) => s.name.trim().toUpperCase() === "TRANSFERRED IN"),
@@ -157,7 +183,9 @@ export default function MoveDialog({
           toPipelineId,
           // Stage is chosen only on the simple path; a transfer always lands in
           // TRANSFERRED IN (the server resolves and enforces it).
-          toStageId: isTransfer ? undefined : toStageId,
+          // Step 2 sends its chosen stage even though it IS an owner
+          // change; every other transfer lets the server force TRANSFERRED IN.
+          toStageId: isTransfer && !requireOwner ? undefined : toStageId,
           newOwnerId: isTransfer ? newOwnerId : undefined,
           reason: reason.trim() || undefined,
           addSenderAsFollower: isTransfer ? addSender : undefined,
@@ -245,7 +273,22 @@ export default function MoveDialog({
             ) : null}
 
             <label>Stage</label>
-            {isTransfer ? (
+            {isTransfer && requireOwner ? (
+              // Step 2 picks the destination stage explicitly. TRANSFERRED IN is
+              // right for a hand-off between departments; a case being CLAIMED
+              // out of Reassign is going to wherever its new owner will work it.
+              <select
+                value={toStageId}
+                onChange={(e) => setToStageId(e.target.value)}
+              >
+                <option value="">Choose a stage…</option>
+                {destStages.map((s2) => (
+                  <option key={s2.id} value={s2.id}>
+                    {s2.name}
+                  </option>
+                ))}
+              </select>
+            ) : isTransfer ? (
               <div className="v ro">
                 {transferredIn?.name || "TRANSFERRED IN"}{" "}
                 <span className="readonly-note">set automatically on transfer</span>
@@ -352,7 +395,13 @@ export default function MoveDialog({
             <button
               type="button"
               className="ibtn"
-              disabled={busy || unchanged || !!blocked}
+              disabled={
+                busy ||
+                unchanged ||
+                !!blocked ||
+                // Step 2: all three are required.
+                (!!requireOwner && (!newOwnerId || !toStageId))
+              }
               onClick={submit}
             >
               {busy ? "Moving…" : isTransfer ? "Transfer case" : "Move"}

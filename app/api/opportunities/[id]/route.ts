@@ -151,7 +151,14 @@ async function patchHandler(
     const nowRealStage =
       !!record &&
       (record.stage || "").trim().toUpperCase() !== REASSIGN_STAGE_NAME;
-    if (wasReassign && nowOwned && nowRealStage) {
+    // ⚠️ SETTING AN OWNER FROM THE RECORD PANEL IS ALSO A CLAIM.
+    //
+    // This used to require a real stage as well, so a rep who opened a
+    // reassigned card and simply assigned it to themselves left every
+    // dashboard-added follower attached — a second path that skipped the
+    // cleanup entirely. Either signal now counts: somebody has taken the case.
+    const ownerJustSet = "assignedTo" in body && !!body.assignedTo && !target.ownerId;
+    if (wasReassign && nowOwned && (nowRealStage || ownerJustSet)) {
       try {
         // 🔴 THE LIST COMES FROM THE FIELD, AND ONLY FROM THE FIELD.
         // `target` is the PRE-write read, so the field still holds what the
