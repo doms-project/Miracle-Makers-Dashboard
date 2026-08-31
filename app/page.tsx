@@ -30,7 +30,7 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
-import MarkLostDialog from "@/components/MarkLostDialog";
+import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -771,7 +771,26 @@ const isReassignRec = (r: OpportunityRecord) => isReassignStage(r.stage);
 export const LOST_STAGE_NAME = "LOST";
 const isLostStage = (name: string) =>
   (name || "").trim().toUpperCase() === LOST_STAGE_NAME;
-const isLostRec = (r: OpportunityRecord) => isLostStage(r.stage);
+
+// ITEM 1 — SENT OUT means SUCCESSFULLY HANDED OVER, not rejected.
+//
+// 🔴 This REVERSES the previous definition. v42 mapped it to stage = LOST on
+// the working assumption that it meant "rejected"; the client has since said it
+// means the opposite — "sent out to a different department… already taken care
+// of". Bill's handoff record was showing rejected leads instead of transferred
+// ones, which is worse than showing nothing.
+//
+//   REASSIGN  at REASSIGN, no owner        — given up, not yet handed to anyone
+//   SENT OUT  was reassigned, NOW OWNED    — handed over
+//
+// Identified by the Transferred From stamp plus an owner. VERIFIED: that stamp
+// is written on the transfer path, and a reassign IS a transfer (an owner
+// change to nobody), so a reassigned record carries it.
+// `transferredFrom` is resolved inside the component (it needs the live field
+// definitions to find the field's id), so it is passed IN rather than looked up
+// here — the classifier stays a pure function of the record plus that one fact.
+const isSentOutRec = (r: OpportunityRecord, hasTransferStamp: boolean) =>
+  hasTransferStamp && !!r.ownerId && !isReassignStage(r.stage);
 const isNewLeadRec = (r: OpportunityRecord) =>
   (r.stage || "").trim().toUpperCase() === "NEW LEAD" && !r.ownerId;
 // ITEM 1 — PRIVATE PAY IS AN ENROLLMENT.
@@ -789,6 +808,13 @@ const isNewLeadRec = (r: OpportunityRecord) =>
 const PRIVATE_PAY_PIPELINE_ID =
   process.env.NEXT_PUBLIC_PRIVATE_PAY_PIPELINE_ID || "BJBWdRim6SOgjoMelVSZ";
 const isEnrollmentPipe = (name: string) => /enroll/i.test(name);
+// ITEM 2 — ONE predicate, deliberately, because the previous round fixed the
+// CLASSIFICATION and left the DROP TARGET behind: an owned Private Pay case
+// showed in Enrollment but couldn't be dropped there, since pipelinesFor()
+// filtered on the name alone. Both callers now share this, so they can't drift
+// apart again.
+const isEnrollmentPipeline = (p: { id: string; name: string }) =>
+  isEnrollmentPipe(p.name) || p.id === PRIVATE_PAY_PIPELINE_ID;
 const isTransferPipe = (name: string) => /transfer/i.test(name);
 
 // ORDER IS THE DEFINITION — first match wins, every record lands in exactly one
@@ -799,12 +825,18 @@ const isTransferPipe = (name: string) => /transfer/i.test(name);
 // ⬜ SENT OUT is NOT BUILT — it is undefined, and guessing at it (the previous
 // round guessed "stage = LOST") produces a column nobody can trust. The list
 // below is data, so adding it later is one entry plus one predicate.
-function masterCategory(r: OpportunityRecord): MasterCatId {
-  // LOST first: a rejected enrolment is SENT OUT, not ENROLLMENT.
-  if (isLostRec(r)) return "sentout";
+function masterCategory(
+  r: OpportunityRecord,
+  hasTransferStamp: boolean,
+): MasterCatId {
+  // REASSIGN outranks SENT OUT: a record still AT that stage has been given up
+  // but not yet handed to anyone, so it is not sent out yet.
   if (isReassignRec(r)) return "reassign";
   if (isNewLeadRec(r)) return "new";
-  if (isEnrollmentPipe(r.pipelineName) || r.pipelineId === PRIVATE_PAY_PIPELINE_ID)
+  // SENT OUT outranks the pipeline-name columns: a handed-over ODP case is
+  // Sent out, not Enrollment.
+  if (isSentOutRec(r, hasTransferStamp)) return "sentout";
+  if (isEnrollmentPipeline({ id: r.pipelineId, name: r.pipelineName }))
     return "enrollment";
   // Private Pay never reaches TRANSFER, and that is correct: a transfer is a
   // client arriving with existing state funding, and a self-funded client has
@@ -851,8 +883,10 @@ const MASTER_COLUMNS: {
   {
     id: "sentout",
     label: "Sent out",
-    hint: "At LOST — rejected or referred out, no longer being worked.",
-    droppable: true,
+    hint: "Was reassigned and now has an owner — handed over and being worked by the receiving department.",
+    // NOT a drop target. A record arrives here by being handed over OUT of
+    // Reassign (step 2), never by being dragged in.
+    droppable: false,
   },
 ];
 
@@ -2036,6 +2070,21 @@ export default function Dashboard() {
   // named neither "…Enrollment" nor "…Transfer" matches no category, and the
   // alternative to showing it here is dropping it off the board silently. A
   // visible bucket you can ask about beats a record nobody can find.
+  const transferredFromId = useMemo(
+    () =>
+      fieldDefs.find(
+        (d) => (d.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === "transferredfrom",
+      )?.id || "",
+    [fieldDefs],
+  );
+  const transferredFrom = useCallback(
+    (r: OpportunityRecord): string => {
+      if (!transferredFromId) return "";
+      const v = r.cf[transferredFromId];
+      return Array.isArray(v) ? String(v[0] ?? "") : v ? String(v) : "";
+    },
+    [transferredFromId],
+  );
   const masterColumns = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const match = (r: OpportunityRecord) =>
@@ -2045,7 +2094,7 @@ export default function Dashboard() {
     const byCat = new Map<MasterCatId, OpportunityRecord[]>();
     for (const r of data) {
       if (!match(r)) continue;
-      const c = masterCategory(r);
+      const c = masterCategory(r, !!transferredFrom(r));
       const bucket = byCat.get(c);
       if (bucket) bucket.push(r);
       else byCat.set(c, [r]);
@@ -2064,21 +2113,24 @@ export default function Dashboard() {
         records: other,
       });
     return cols;
-  }, [data, q, office]);
+  }, [data, q, office, transferredFrom]);
 
   // ITEM 3 — the pipelines a drop on each category may choose between. Derived
   // from the live pipeline NAMES, never hardcoded ids.
   const pipelinesFor = useCallback(
     (cat: MasterCatId): string[] => {
       if (cat === "enrollment")
-        return selectablePipelines
-          .filter((p) => isEnrollmentPipe(p.name))
-          .map((p) => p.id);
+        return selectablePipelines.filter(isEnrollmentPipeline).map((p) => p.id);
       if (cat === "transfer")
         return selectablePipelines
           .filter((p) => isTransferPipe(p.name))
           .map((p) => p.id);
-      return selectablePipelines.map((p) => p.id); // reassign: any pipeline
+      // ITEM 3 STEP 1 — REASSIGN HAS NO PIPELINE CHOICE. The record stays in
+      // its OWN pipeline and moves to that pipeline's REASSIGN stage; every
+      // pipeline has one. Bill is saying "this isn't mine", not choosing a
+      // destination — that decision happens at step 2. Returning every
+      // selectable pipeline here implied a choice that does not exist.
+      return [];
     },
     [selectablePipelines],
   );
@@ -2126,21 +2178,7 @@ export default function Dashboard() {
 
   // ITEM 5 — the Transferred From stamp, resolved by field NAME (never a
   // hardcoded id) so it can be surfaced as a badge on rows and cards.
-  const transferredFromId = useMemo(
-    () =>
-      fieldDefs.find(
-        (d) => (d.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === "transferredfrom",
-      )?.id || "",
-    [fieldDefs],
-  );
-  const transferredFrom = useCallback(
-    (r: OpportunityRecord): string => {
-      if (!transferredFromId) return "";
-      const v = r.cf[transferredFromId];
-      return Array.isArray(v) ? String(v[0] ?? "") : v ? String(v) : "";
-    },
-    [transferredFromId],
-  );
+
 
   // Folder-driven field sections for the open record's pipeline (Task 4).
   const fieldGroups = useMemo(
@@ -2460,7 +2498,7 @@ export default function Dashboard() {
     const cat = overId.slice(5) as MasterCatId;
     const rec = data.find((x) => `m:${x.id}` === String(active.id));
     if (!rec) return;
-    if (masterCategory(rec) === cat) return; // already there — nothing to ask
+    if (masterCategory(rec, !!transferredFrom(rec)) === cat) return; // already there
     if (!canEdit(rec)) {
       setDropRefused("You can only move records you own or follow.");
       return;
@@ -2476,7 +2514,7 @@ export default function Dashboard() {
     }
     // For a real MOVE we need somewhere to move it to. Say so up front rather
     // than opening a dialog with an empty pipeline dropdown.
-    if (cat !== "sentout" && pipelinesFor(cat).length === 0) {
+    if (cat !== "reassign" && pipelinesFor(cat).length === 0) {
       setDropRefused(
         `You have no ${def.label} pipeline available, so there's nowhere to move this to.`,
       );
@@ -3571,21 +3609,25 @@ export default function Dashboard() {
           Every one of these closes by setting masterDrop back to null and
           nothing else: the card was never moved, so cancelling has nothing to
           undo. Only onMoved/onDone re-renders the board. */}
-      {masterDrop && masterDrop.cat === "sentout" ? (
-        // ITEM 2 — a DIFFERENT dialog from Move, because this is not a move:
-        // the pipeline and owner don't change, only the stage, and it needs a
-        // Lost Reason that Move has nowhere to put. Cancelling leaves the card
-        // exactly where it was, same as every other drop.
-        <MarkLostDialog
-          key={`lost-${masterDrop.record.id}`}
+      {masterDrop && masterDrop.cat === "reassign" ? (
+        // ITEM 3 STEP 1 — INTO Reassign. Its own dialog, not Move: there is no
+        // pipeline to choose and the consequence (an owner is removed with no
+        // undo) needs stating, not a dropdown.
+        <ReassignDialog
+          key={`ra-${masterDrop.record.id}`}
           record={masterDrop.record}
-          stagesByPipeline={stagesByPipeline}
-          fieldDefs={fieldDefs}
+          ownerName={
+            masterDrop.record.ownerId
+              ? masterDrop.record.rep ||
+                userLabel(masterDrop.record.ownerId).split(" — ")[0]
+              : ""
+          }
           ssoBlob={sso.status === "ready" ? sso.blob : null}
           onClose={() => setMasterDrop(null)}
           onDone={(rec) => {
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
             setMasterDrop(null);
+            setSelId(null); // it has left this viewer's board
             load();
           }}
         />
@@ -3598,17 +3640,23 @@ export default function Dashboard() {
           users={users}
           ssoBlob={sso.status === "ready" ? sso.blob : null}
           allowedPipelineIds={pipelinesFor(masterDrop.cat)}
-          forceUnassigned={masterDrop.cat === "reassign"}
+          // ⚠️ STEP 2 — a card dragged OUT of Reassign is being CLAIMED, so an
+          // owner is mandatory and forceUnassigned must be off. Before this,
+          // any drop reusing the reassign configuration would have STRIPPED the
+          // owner on the one path whose entire purpose is to set one.
+          requireOwner={isReassignStage(masterDrop.record.stage)}
           intro={
-            masterDrop.cat === "reassign" ? (
+            isReassignStage(masterDrop.record.stage) ? (
               <>
-                You&apos;re sending{" "}
+                You&apos;re handing{" "}
                 <b>
                   {masterDrop.record.oppName ||
                     `${masterDrop.record.first} ${masterDrop.record.last}`.trim()}
                 </b>{" "}
-                to <b>Reassign</b> — unassigned, for a department to claim.{" "}
-                <b>Which pipeline?</b>
+                over out of <b>Reassign</b>. Choose the <b>pipeline</b>, the{" "}
+                <b>owner</b> who will work it, and the <b>stage</b> — all three
+                are required. The followers this dashboard added while it waited
+                are removed once it&apos;s claimed.
               </>
             ) : (
               <>
