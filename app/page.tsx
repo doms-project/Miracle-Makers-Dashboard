@@ -126,6 +126,12 @@ const IconMaster = () => (
     <path d="M9 4v16M15 4v16M3 9h18" />
   </svg>
 );
+const IconRefresh = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+  </svg>
+);
 const IconDoc = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -1242,30 +1248,26 @@ export default function Dashboard() {
     load();
   }, [sso.status, load]);
 
-  // ITEM 4 — REFRESH ON FOCUS, not polling.
+  // 🔴 REFRESH-ON-FOCUS IS GONE. It caused 429s.
   //
-  // The Master view is live by construction: it reads the same payload every
-  // other view reads, so a record that moves is already correct the next time
-  // the payload is fetched. What it needed was a reason to re-fetch, and polling
-  // is the wrong one — this runs in a GHL iframe that may sit open on a second
-  // monitor all day, and a timer would keep hitting the API (and GHL behind it)
-  // for a tab nobody is looking at.
+  // It was added so a viewer would see other people's changes without polling,
+  // and the reasoning was sound in isolation. In practice every tab switch
+  // re-ran the whole payload — five pipelines plus the reads behind them —
+  // against GoHighLevel's 100-requests-per-10-seconds limit. Alt-tabbing
+  // between this dashboard and GHL a few times was enough to trip it, and a 429
+  // BREAKS THE PAGE, whereas slightly stale data does not. The trade was the
+  // wrong way round.
   //
-  // `visibilitychange` fires when the tab comes BACK — which is exactly when the
-  // person is about to read it, and exactly when the data is most likely stale
-  // because they were just editing something in GoHighLevel. Guarded on
-  // `visible` so the hide event doesn't fire a fetch, and skipped while a record
-  // panel is open so a refresh can't yank the record out from under an edit.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      if (selId) return;
-      if (sso.status === "loading") return;
-      load();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [load, selId, sso.status]);
+  // What re-fetches now, and nothing else:
+  //   1. the initial load (the effect above);
+  //   2. a user ACTION that changed something — and per ITEM 4 those prefer the
+  //      WRITE RESPONSE over re-reading at all;
+  //   3. the Refresh button, which is one request per press rather than one per
+  //      alt-tab, and leaves the choice with the person looking at the screen.
+  //
+  // ⚠️ Do not re-add a focus or interval listener here without solving the rate
+  // limit first. This is the second time the cost of automatic refreshing has
+  // been underestimated on this project.
 
   // Escape closes the record panel.
   useEffect(() => {
@@ -2735,6 +2737,19 @@ export default function Dashboard() {
           >
             + Add Lead
           </button>
+          {/* Replaces refresh-on-focus. ONE request per press, and the person
+              looking at the screen decides when — rather than one payload per
+              alt-tab, which is what tripped GoHighLevel's rate limit. */}
+          <button
+            type="button"
+            className="refreshbtn"
+            onClick={() => load()}
+            disabled={loading}
+            title="Re-read everything from GoHighLevel"
+          >
+            <IconRefresh />
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
           <div className="seg">
             <button
               className={view === "list" ? "on" : ""}
@@ -3661,7 +3676,7 @@ export default function Dashboard() {
             // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
             // fails silently whenever the lag is longer. Dropping it is
             // deterministic; delaying it is the same race with better odds.
-            // The next visibilitychange refresh picks up anything else.
+            // Refresh picks up anything else, when the user asks for it.
           }}
         />
       ) : null}
@@ -3736,7 +3751,7 @@ export default function Dashboard() {
             // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
             // fails silently whenever the lag is longer. Dropping it is
             // deterministic; delaying it is the same race with better odds.
-            // The next visibilitychange refresh picks up anything else.
+            // Refresh picks up anything else, when the user asks for it.
           }}
         />
       ) : masterDrop ? (
@@ -3798,7 +3813,7 @@ export default function Dashboard() {
             // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
             // fails silently whenever the lag is longer. Dropping it is
             // deterministic; delaying it is the same race with better odds.
-            // The next visibilitychange refresh picks up anything else.
+            // Refresh picks up anything else, when the user asks for it.
           }}
         />
       ) : null}
