@@ -656,3 +656,12 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .refreshbtn svg{width:14px;height:14px;}
 .refreshbtn:hover:not(:disabled){border-color:var(--plum);color:var(--plum);}
 .refreshbtn:disabled{opacity:.55;cursor:default;}
+
+/* ── ITEM 13: the rail is a SECTION switch (Clients / Caregivers) ─────────
+   Caregiver recruitment is different work from client enrolment, so the split
+   is top-level rather than another tab beside List/Board. */
+.rail .railsec{display:flex;flex-direction:column;align-items:center;gap:5px;width:100%;padding:11px 4px;background:transparent;border:0;border-radius:10px;color:var(--ink-3);cursor:pointer;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:.02em;transition:background .12s,color .12s;}
+.rail .railsec svg{width:19px;height:19px;}
+.rail .railsec:hover{color:var(--plum);background:var(--plum-soft);}
+.rail .railsec.active{color:#fff;background:var(--plum);}
+.rail .railsec.active:hover{background:var(--plum-mid);}

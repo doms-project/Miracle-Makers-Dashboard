@@ -511,13 +511,54 @@ const DEFAULT_PIPELINE_IDS = [
   "BJBWdRim6SOgjoMelVSZ", // Private Pay Clients  11
 ];
 
-// Parse PIPELINE_IDS (comma / pipe / whitespace separated); fall back to the
-// defaults above. Order is preserved — it drives the admin selector order.
+// ITEM 13 — CAREGIVER PIPELINES, a SEPARATE set.
+//
+// 🔴 These must never appear in the client list, the client kanban or the
+// master view. Keeping them in their own env var rather than adding a flag to
+// the client set is what makes that structural: every existing caller reads
+// pipelineIds() and therefore cannot see them, without a single one of them
+// having to remember a filter.
+//
+// ⚠️ A THIRD IS COMING. The caregiver form routes to four departments and
+// OLTL_CHC — the routing DEFAULT, and where family caregivers go — has no
+// pipeline yet. Adding it is one id in CAREGIVER_PIPELINE_IDS, no code change:
+// the whole caregiver path is driven by this list.
+//
+// ⚠️ NO REASSIGN STAGE on these, and none is added. The reassign flow resolves
+// REASSIGN by name and REFUSES when a pipeline hasn't got one (see
+// moveOpportunity), so a caregiver pipeline simply cannot be reassigned into —
+// which is the intended outcome, reached by the existing guard rather than by a
+// new special case.
+const DEFAULT_CAREGIVER_PIPELINE_IDS = [
+  "EXVMveGzgDy9qf4wQR2H", // PP Caregiver Applicants
+  "232bytrK7FWNAwC6shME", // ODP DSP Applicant
+];
+
+function parseIds(raw: string, fallback: string[]): string[] {
+  const t = (raw || "").trim();
+  if (!t) return fallback;
+  const ids = t.split(/[\s,|]+/).map((x) => x.trim()).filter(Boolean);
+  return ids.length ? ids : fallback;
+}
+
+/** The CLIENT pipelines. Unchanged behaviour — every existing caller uses this. */
 export function pipelineIds(): string[] {
-  const raw = (process.env.PIPELINE_IDS || "").trim();
-  if (!raw) return DEFAULT_PIPELINE_IDS;
-  const ids = raw.split(/[\s,|]+/).map((s) => s.trim()).filter(Boolean);
-  return ids.length ? ids : DEFAULT_PIPELINE_IDS;
+  return parseIds(process.env.PIPELINE_IDS || "", DEFAULT_PIPELINE_IDS);
+}
+
+/** The CAREGIVER pipelines. Disjoint from the client set by construction. */
+export function caregiverPipelineIds(): string[] {
+  return parseIds(
+    process.env.CAREGIVER_PIPELINE_IDS || "",
+    DEFAULT_CAREGIVER_PIPELINE_IDS,
+  );
+}
+
+/** Which family of pipelines a read is about. */
+export type PipelineScope = "client" | "caregiver";
+
+export function idsForScope(scope: PipelineScope): string[] {
+  return scope === "caregiver" ? caregiverPipelineIds() : pipelineIds();
 }
 
 // Loud config check (memoized) — surfaces the two silent failure modes:
@@ -545,12 +586,14 @@ function checkPipelineConfig(): void {
 
 // Resolve the configured pipeline IDs to full Pipeline objects, in configured
 // order. Unknown IDs are skipped (logged via the error only if NONE match).
-export async function getSelectedPipelines(): Promise<Pipeline[]> {
-  checkPipelineConfig();
+export async function getSelectedPipelines(
+  scope: PipelineScope = "client",
+): Promise<Pipeline[]> {
+  if (scope === "client") checkPipelineConfig();
   const pipelines = await getPipelines();
   const byId = new Map(pipelines.map((p) => [p.id, p]));
   const selected: Pipeline[] = [];
-  for (const id of pipelineIds()) {
+  for (const id of idsForScope(scope)) {
     const p = byId.get(id);
     if (p) selected.push(p);
   }
@@ -558,7 +601,7 @@ export async function getSelectedPipelines(): Promise<Pipeline[]> {
     throw new GhlError(
       "None of the configured PIPELINE_IDS matched this account's pipelines.",
       404,
-      `Configured: ${pipelineIds().join(", ")}. Available: ${pipelines
+      `Configured: ${idsForScope(scope).join(", ")}. Available: ${pipelines
         .map((p) => `${p.name} (${p.id})`)
         .join(", ")}`,
     );
@@ -1044,7 +1087,9 @@ export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
   }));
 }
 
-export async function getOltlOpportunities(): Promise<{
+export async function getOltlOpportunities(
+  scope: PipelineScope = "client",
+): Promise<{
   records: OpportunityRecord[];
   pipeline: { id: string; name: string } | null;
   pipelines: { id: string; name: string }[];
@@ -1053,7 +1098,7 @@ export async function getOltlOpportunities(): Promise<{
   users: { id: string; name: string }[];
   fieldDefs: EditableFieldDef[];
 }> {
-  const selected = await getSelectedPipelines();
+  const selected = await getSelectedPipelines(scope);
 
   // Build: composite stage map (pipelineId::stageId -> name), pipeline-name
   // lookup, per-pipeline stage lists, and a deduped union of stages.

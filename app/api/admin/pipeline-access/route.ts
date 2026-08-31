@@ -6,6 +6,7 @@ import {
   saveAccessGrantsV2,
   listMediaFolders,
   pipelineIds,
+  caregiverPipelineIds,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
@@ -86,7 +87,11 @@ export async function GET(request: Request) {
         return [];
       }),
     ]);
-    const loaded = new Set(pipelineIds());
+    // ITEM 13 — a caregiver pipeline is "loaded" too. Without this the grid
+    // would flag both of them "not loaded", which is the warning that means
+    // "ticking this has no effect" — untrue, and it would stop anyone granting
+    // recruiting staff the access they need.
+    const loaded = new Set([...pipelineIds(), ...caregiverPipelineIds()]);
 
     return NextResponse.json(
       {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getOltlOpportunities, GhlError } from "@/lib/ghl";
+import { getOltlOpportunities, GhlError, type PipelineScope } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import {
@@ -23,9 +23,18 @@ export const runtime = "nodejs";
 // The unassigned branch is HOME-ONLY on purpose — an unassigned record in
 // another division must never surface.
 
-async function buildResponse(blob: string | null): Promise<Response> {
+// ITEM 13 — `scope` selects the pipeline FAMILY. Caregiver applicants are read
+// through this same route on purpose: they get the identical access filter,
+// version stamping and viewer payload for free, and there is no second code
+// path to keep in step. What keeps them separate is the pipeline list itself —
+// a caregiver pipeline is not in pipelineIds(), so a client request can never
+// return one no matter what the caller asks for.
+async function buildResponse(
+  blob: string | null,
+  scope: PipelineScope = "client",
+): Promise<Response> {
   const { records, pipeline, pipelines, stages, stagesByPipeline, users, fieldDefs } =
-    await getOltlOpportunities();
+    await getOltlOpportunities(scope);
   // Label every user with their division(s) for the owner/follower pickers.
   const pipelineNameById = new Map(pipelines.map((p) => [p.id, p.name]));
   const labelledUsers = users.map((u) => ({
@@ -136,6 +145,10 @@ function errorResponse(e: unknown): Response {
 // re-derive identity and filter before any data leaves the server.
 export async function POST(request: Request) {
   try {
+    const scope: PipelineScope =
+      new URL(request.url).searchParams.get("scope") === "caregiver"
+        ? "caregiver"
+        : "client";
     let blob: string | null = null;
     try {
       const b = (await request.json()) as Record<string, unknown>;
@@ -146,7 +159,7 @@ export async function POST(request: Request) {
     } catch {
       blob = null;
     }
-    return await withGrants(() => buildResponse(blob));
+    return await withGrants(() => buildResponse(blob, scope));
   } catch (e) {
     return errorResponse(e);
   }
@@ -154,9 +167,13 @@ export async function POST(request: Request) {
 
 // GET has no blob: serves the open/setup view when SSO isn't configured, and
 // returns 401 once SSO is enforced (must be opened inside GHL).
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return await withGrants(() => buildResponse(null));
+    const scope: PipelineScope =
+      new URL(request.url).searchParams.get("scope") === "caregiver"
+        ? "caregiver"
+        : "client";
+    return await withGrants(() => buildResponse(null, scope));
   } catch (e) {
     return errorResponse(e);
   }
