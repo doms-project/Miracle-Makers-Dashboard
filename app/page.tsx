@@ -30,6 +30,7 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import MarkLostDialog from "@/components/MarkLostDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -746,6 +747,7 @@ type MasterCatId =
   | "enrollment"
   | "transfer"
   | "reassign"
+  | "sentout"
   | "other";
 
 // REASSIGN is now a REAL STAGE, resolved BY NAME on each pipeline — exactly as
@@ -762,8 +764,30 @@ export const REASSIGN_STAGE = "REASSIGN";
 const isReassignStage = (name: string) =>
   (name || "").trim().toUpperCase() === REASSIGN_STAGE;
 const isReassignRec = (r: OpportunityRecord) => isReassignStage(r.stage);
+// ITEM 2 — SENT OUT. LOST exists on all five pipelines; matched BY NAME, as
+// REASSIGN is. ⬜ PROVISIONAL: "rejected / referred out, no longer worked". If
+// it turns out to mean "reassigned and claimed", this predicate is the only
+// thing that changes.
+export const LOST_STAGE_NAME = "LOST";
+const isLostStage = (name: string) =>
+  (name || "").trim().toUpperCase() === LOST_STAGE_NAME;
+const isLostRec = (r: OpportunityRecord) => isLostStage(r.stage);
 const isNewLeadRec = (r: OpportunityRecord) =>
   (r.stage || "").trim().toUpperCase() === "NEW LEAD" && !r.ownerId;
+// ITEM 1 — PRIVATE PAY IS AN ENROLLMENT.
+//
+// Matched by pipeline ID, deliberately, and it is the only one that is. Its
+// name will never contain "Enrollment", so a name rule can't reach it, and
+// special-casing the string "Private Pay" would break the day somebody renames
+// the pipeline. A self-funded client is still being ENROLLED — same work, only
+// the funding differs.
+//
+// ⚠️ This changes which COLUMN the card sits in, and nothing else. The card's
+// badge still prints r.pipelineName, so a Private Pay case in the Enrollment
+// column still reads "Private Pay Clients" — which is the entire reason the
+// badge names the pipeline instead of the division.
+const PRIVATE_PAY_PIPELINE_ID =
+  process.env.NEXT_PUBLIC_PRIVATE_PAY_PIPELINE_ID || "BJBWdRim6SOgjoMelVSZ";
 const isEnrollmentPipe = (name: string) => /enroll/i.test(name);
 const isTransferPipe = (name: string) => /transfer/i.test(name);
 
@@ -776,10 +800,19 @@ const isTransferPipe = (name: string) => /transfer/i.test(name);
 // round guessed "stage = LOST") produces a column nobody can trust. The list
 // below is data, so adding it later is one entry plus one predicate.
 function masterCategory(r: OpportunityRecord): MasterCatId {
+  // LOST first: a rejected enrolment is SENT OUT, not ENROLLMENT.
+  if (isLostRec(r)) return "sentout";
   if (isReassignRec(r)) return "reassign";
   if (isNewLeadRec(r)) return "new";
-  if (isEnrollmentPipe(r.pipelineName)) return "enrollment";
+  if (isEnrollmentPipe(r.pipelineName) || r.pipelineId === PRIVATE_PAY_PIPELINE_ID)
+    return "enrollment";
+  // Private Pay never reaches TRANSFER, and that is correct: a transfer is a
+  // client arriving with existing state funding, and a self-funded client has
+  // no authorization to transfer.
   if (isTransferPipe(r.pipelineName)) return "transfer";
+  // After the Private Pay fix this should be EMPTY in normal operation.
+  // Anything landing here is now a genuine signal, not the six healthy Private
+  // Pay cases that used to make people ignore the column.
   return "other";
 }
 
@@ -813,6 +846,12 @@ const MASTER_COLUMNS: {
     id: "reassign",
     label: "Reassign",
     hint: "At the REASSIGN stage with no owner — waiting for a department to claim it. Claiming it (an owner plus a real stage) takes it out of this column.",
+    droppable: true,
+  },
+  {
+    id: "sentout",
+    label: "Sent out",
+    hint: "At LOST — rejected or referred out, no longer being worked.",
     droppable: true,
   },
 ];
@@ -2437,7 +2476,7 @@ export default function Dashboard() {
     }
     // For a real MOVE we need somewhere to move it to. Say so up front rather
     // than opening a dialog with an empty pipeline dropdown.
-    if (pipelinesFor(cat).length === 0) {
+    if (cat !== "sentout" && pipelinesFor(cat).length === 0) {
       setDropRefused(
         `You have no ${def.label} pipeline available, so there's nowhere to move this to.`,
       );
@@ -3532,7 +3571,25 @@ export default function Dashboard() {
           Every one of these closes by setting masterDrop back to null and
           nothing else: the card was never moved, so cancelling has nothing to
           undo. Only onMoved/onDone re-renders the board. */}
-      {masterDrop ? (
+      {masterDrop && masterDrop.cat === "sentout" ? (
+        // ITEM 2 — a DIFFERENT dialog from Move, because this is not a move:
+        // the pipeline and owner don't change, only the stage, and it needs a
+        // Lost Reason that Move has nowhere to put. Cancelling leaves the card
+        // exactly where it was, same as every other drop.
+        <MarkLostDialog
+          key={`lost-${masterDrop.record.id}`}
+          record={masterDrop.record}
+          stagesByPipeline={stagesByPipeline}
+          fieldDefs={fieldDefs}
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          onClose={() => setMasterDrop(null)}
+          onDone={(rec) => {
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+            setMasterDrop(null);
+            load();
+          }}
+        />
+      ) : masterDrop ? (
         <MoveDialog
           key={`drop-${masterDrop.record.id}-${masterDrop.cat}`}
           record={masterDrop.record}
