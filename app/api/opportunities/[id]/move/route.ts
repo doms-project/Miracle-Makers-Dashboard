@@ -7,7 +7,11 @@ import {
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord, canManageFollowers, isAdminSession } from "@/lib/visibility";
-import { userDivisions, getUserHomePipelines } from "@/lib/pipelineAccess";
+import {
+  userDivisions,
+  getUserHomePipelines,
+  getMasterUsers,
+} from "@/lib/pipelineAccess";
 import { listPipelines } from "@/lib/ghl";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
@@ -179,6 +183,11 @@ async function postHandler(
       actorUserId: session?.userId || "",
       actorDivision,
       addSenderAsFollower: !!body.addSenderAsFollower,
+      // ITEM 5b — read LIVE, here, inside withGrants' async context, on every
+      // single request. Never cached and never carried over from a previous
+      // reassign: that is what makes a user granted the Master view five minutes
+      // ago appear in the very next reassign's followers with no backfill.
+      masterUsers: getMasterUsers(),
     });
 
     // A partial move is reported as 500 WITH the completed steps, so the caller

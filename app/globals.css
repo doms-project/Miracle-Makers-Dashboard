@@ -622,3 +622,17 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .mage.stale{color:var(--blk);background:var(--blk-soft);border-color:#f3c6bf;}
 /* Names what was dropped, and what still has to be decided. */
 .moveintro{font-size:12.5px;line-height:1.6;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:10px 12px;margin-bottom:12px;}
+
+/* ── ITEM 4 layout: four columns, not five pipelines ──────────────────────
+   Four columns left the board mostly empty. Wider columns and cards, larger
+   type, more room to breathe.
+   ⚠️ Deliberately NOT more fields: this view answers "where is everything",
+   not "everything about each thing". */
+.masterboard{gap:20px;padding:20px 26px;}
+.masterboard .col{flex:1 1 0;min-width:280px;max-width:460px;}
+.masterboard .colhead{padding:14px 16px;font-size:13.5px;}
+.masterboard .colbody{padding:14px;gap:12px;}
+.masterboard .card{padding:15px 16px;}
+.masterboard .card .cn{font-size:14px;margin-bottom:5px;}
+.masterboard .card .cm{font-size:12px;margin-bottom:8px;}
+.mstage{font-size:12.5px;padding:5px 10px;}

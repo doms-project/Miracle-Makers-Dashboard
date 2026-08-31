@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   getOpportunityById,
+  getReassignFollowers,
+  clearReassignFollowers,
+  removeOpportunityFollowers,
+  REASSIGN_STAGE_NAME,
   getEditableFieldDefs,
   updateOpportunity,
   explainGhlError,
@@ -135,6 +139,51 @@ async function patchHandler(
 
     // ---- write + return the fresh record ----
     const record = await updateOpportunity(id, put);
+
+    // ---- ITEM 5c: THE CLAIM -------------------------------------------------
+    // A record LEAVES the reassign queue the moment it has an owner and a real
+    // stage. That is the whole mechanism — no new state, no tag to clear — so
+    // the claim is detected here rather than being a separate action somebody
+    // has to remember to take.
+    const wasReassign =
+      (target.stage || "").trim().toUpperCase() === REASSIGN_STAGE_NAME;
+    const nowOwned = !!(record?.ownerId || target.ownerId);
+    const nowRealStage =
+      !!record &&
+      (record.stage || "").trim().toUpperCase() !== REASSIGN_STAGE_NAME;
+    if (wasReassign && nowOwned && nowRealStage) {
+      try {
+        // 🔴 THE LIST COMES FROM THE FIELD, AND ONLY FROM THE FIELD.
+        // `target` is the PRE-write read, so the field still holds what the
+        // reassign stored. If it is empty or the field is missing we remove
+        // NOTHING and say so: inferring the list from the current followers or
+        // from the access map would strip somebody who was following this
+        // record long before any reassign — the exact failure this guards.
+        const added = await getReassignFollowers(target);
+        if (!added.length) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[claim] ${id} left ${REASSIGN_STAGE_NAME} but "Reassign Followers" is empty or absent — removing NOTHING. Any dashboard-added followers stay until removed by hand, which is the safe direction.`,
+          );
+        } else {
+          // Never remove the new owner, even if they were on the added list —
+          // they are the claimer and belong on the record.
+          const owner = record?.ownerId || "";
+          const toRemove = added.filter((u) => u && u !== owner);
+          if (toRemove.length) await removeOpportunityFollowers(id, toRemove);
+          await clearReassignFollowers(id);
+          // eslint-disable-next-line no-console
+          console.log(
+            `[claim] ${id} claimed by ${owner || "(none)"} — removed ${toRemove.length} dashboard-added follower(s): ${toRemove.join(", ")}`,
+          );
+        }
+      } catch (e) {
+        // The claim itself SUCCEEDED — the owner and stage are written. Failing
+        // the request now would tell the rep their save didn't work when it did.
+        // eslint-disable-next-line no-console
+        console.error(`[claim] follower cleanup failed for ${id}:`, e);
+      }
+    }
 
     // One event per FIELD, with its name and both values — a consumer shouldn't
     // have to diff two record snapshots to learn what changed. `target` is the

@@ -2090,6 +2090,70 @@ export interface MoveResult {
   error?: string;
   stranded?: boolean; // owner moved but the record never left the source pipeline
   attemptedFollowerRemovals?: string[]; // ids we asked GHL to clear (on failure)
+  // ITEM 5b — the followers THIS reassign added, so 5c can remove exactly those
+  // and leave anyone who was already following the record alone.
+  addedFollowers?: string[];
+}
+
+// ITEM 5 — resolved BY NAME on each pipeline, exactly as TRANSFERRED IN is.
+// The stage ids exist on all five pipelines but are deliberately not hardcoded.
+export const REASSIGN_STAGE_NAME = "REASSIGN";
+
+// ITEM 5c — the durable record of WHICH followers this dashboard added during a
+// reassign, so the claim can remove exactly those.
+//
+// A CUSTOM FIELD, not the move note. A note is editable and deletable by its
+// author, so a rep tidying their own wording could silently destroy the list —
+// and a claim reading a destroyed list would strip a follower who was there
+// first, which is the single failure this whole mechanism exists to prevent.
+// Nothing else writes to this field: it is hidden from the panel and on the
+// read-only blocklist, so even a direct API call can't corrupt it through us.
+export const REASSIGN_FOLLOWERS_FIELD = "Reassign Followers";
+
+/** Store the ids WE added. Never the full follower list. */
+export async function setReassignFollowers(
+  oppId: string,
+  userIds: string[],
+): Promise<boolean> {
+  const def = findDefByName(await getFieldDefinitions(), REASSIGN_FOLLOWERS_FIELD);
+  if (!def) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[reassign] no "${REASSIGN_FOLLOWERS_FIELD}" custom field on this account — the follower list cannot be recorded, so a later claim will remove NOTHING rather than guess. Create the field (TEXT, opportunity).`,
+    );
+    return false;
+  }
+  await putOpportunityVerified(
+    oppId,
+    { customFields: [{ id: def.id, value: userIds.join(",") }] },
+    "reassign-followers",
+  );
+  return true;
+}
+
+/** The ids we added, or [] when the field is empty/absent. */
+export async function getReassignFollowers(
+  rec: { cf: Record<string, unknown> },
+): Promise<string[]> {
+  const def = findDefByName(await getFieldDefinitions(), REASSIGN_FOLLOWERS_FIELD);
+  if (!def) return [];
+  const raw = rec.cf[def.id];
+  const text = Array.isArray(raw) ? raw.join(",") : String(raw ?? "");
+  return text
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** Clear it once the claim has removed them. */
+export async function clearReassignFollowers(oppId: string): Promise<void> {
+  const def = findDefByName(await getFieldDefinitions(), REASSIGN_FOLLOWERS_FIELD);
+  if (!def) return;
+  await putOpportunityVerified(
+    oppId,
+    { customFields: [{ id: def.id, value: "" }] },
+    "reassign-followers-clear",
+  );
 }
 
 const normOpt = (s: string): string =>
@@ -2248,8 +2312,13 @@ export async function moveOpportunity(args: {
   actorUserId: string; // note authorship (server-derived)
   actorDivision?: string; // the author's division AT WRITE TIME (stamped, never looked up)
   addSenderAsFollower?: boolean; // Option A switch; default OFF (Option B)
+  // ITEM 5b — master-view holders, read LIVE by the ROUTE from the access map
+  // and passed in. Resolved there rather than here because the request-scoped
+  // store lives in the route's async context.
+  masterUsers?: string[];
 }): Promise<MoveResult> {
   const steps: string[] = [];
+  const addedFollowers: string[] = [];
   const current = await getOpportunityById(args.oppId);
   if (!current)
     throw new GhlError("Opportunity not found.", 404, `id ${args.oppId}`);
@@ -2305,11 +2374,20 @@ export async function moveOpportunity(args: {
     // allowed, and only the "is this a real user" check is skipped — there is no
     // user to check.
     if (unassigning) {
-      // TRANSFERRED IN is still preferred, but its absence must not block an
-      // unassign: fall back to the chosen stage, then the pipeline's first.
-      destStageId = ti?.id || args.toStageId || (dest.stages || [])[0]?.id || "";
-      if (!destStageId)
-        throw new GhlError(`"${dest.name}" has no stages.`, 400);
+      // ITEM 5 — a REASSIGN lands in the destination's REASSIGN stage, resolved
+      // BY NAME exactly as TRANSFERRED IN is. The ids exist on all five
+      // pipelines but are deliberately not written down: a name match survives a
+      // pipeline being rebuilt, an id does not.
+      const ra = (dest.stages || []).find(
+        (s) => (s.name || "").trim().toUpperCase() === REASSIGN_STAGE_NAME,
+      );
+      if (!ra)
+        throw new GhlError(
+          `"${dest.name}" has no ${REASSIGN_STAGE_NAME} stage.`,
+          400,
+          `Add a ${REASSIGN_STAGE_NAME} stage to that pipeline. Every reassigned case lands there, and without it nobody could claim work handed to that department.`,
+        );
+      destStageId = ra.id;
     } else {
       if (!ti)
         throw new GhlError(
@@ -2503,13 +2581,56 @@ export async function moveOpportunity(args: {
     // hand. So an unassign always keeps the sender, regardless of the flag.
     const keepSender =
       (unassigning || args.addSenderAsFollower) && !!current.ownerId;
-    if (keepSender) {
-      await addOpportunityFollowers(args.oppId, [current.ownerId!]);
+
+    // ITEM 5b — 🔴 FOLLOWERS GO ON **BEFORE** THE STAGE CHANGE.
+    //
+    // The stage change into REASSIGN is what fires the GoHighLevel workflow that
+    // notifies "Followers". Added afterwards, that workflow has already run and
+    // notified an empty list — the record sits there and nobody is told. The
+    // pipeline/stage write is the LAST step of this function, so everything here
+    // is safely ahead of it.
+    //
+    // The list is read LIVE from the request-scoped access map (see
+    // getMasterUsers): anyone granted the Master view before this moment is in
+    // this reassign's followers, with no backfill.
+    const wanted = new Set<string>();
+    if (keepSender) wanted.add(current.ownerId!);
+    if (unassigning)
+      for (const u of args.masterUsers || []) if (u) wanted.add(u);
+    // Never re-add someone already on the record: we must be able to tell OUR
+    // additions apart from a follower who was there first, or claiming the case
+    // would strip a person who has nothing to do with the reassign.
+    const already = new Set(current.followerIds);
+    const added = [...wanted].filter((u) => !already.has(u));
+    if (added.length) {
+      await addOpportunityFollowers(args.oppId, added);
+      addedFollowers.push(...added);
       steps.push(
         unassigning
-          ? "kept sender as follower (unassigned move — otherwise they lose sight of it)"
+          ? `added ${added.length} follower(s) BEFORE the stage change (sender + master-view holders) so the GHL workflow notifies a real list`
           : "kept sender as follower",
       );
+      // ITEM 5c — recorded IMMEDIATELY after the additions it describes, and
+      // before the stage change, so a later failure still leaves an accurate
+      // list rather than followers with no record of who put them there.
+      // ONLY the ids we added — anyone already following is deliberately absent.
+      if (unassigning) {
+        try {
+          const stored = await setReassignFollowers(args.oppId, added);
+          steps.push(
+            stored
+              ? `recorded ${added.length} added follower(s) for the claim to undo`
+              : `could NOT record the added followers (no "${REASSIGN_FOLLOWERS_FIELD}" field) — a claim will remove none`,
+          );
+        } catch (e) {
+          // Not fatal: the reassign itself is correct and the record is where
+          // it should be. The cost is that the claim removes nothing, which is
+          // the safe direction — it never strips the wrong person.
+          // eslint-disable-next-line no-console
+          console.error("[reassign] could not record added followers:", e);
+          steps.push("recording the added followers FAILED (claim will remove none)");
+        }
+      }
     }
   } catch (e) {
     return {
@@ -2575,7 +2696,7 @@ export async function moveOpportunity(args: {
         "transfer-pipeline",
       );
       steps.push(
-        `moved pipeline+stage (TRANSFERRED IN)${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
+        `moved pipeline+stage (${unassigning ? REASSIGN_STAGE_NAME : "TRANSFERRED IN"})${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );
 
       // 5. Tag the CONTACT. Written only HERE — after the pipeline move actually
@@ -2597,7 +2718,7 @@ export async function moveOpportunity(args: {
           steps.push(`tag "${tag}" FAILED (transfer completed)`);
         }
       }
-      return { transferred: true, steps };
+      return { transferred: true, steps, addedFollowers };
     } catch (e) {
       lastErr = e;
       if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 500));

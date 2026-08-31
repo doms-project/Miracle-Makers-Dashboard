@@ -30,7 +30,6 @@ import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
-import MarkLostDialog from "@/components/MarkLostDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -747,29 +746,38 @@ type MasterCatId =
   | "enrollment"
   | "transfer"
   | "reassign"
-  | "sentout"
   | "other";
 
-const isLostRec = (r: OpportunityRecord) =>
-  (r.stage || "").trim().toUpperCase() === "LOST" ||
-  (r.status || "").trim().toLowerCase() === "lost";
+// REASSIGN is now a REAL STAGE, resolved BY NAME on each pipeline — exactly as
+// TRANSFERRED IN already is. The ids exist on all five pipelines but are never
+// written down here: a name match keeps working if a pipeline is rebuilt.
+//
+// This REPLACES the previous rule ("in a pipeline, still unassigned"). The two
+// are not the same: a record can be unassigned without having been reassigned,
+// and that record now stays in its pipeline column instead of being swept into
+// Reassign.
+export const REASSIGN_STAGE = "REASSIGN";
+// One predicate, used everywhere REASSIGN has to be recognised or hidden, so
+// the name is matched in exactly one place.
+const isReassignStage = (name: string) =>
+  (name || "").trim().toUpperCase() === REASSIGN_STAGE;
+const isReassignRec = (r: OpportunityRecord) => isReassignStage(r.stage);
 const isNewLeadRec = (r: OpportunityRecord) =>
   (r.stage || "").trim().toUpperCase() === "NEW LEAD" && !r.ownerId;
 const isEnrollmentPipe = (name: string) => /enroll/i.test(name);
 const isTransferPipe = (name: string) => /transfer/i.test(name);
 
-// ORDER IS THE DEFINITION — the first match wins, and every record lands in
-// exactly one column. The sequence is not arbitrary:
-//   LOST first        a rejected enrolment is SENT OUT, not ENROLLMENT.
-//   NEW LEAD next     both it and REASSIGN are unowned; the stage separates them.
-//   REASSIGN next     "unassigned, put there by someone else" — being unowned
-//                     outranks which pipeline it sits in, which is the whole
-//                     point of the column.
-//   then the pipeline-name columns.
+// ORDER IS THE DEFINITION — first match wins, every record lands in exactly one
+// column. REASSIGN outranks the pipeline-name columns: a reassigned ODP
+// Enrollment case is waiting to be CLAIMED, which is what the viewer needs to
+// know, not which pipeline it happens to sit in.
+//
+// ⬜ SENT OUT is NOT BUILT — it is undefined, and guessing at it (the previous
+// round guessed "stage = LOST") produces a column nobody can trust. The list
+// below is data, so adding it later is one entry plus one predicate.
 function masterCategory(r: OpportunityRecord): MasterCatId {
-  if (isLostRec(r)) return "sentout";
+  if (isReassignRec(r)) return "reassign";
   if (isNewLeadRec(r)) return "new";
-  if (!r.ownerId) return "reassign";
   if (isEnrollmentPipe(r.pipelineName)) return "enrollment";
   if (isTransferPipe(r.pipelineName)) return "transfer";
   return "other";
@@ -804,13 +812,7 @@ const MASTER_COLUMNS: {
   {
     id: "reassign",
     label: "Reassign",
-    hint: "In a pipeline but still unassigned — waiting for that department to claim it. It leaves this column automatically once someone takes ownership.",
-    droppable: true,
-  },
-  {
-    id: "sentout",
-    label: "Sent out",
-    hint: "At LOST — rejected, no longer worked.",
+    hint: "At the REASSIGN stage with no owner — waiting for a department to claim it. Claiming it (an owner plus a real stage) takes it out of this column.",
     droppable: true,
   },
 ];
@@ -1619,7 +1621,10 @@ export default function Dashboard() {
     }
     const ordered = STAGE_ORDER.filter((s) => seen.has(s));
     const extra = present.filter((s) => !STAGE_ORDER.includes(s));
-    return [...ordered, ...extra];
+    // ITEM 5a — REASSIGN is not a pipeline stage people work in; it is a
+    // holding state visible only in the Master view. A chip here would let
+    // anyone filter to it from the ordinary list and treat it as normal work.
+    return [...ordered, ...extra].filter((n) => !isReassignStage(n));
   }, [preStage]);
 
   // Offices, scoped the same way: an office with nothing in it under the current
@@ -2432,7 +2437,7 @@ export default function Dashboard() {
     }
     // For a real MOVE we need somewhere to move it to. Say so up front rather
     // than opening a dialog with an empty pipeline dropdown.
-    if (cat !== "sentout" && pipelinesFor(cat).length === 0) {
+    if (pipelinesFor(cat).length === 0) {
       setDropRefused(
         `You have no ${def.label} pipeline available, so there's nowhere to move this to.`,
       );
@@ -2478,7 +2483,11 @@ export default function Dashboard() {
         set.add(r.stage);
         names.push(r.stage);
       }
-    return names;
+    // ITEM 5a — no REASSIGN column on the ordinary board. Removing the column
+    // also removes it as a DROP TARGET, which is the point: dragging a card
+    // there from a pipeline view would put it in the holding state without the
+    // followers, the note or the stamps, bypassing the whole flow.
+    return names.filter((n) => !isReassignStage(n));
   }, [
     adminPipeline,
     homePipelineIds,
@@ -3523,21 +3532,7 @@ export default function Dashboard() {
           Every one of these closes by setting masterDrop back to null and
           nothing else: the card was never moved, so cancelling has nothing to
           undo. Only onMoved/onDone re-renders the board. */}
-      {masterDrop && masterDrop.cat === "sentout" ? (
-        <MarkLostDialog
-          key={`lost-${masterDrop.record.id}`}
-          record={masterDrop.record}
-          stagesByPipeline={stagesByPipeline}
-          fieldDefs={fieldDefs}
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
-          onClose={() => setMasterDrop(null)}
-          onDone={(rec) => {
-            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
-            setMasterDrop(null);
-            load();
-          }}
-        />
-      ) : masterDrop ? (
+      {masterDrop ? (
         <MoveDialog
           key={`drop-${masterDrop.record.id}-${masterDrop.cat}`}
           record={masterDrop.record}
@@ -3833,11 +3828,33 @@ export default function Dashboard() {
                   >
                     {/* This record's OWN pipeline only — never the merged union,
                         or we'd offer a foreign stage id (400 STAGE_ID_INVALID). */}
-                    {stagesFor(selected.pipelineId).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
+                    {stagesFor(selected.pipelineId)
+                      // ITEM 5a — REASSIGN is hidden as a DESTINATION: nobody
+                      // should be able to put a record into the holding state
+                      // from this dropdown and skip the flow.
+                      //
+                      // ⚠️ But a record that IS at REASSIGN must still show its
+                      // own stage. Filtering unconditionally would render a
+                      // select whose value matches no option — which paints
+                      // BLANK, reads as "this record has no stage", and would
+                      // silently rewrite the stage on the next save. So the
+                      // record's current stage is always kept, and disabled.
+                      .filter(
+                        (s) =>
+                          !isReassignStage(s.name) || s.id === selected.stageId,
+                      )
+                      .map((s) => (
+                        <option
+                          key={s.id}
+                          value={s.id}
+                          disabled={isReassignStage(s.name)}
+                        >
+                          {s.name}
+                          {isReassignStage(s.name)
+                            ? " — waiting to be claimed"
+                            : ""}
+                        </option>
+                      ))}
                   </select>
                   {saveMsgFor(selected.id, "stage")}
                 </div>

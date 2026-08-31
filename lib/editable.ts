@@ -25,6 +25,11 @@ export const READ_ONLY_FIELDS: string[] = [
   "Transferred Date",
   // Synced from the caregiver associations.
   "Caregiver Name",
+  // ITEM 5c — written ONLY by the reassign flow and cleared ONLY by the claim.
+  // Blocklisted as well as hidden: the panel never renders it, but the PATCH
+  // route accepts any field id a caller sends, so without this a direct API
+  // write could corrupt the list and make a claim strip the wrong follower.
+  "Reassign Followers",
 ];
 
 const norm = (s: string): string =>
