@@ -40,6 +40,16 @@ export interface OpportunityRecord {
   // NOTHING rather than "0 days", which would be a confident claim about a
   // record whose history we don't actually know.
   stageChangedAt?: string;
+  // ITEM 5 — OPTIMISTIC CONCURRENCY. GoHighLevel's `updatedAt`, carried through
+  // to the client and sent back on every write. The server compares it to the
+  // stored value and refuses the write if anyone else has touched the record in
+  // between, instead of silently overwriting their change.
+  //
+  // "" when GoHighLevel sent no timestamp — the check then cannot run and the
+  // write proceeds. That is deliberate: refusing every write because we can't
+  // read a version would break the app over a missing field, whereas the old
+  // behaviour (last write wins) is what we already had.
+  version?: string;
 }
 
 // Custom-field definition sent to the client to drive the dynamic editors.

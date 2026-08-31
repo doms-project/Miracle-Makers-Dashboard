@@ -94,6 +94,7 @@ export default function MarkLostDialog({
         headers,
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
+          expectedVersion: record.version,
           stageId: lost.id,
           ...(reasonField && reason.trim()
             ? { customFields: [{ id: reasonField.id, value: reason.trim() }] }

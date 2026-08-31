@@ -16,6 +16,7 @@ import { listPipelines } from "@/lib/ghl";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
+import { versionGuard } from "@/lib/concurrency";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -109,6 +110,7 @@ async function postHandler(
       newOwnerId?: string | null;
       reason?: string;
       addSenderAsFollower?: boolean;
+      expectedVersion?: string;
     };
     const blob = body.ssoKey || request.headers.get("x-ghl-sso-key");
 
@@ -135,6 +137,12 @@ async function postHandler(
       return NextResponse.json({ error: "Opportunity not found." } as ApiError, {
         status: 404,
       });
+
+    // ITEM 5 — a Move is the most damaging write to lose a race on: it changes
+    // pipeline, stage and owner at once, so an overwrite here can move a case
+    // out from under whoever just claimed it.
+    const conflict = versionGuard(target, body.expectedVersion, "MOVE");
+    if (conflict) return conflict;
 
     const isTransfer =
       typeof body.newOwnerId === "string" &&

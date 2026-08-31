@@ -11,6 +11,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canManageFollowers } from "@/lib/visibility";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
+import { versionGuard } from "@/lib/concurrency";
 import { emit } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,7 @@ async function patchHandler(
       ssoKey?: string;
       add?: string[];
       remove?: string[];
+      expectedVersion?: string;
     };
     const blob = body.ssoKey || request.headers.get("x-ghl-sso-key");
 
@@ -61,6 +63,11 @@ async function patchHandler(
         } as ApiError,
         { status: 403 },
       );
+
+    // ITEM 5 — followers decide who can SEE the record, so losing a race here
+    // silently re-shares or un-shares a case.
+    const conflict = versionGuard(target, body.expectedVersion, "FOLLOWERS");
+    if (conflict) return conflict;
 
     const add = (body.add || []).filter(Boolean);
     const remove = (body.remove || []).filter(Boolean);

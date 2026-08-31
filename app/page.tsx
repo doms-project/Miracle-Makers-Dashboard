@@ -2419,6 +2419,10 @@ export default function Dashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            // ITEM 5 — the version this client last READ. `rec` is the record
+            // as it was when the edit started, which is exactly the right one:
+            // the optimistic update above changes local state only.
+            expectedVersion: rec.version,
             ...patch,
           }),
         });
@@ -2471,6 +2475,7 @@ export default function Dashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            expectedVersion: rec.version, // ITEM 5
             ...change,
           }),
         });
@@ -3644,7 +3649,19 @@ export default function Dashboard() {
             // stage id).
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
             if (transferred) setSelId(null);
-            load();
+            // ITEM 4 — NO IMMEDIATE RE-FETCH.
+            //
+            // This called load() straight after the write. The local update
+            // above is already correct — it uses the record the WRITE RESPONSE
+            // returned — but the re-fetch replaced it with GoHighLevel's search
+            // index, which can still be serving the pre-write state. A correct
+            // local update was being overwritten by a stale server one, which
+            // is exactly the "it vanished until I reloaded" symptom.
+            //
+            // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
+            // fails silently whenever the lag is longer. Dropping it is
+            // deterministic; delaying it is the same race with better odds.
+            // The next visibilitychange refresh picks up anything else.
           }}
         />
       ) : null}
@@ -3707,7 +3724,19 @@ export default function Dashboard() {
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
             setMasterDrop(null);
             setSelId(null); // it has left this viewer's board
-            load();
+            // ITEM 4 — NO IMMEDIATE RE-FETCH.
+            //
+            // This called load() straight after the write. The local update
+            // above is already correct — it uses the record the WRITE RESPONSE
+            // returned — but the re-fetch replaced it with GoHighLevel's search
+            // index, which can still be serving the pre-write state. A correct
+            // local update was being overwritten by a stale server one, which
+            // is exactly the "it vanished until I reloaded" symptom.
+            //
+            // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
+            // fails silently whenever the lag is longer. Dropping it is
+            // deterministic; delaying it is the same race with better odds.
+            // The next visibilitychange refresh picks up anything else.
           }}
         />
       ) : masterDrop ? (
@@ -3757,7 +3786,19 @@ export default function Dashboard() {
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
             setMasterDrop(null);
             if (transferred) setSelId(null);
-            load();
+            // ITEM 4 — NO IMMEDIATE RE-FETCH.
+            //
+            // This called load() straight after the write. The local update
+            // above is already correct — it uses the record the WRITE RESPONSE
+            // returned — but the re-fetch replaced it with GoHighLevel's search
+            // index, which can still be serving the pre-write state. A correct
+            // local update was being overwritten by a stale server one, which
+            // is exactly the "it vanished until I reloaded" symptom.
+            //
+            // A DELAY WOULD BE WORSE: 1-2s is a guess at GHL's indexing lag and
+            // fails silently whenever the lag is longer. Dropping it is
+            // deterministic; delaying it is the same race with better odds.
+            // The next visibilitychange refresh picks up anything else.
           }}
         />
       ) : null}

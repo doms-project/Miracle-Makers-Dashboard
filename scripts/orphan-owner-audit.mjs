@@ -100,6 +100,16 @@ for (const pid of wanted) {
       // An ADMIN sees every pipeline regardless of the map, so they are never
       // an orphan. Reporting them would bury the real ones.
       if (u?.role === "admin") continue;
+      // ⚠️ A FOLLOWER WITH ACCESS MEANS IT IS NOT AN ORPHAN.
+      //
+      // This is exactly what a transfer with "Keep me on this lead" produces:
+      // the owner sits outside the map and the previous owner stays on as a
+      // follower. Somebody with that pipeline can still see the record, so
+      // nothing is hidden and nothing needs fixing. Reporting it alongside the
+      // real ones made three findings look equal when only two were.
+      const coveredBy = (o.followers || []).filter((f) =>
+        (grants[f] || []).includes(pid),
+      );
       orphans.push({
         id: o.id,
         name: o.name || "(unnamed)",
@@ -109,6 +119,7 @@ for (const pid of wanted) {
         ownerId: owner,
         ownerHolds: held.map((h) => pipelines.get(h) || h),
         followers: (o.followers || []).length,
+        coveredBy: coveredBy.map((f) => users.get(f)?.name || f),
       });
     }
     if (opps.length < 100) break;
@@ -117,12 +128,28 @@ for (const pid of wanted) {
 }
 
 // ---- report ----------------------------------------------------------------
+// Split before reporting: covered records are a note, not a finding.
+const covered = orphans.filter((o) => o.coveredBy.length);
+const real = orphans.filter((o) => !o.coveredBy.length);
+
 console.log(`Scanned ${total} opportunit${total === 1 ? "y" : "ies"}.\n`);
+if (covered.length) {
+  console.log(
+    `✓ ${covered.length} record(s) have an owner outside the map but a FOLLOWER who holds that pipeline.\n` +
+    `  Not orphans — this is what a transfer with "Keep me on this lead" produces, and\n` +
+    `  somebody with access can still see them. Listed for completeness only:\n`,
+  );
+  for (const o of covered)
+    console.log(`    ${o.id}  ${o.name}  →  ${o.pipeline}  (owner ${o.owner}; visible to ${o.coveredBy.join(", ")})`);
+  console.log();
+}
+orphans.length = 0;
+orphans.push(...real);
 if (!orphans.length) {
-  console.log("✓ No orphaned records: every owner has access to the pipeline their case is in.");
+  console.log("✓ No orphaned records: every record is visible to somebody who holds its pipeline.");
   process.exit(0);
 }
-console.log(`🔴 ${orphans.length} record(s) owned by someone WITHOUT access to that pipeline.\n`);
+console.log(`🔴 ${orphans.length} record(s) owned by someone WITHOUT access to that pipeline, and with NO follower who has it.\n`);
 console.log(
   "These are visible to their owner (the owner path), but INVISIBLE to the division\n" +
   "that the pipeline belongs to — not owner, not follower, not unassigned.\n",
@@ -145,5 +172,5 @@ console.log(
   "  1. grant that user the pipeline in the Access tab — if the assignment was right;\n" +
   "  2. reassign the record to someone in that division — if it was not;\n" +
   "  3. add a division member as a FOLLOWER — if it must stay where it is.\n" +
-  "Records with followers are less urgent: somebody in the map can still see them.",
+  "Records already covered by a follower are listed above and need nothing.",
 );
