@@ -101,6 +101,19 @@ function personIn(raw: string): string {
   return (m?.[1] || "").trim();
 }
 
+// The `error` field of a JSON body our own routes returned. These are already
+// written for a person, so when one is present it beats anything we could
+// reconstruct from the wrapper message.
+function bodyError(e: unknown): string {
+  if (!(e instanceof ApiError) || !e.body) return "";
+  try {
+    const j = JSON.parse(e.body) as { error?: unknown };
+    return typeof j.error === "string" ? j.error : "";
+  } catch {
+    return "";
+  }
+}
+
 export function explainError(e: unknown): FriendlyError {
   const p = parse(e);
   const raw = p.raw;
@@ -114,6 +127,13 @@ export function explainError(e: unknown): FriendlyError {
   if (p.traceId) details.push(`traceId ${p.traceId}`);
   // The raw string LAST and VERBATIM — it is the searchable part.
   if (raw) details.push(raw);
+  // ...and the RESPONSE BODY, which is usually the only place GoHighLevel's own
+  // wording appears. `hay` has always included it for MATCHING, but it was never
+  // shown — so a disclosure block promising the verbatim technical detail was
+  // quietly withholding the most useful line in it. Skipped when it adds nothing
+  // over the message we already printed.
+  const body = e instanceof ApiError ? (e.body || "").trim() : "";
+  if (body && !raw.includes(body) && !body.includes(raw)) details.push(body);
 
   const hit = (message: string): FriendlyError => ({
     message,
@@ -146,6 +166,18 @@ export function explainError(e: unknown): FriendlyError {
     /stage does not belong/i.test(hay.toLowerCase())
   )
     return hit("That stage isn't part of this pipeline. Reload and try again.");
+
+  // 🔴 GHL'S OWN TIMEOUT ARRIVES AS A 401.
+  //
+  //   {"statusCode":401,"message":"Command timed out"}
+  //
+  // Confirmed by reproducing it outside the dashboard with a token that worked
+  // moments earlier. It is checked BEFORE the generic 401 branch, because that
+  // branch would otherwise say "your session has expired" and send someone to
+  // reload a page over a working token — a confident, specific, wrong
+  // explanation, which is worse than saying nothing.
+  if (/timed?\s*out/i.test(hay))
+    return hit("GoHighLevel didn't respond. Try again in a moment.");
 
   // A MISSING PIT SCOPE is not an expired session, and telling someone to
   // reload the page for one wastes a round — reloading can never fix it. Added
@@ -182,7 +214,11 @@ export function explainError(e: unknown): FriendlyError {
         : "That record no longer exists. It may have been deleted or moved.",
     );
 
-  if (p.status === 409) return hit(raw); // our own 409s are already plain
+  // Our own 409s are already written for a person — but the sentence lives in
+  // the response BODY's `error`, while `raw` is apiFetch's wrapper ("Couldn't
+  // save."). Returning raw threw the useful sentence away and told the rep
+  // nothing. ITEM 5's conflict message is the case that exposed this.
+  if (p.status === 409) return hit(bodyError(e) || raw);
 
   // Network / upstream. `status === 0` alone is NOT enough: a plain
   // `new Error("boom")` from a client-side bug also parses to status 0, and

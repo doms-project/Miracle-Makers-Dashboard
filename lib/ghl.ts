@@ -217,7 +217,25 @@ function headers(version?: string): HeadersInit {
   };
 }
 
-async function ghlGet<T>(path: string): Promise<T> {
+// 🔴 GOHIGHLEVEL RETURNS ITS OWN TIMEOUT AS A 401.
+//
+//   {"statusCode":401,"message":"Command timed out"}
+//
+// Reproduced outside the dashboard, with a token that had returned 25 users
+// minutes earlier — so this is GHL conflating a transient backend timeout with
+// an auth failure, and the error layer was faithfully passing it through.
+//
+// Two consequences, both handled:
+//   1. it is TRANSIENT, so it is worth one silent retry. The Access tab makes
+//      four reads in Promise.all, giving it four chances to hit an intermittent
+//      fault; a single retry per call removes most of that exposure.
+//   2. it must NEVER produce the token-troubleshooting text, which sends
+//      somebody to check a token that is provably fine.
+function isGhlTimeout(status: number, body: string): boolean {
+  return status === 401 && /timed?\s*out/i.test(body);
+}
+
+async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
   try {
@@ -238,6 +256,28 @@ async function ghlGet<T>(path: string): Promise<T> {
     }
     let detail = ghlMessage(raw).slice(0, 500);
     const meta = ghlErrorMeta(raw);
+
+    // ONE retry, then give up. Retrying further would turn a GHL wobble into a
+    // request that hangs for the user instead of failing cleanly.
+    if (isGhlTimeout(res.status, raw) && attempt === 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] 401 "Command timed out" on ${new URL(url).pathname} — GoHighLevel's own timeout, not an auth failure. Retrying once.`,
+      );
+      return ghlGet<T>(path, 2);
+    }
+
+    if (isGhlTimeout(res.status, raw)) {
+      // Reported as 502: this was an upstream failure, and calling it 401 makes
+      // every layer above treat a working token as expired.
+      throw new GhlError(
+        "GoHighLevel didn't respond.",
+        502,
+        `GoHighLevel returned 401 "${detail}" for ${new URL(url).pathname}. That is its own backend timeout, not an authentication failure — the token is fine. Retried once already.`,
+        meta,
+      );
+    }
+
     if (res.status === 401) {
       const scheme = effectiveScheme();
       detail =
@@ -263,6 +303,7 @@ async function ghlSend<T>(
   method: "PUT" | "POST" | "PATCH",
   path: string,
   body: unknown,
+  attempt = 1,
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
@@ -289,6 +330,30 @@ async function ghlSend<T>(
     }
     const detail = ghlMessage(raw);
     const meta = ghlErrorMeta(raw);
+
+    // Same GHL timeout-as-401 as ghlGet. ⚠️ Retried here too, but note the
+    // difference: a WRITE that timed out may or may not have landed, so the
+    // retry can repeat it. Every write this app makes is idempotent in effect
+    // — it PUTs a desired state (stage, owner, field values), never an
+    // increment or an append — so applying it twice reaches the same place.
+    // The one exception is note creation, which appends; a duplicated note is
+    // visible and harmless, whereas a lost one is not.
+    if (isGhlTimeout(res.status, raw) && attempt === 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] 401 "Command timed out" on ${method} ${new URL(url).pathname} — GoHighLevel's own timeout, not auth. Retrying once.`,
+      );
+      return ghlSend<T>(method, path, body, 2);
+    }
+    if (isGhlTimeout(res.status, raw)) {
+      throw new GhlError(
+        "GoHighLevel didn't respond.",
+        502,
+        `GoHighLevel returned 401 "${detail}" for ${method} ${new URL(url).pathname}. That is its own backend timeout, not an authentication failure — the token is fine. Retried once already.`,
+        meta,
+      );
+    }
+
     // Log the failing request body alongside the reason — without it a 400 is
     // undiagnosable from the logs alone.
     // eslint-disable-next-line no-console
@@ -568,6 +633,11 @@ interface RawOpportunity {
   lastStageChangeAt?: string;
   lastStageChangedAt?: string;
   lastStatusChangeAt?: string;
+  // ITEM 5 — the optimistic-concurrency token. GoHighLevel stamps this on every
+  // opportunity write, so it changes whenever ANYBODY edits the record — which
+  // is exactly what a version check needs and why nothing had to be invented.
+  updatedAt?: string;
+  dateUpdated?: string;
 }
 
 // Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
@@ -737,6 +807,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   pipelineName: [],
   shared: [],
   stageChangedAt: [], // native GHL timestamp, not a custom field
+  version: [], // native GHL updatedAt, not a custom field
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -812,6 +883,8 @@ function normalizeOpportunity(
     // rather than "0 days", which would be a confident lie about a record we
     // know nothing about. UNVERIFIED against live GHL: see
     // scripts/stage-age-probe.mjs.
+    // ITEM 5 — see OpportunityRecord.version.
+    version: String(opp.updatedAt ?? opp.dateUpdated ?? ""),
     stageChangedAt: String(
       opp.lastStageChangeAt ??
         opp.lastStageChangedAt ??

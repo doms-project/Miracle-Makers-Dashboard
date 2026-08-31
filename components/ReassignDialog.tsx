@@ -51,6 +51,7 @@ export default function ReassignDialog({
         },
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
+          expectedVersion: record.version,
           // ITS OWN pipeline — this is not a move between pipelines.
           toPipelineId: record.pipelineId,
           // "" (not undefined) is what marks this an owner change to NOBODY.

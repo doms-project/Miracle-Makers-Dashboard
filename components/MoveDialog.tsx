@@ -221,6 +221,8 @@ export default function MoveDialog({
         },
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
+          // ITEM 5 — the version the dialog opened on.
+          expectedVersion: record.version,
           toPipelineId,
           // Stage is chosen only on the simple path; a transfer always lands in
           // TRANSFERRED IN (the server resolves and enforces it).

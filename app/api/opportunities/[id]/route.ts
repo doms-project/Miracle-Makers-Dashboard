@@ -16,6 +16,7 @@ import { isAdminSession, canEditRecord, canChangeOwner } from "@/lib/visibility"
 import type { ApiError, EditableFieldDef } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
+import { versionGuard } from "@/lib/concurrency";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,6 +29,8 @@ interface PatchBody {
   status?: string;
   monetaryValue?: number;
   customFields?: { id: string; value: unknown }[];
+  // ITEM 5 — the version the client last read.
+  expectedVersion?: string;
 }
 
 // Coerce a value to GHL's expected write format for the field's dataType.
@@ -95,6 +98,12 @@ async function patchHandler(
       };
       return NextResponse.json(err, { status: 403 });
     }
+
+    // ITEM 5 — refuse rather than overwrite somebody else's change. Checked
+    // BEFORE the permission gate below only in the sense that both run before
+    // any write; order between them doesn't matter, since neither writes.
+    const conflict = versionGuard(target, body.expectedVersion, "PATCH");
+    if (conflict) return conflict;
 
     // ITEM 14 — a follower may edit FIELDS but not the OWNER. Enforced HERE,
     // server-side: hiding the dropdown is convenience, and this would hold
