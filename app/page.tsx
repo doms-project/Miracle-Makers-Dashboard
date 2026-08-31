@@ -126,6 +126,13 @@ const IconMaster = () => (
     <path d="M9 4v16M15 4v16M3 9h18" />
   </svg>
 );
+const IconPeople = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
 const IconRefresh = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -688,8 +695,14 @@ function BoardCard({
         isDragging ? " ghost" : ""
       }`}
       onClick={onOpen}
+      // ⚠️ BOTH are conditional. `attributes` was spread unconditionally, and
+      // dnd-kit's disabled state includes aria-disabled="true" — so a card the
+      // viewer may not DRAG was announced, and treated by tooling, as a disabled
+      // control even though clicking it still opens the record. That is wrong on
+      // the client board for any record a rep can't edit, and it is wrong for
+      // every caregiver card, none of which drag.
       {...(canDrag ? listeners : {})}
-      {...attributes}
+      {...(canDrag ? attributes : {})}
     >
       <CardBody r={r} following={following} saving={saving} relBadge={relBadge} />
     </div>
@@ -1108,11 +1121,36 @@ export default function Dashboard() {
   // draws one column per HOME pipeline, so an unmapped user would otherwise land
   // on a completely blank screen rather than a merely empty one).
   const [view, setView] = useState<
-    "list" | "board" | "master" | "resources" | "import" | "access"
+    | "list"
+    | "board"
+    | "master"
+    | "resources"
+    | "import"
+    | "access"
+    | "caregivers"
   >("board");
   const [selId, setSelId] = useState<string | null>(null);
   // ITEM 4 — the Master view GRANT, decided server-side (admins always).
   const [canSeeMaster, setCanSeeMaster] = useState(false);
+
+  // ---- ITEM 13: CAREGIVERS ----
+  //
+  // Held in its OWN state, loaded from its OWN request (?scope=caregiver), and
+  // never merged into `data`. That separation is the requirement, and keeping it
+  // structural rather than a filter is what guarantees it: the client list, the
+  // client kanban and the master view all read `data`, so a caregiver applicant
+  // cannot appear in them — there is no filter to forget.
+  const [cgData, setCgData] = useState<OpportunityRecord[]>([]);
+  const [cgPipelines, setCgPipelines] = useState<{ id: string; name: string }[]>([]);
+  const [cgStagesByPipeline, setCgStagesByPipeline] = useState<
+    Record<string, { id: string; name: string }[]>
+  >({});
+  const [cgHomeIds, setCgHomeIds] = useState<string[]>([]);
+  const [cgLoading, setCgLoading] = useState(false);
+  const [cgErr, setCgErr] = useState<ApiError | null>(null);
+  const [cgLoaded, setCgLoaded] = useState(false);
+  const [cgPipeline, setCgPipeline] = useState<string>("all");
+  const [cgQuery, setCgQuery] = useState("");
   // ITEM 3 — a card dropped on a Master category column, held while its dialog
   // is open.
   //
@@ -1268,6 +1306,53 @@ export default function Dashboard() {
   // ⚠️ Do not re-add a focus or interval listener here without solving the rate
   // limit first. This is the second time the cost of automatic refreshing has
   // been underestimated on this project.
+
+  // ITEM 13 — the caregiver payload. Same route, same access filter, same
+  // version stamping; only the pipeline family differs. Loaded lazily the first
+  // time the section is opened, and refreshed by the same Refresh button —
+  // never on focus (see the note above the initial-load effect).
+  const loadCaregivers = useCallback(async () => {
+    setCgLoading(true);
+    setCgErr(null);
+    try {
+      const res =
+        sso.status === "ready"
+          ? await fetch("/api/opportunities?scope=caregiver", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ssoKey: sso.blob }),
+              cache: "no-store",
+            })
+          : await fetch("/api/opportunities?scope=caregiver", { cache: "no-store" });
+      const body = (await res.json().catch(() => ({}))) as
+        | OpportunitiesResponse
+        | ApiError;
+      if (!res.ok) {
+        setCgErr(body as ApiError);
+        setCgData([]);
+        return;
+      }
+      const b = body as OpportunitiesResponse;
+      setCgData(b.records || []);
+      setCgPipelines(b.pipelines || []);
+      setCgStagesByPipeline(b.stagesByPipeline || {});
+      setCgHomeIds(b.viewer?.homePipelineIds || []);
+      setCgLoaded(true);
+    } catch (e) {
+      setCgErr({
+        error: "Could not reach the dashboard API.",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+      setCgData([]);
+    } finally {
+      setCgLoading(false);
+    }
+  }, [sso]);
+
+  useEffect(() => {
+    if (view === "caregivers" && !cgLoaded && sso.status !== "loading")
+      loadCaregivers();
+  }, [view, cgLoaded, sso.status, loadCaregivers]);
 
   // Escape closes the record panel.
   useEffect(() => {
@@ -2180,6 +2265,41 @@ export default function Dashboard() {
     return cols;
   }, [data, q, office, transferredFrom]);
 
+  // ITEM 13 — the caregiver board. One column per stage of the selected
+  // caregiver pipeline. Deliberately NOT the client board's stage union: the two
+  // caregiver pipelines have completely different stage names (PP has seven,
+  // ODP DSP has ten) and merging them would produce a column list that describes
+  // neither.
+  const cgVisiblePipelines = useMemo(() => {
+    const home = new Set(cgHomeIds);
+    return isAdminViewer || !home.size
+      ? cgPipelines
+      : cgPipelines.filter((p) => home.has(p.id));
+  }, [cgPipelines, cgHomeIds, isAdminViewer]);
+
+  const cgActivePipeline = useMemo(
+    () =>
+      cgPipeline !== "all"
+        ? cgPipeline
+        : cgVisiblePipelines[0]?.id || "",
+    [cgPipeline, cgVisiblePipelines],
+  );
+
+  const cgStages = useMemo(
+    () => (cgStagesByPipeline[cgActivePipeline] || []).map((st) => st.name),
+    [cgStagesByPipeline, cgActivePipeline],
+  );
+
+  const cgVisible = useMemo(() => {
+    const needle = cgQuery.trim().toLowerCase();
+    return cgData.filter(
+      (r) =>
+        r.pipelineId === cgActivePipeline &&
+        (needle === "" ||
+          `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
+    );
+  }, [cgData, cgActivePipeline, cgQuery]);
+
   // ITEM 3 — the pipelines a drop on each category may choose between. Derived
   // from the live pipeline NAMES, never hardcoded ids.
   const pipelinesFor = useCallback(
@@ -2236,9 +2356,14 @@ export default function Dashboard() {
     };
   }, [filtered]);
 
+  // ITEM 13 — the panel opens over EITHER family. The two lists are kept
+  // separate everywhere else, but a record panel is a record panel: looking in
+  // both is what lets an applicant card open without duplicating the panel.
+  // Client records are searched first, so a caregiver payload can never shadow
+  // one.
   const selected = useMemo(
-    () => data.find((r) => r.id === selId) || null,
-    [data, selId],
+    () => data.find((r) => r.id === selId) || cgData.find((r) => r.id === selId) || null,
+    [data, cgData, selId],
   );
 
   // ITEM 5 — the Transferred From stamp, resolved by field NAME (never a
@@ -2683,12 +2808,29 @@ export default function Dashboard() {
     <div className="app">
       <nav className="rail">
         <div className="logo">M</div>
+        {/* ITEM 13 — the rail is now a SECTION switch, not a single badge.
+            Caregiver recruitment is different work from client enrolment: a
+            different pipeline family, a different set of people, and nothing
+            that should ever mix. Making that the top-level split is what makes
+            the separation obvious to the person using it, not just true in the
+            data. */}
         <button
-          className="active"
-          title={`${headerLabel} — this custom view`}
+          className={view === "caregivers" ? "railsec" : "railsec active"}
+          title="Client enrolments"
           type="button"
+          onClick={() => setView("board")}
         >
           <IconGrid />
+          <span>Clients</span>
+        </button>
+        <button
+          className={view === "caregivers" ? "railsec active" : "railsec"}
+          title="Caregiver and DSP applicants"
+          type="button"
+          onClick={() => setView("caregivers")}
+        >
+          <IconPeople />
+          <span>Caregivers</span>
         </button>
         <div
           className="railnote"
@@ -2750,6 +2892,7 @@ export default function Dashboard() {
             <IconRefresh />
             {loading ? "Refreshing…" : "Refresh"}
           </button>
+          {view === "caregivers" ? null : (
           <div className="seg">
             <button
               className={view === "list" ? "on" : ""}
@@ -2812,6 +2955,7 @@ export default function Dashboard() {
               </button>
             )}
           </div>
+          )}
         </div>
 
         {/* Opportunity controls — LIST and BOARD only.
@@ -3098,7 +3242,122 @@ export default function Dashboard() {
         )}
 
         {/* content: Import tab (admin), Resources tab, else loading / error / list / board */}
-        {view === "access" ? (
+        {view === "caregivers" ? (
+          // ITEM 13 — the caregiver section. Same kanban, same record panel; a
+          // different pipeline family and nothing else shared.
+          cgLoading ? (
+            <div className="statewrap">
+              <div className="statecard">
+                <div className="spinner" />
+                <h3>Loading applicants…</h3>
+              </div>
+            </div>
+          ) : cgErr ? (
+            <div className="statewrap">
+              <div className="statecard">
+                <h3>
+                  <span className="errdot">●</span> Couldn&apos;t load applicants
+                </h3>
+                <p>{cgErr.error}</p>
+                {cgErr.detail ? (
+                  <div className="detail">{cgErr.detail}</div>
+                ) : null}
+                <button className="retry" onClick={loadCaregivers} type="button">
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : cgVisiblePipelines.length === 0 ? (
+            // The SAME empty-state pattern as no pipeline access. A caregiver
+            // pipeline is granted in the Access tab like any other.
+            <div className="empty noaccess">
+              <b>No applicant pipelines assigned yet</b>
+              <br />
+              You&apos;ll see caregiver and DSP applicants here once an admin
+              gives you access to one in the Access tab.
+            </div>
+          ) : (
+            <>
+              <div className="toolbar mtoolbar">
+                <div className="search">
+                  <IconSearch />
+                  <input
+                    placeholder="Search applicants by name…"
+                    value={cgQuery}
+                    onChange={(e) => setCgQuery(e.target.value)}
+                  />
+                </div>
+                {cgVisiblePipelines.length > 1 ? (
+                  <div className="officefilter">
+                    <label htmlFor="cgPipeSel">Pipeline</label>
+                    <select
+                      id="cgPipeSel"
+                      value={cgActivePipeline}
+                      onChange={(e) => setCgPipeline(e.target.value)}
+                    >
+                      {cgVisiblePipelines.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (
+                          {cgData.filter((r) => r.pipelineId === p.id).length})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                <span className="count">
+                  {cgVisible.length} applicant
+                  {cgVisible.length === 1 ? "" : "s"}
+                </span>
+                <button
+                  type="button"
+                  className="refreshbtn"
+                  onClick={() => loadCaregivers()}
+                  disabled={cgLoading}
+                >
+                  <IconRefresh />
+                  Refresh
+                </button>
+              </div>
+              {/* ⬜ Said on screen, not just in a report: the caregiver custom
+                  fields don't exist yet, so opening a record shows the native
+                  fields and little else. Better to say so than to let someone
+                  conclude the panel is broken. */}
+              <div className="mnote">
+                Applicant records are <b>thin for now</b> — the caregiver fields
+                haven&apos;t been created in GoHighLevel yet, so a record shows
+                its stage, owner and notes only.
+              </div>
+              <div className="board">
+                {cgStages.map((st) => {
+                  const inCol = cgVisible.filter((r) => r.stage === st);
+                  return (
+                    <BoardColumn key={st} stage={st} count={inCol.length}>
+                      {inCol.length ? (
+                        inCol.map((r) => (
+                          <BoardCard
+                            key={r.id}
+                            r={r}
+                            canDrag={false}
+                            following={followsNotOwns(r)}
+                            relBadge={undefined}
+                            onOpen={() => setSelId(r.id)}
+                          />
+                        ))
+                      ) : (
+                        <div
+                          className="empty"
+                          style={{ padding: "18px 4px", fontSize: 11 }}
+                        >
+                          Empty
+                        </div>
+                      )}
+                    </BoardColumn>
+                  );
+                })}
+              </div>
+            </>
+          )
+        ) : view === "access" ? (
           isAdminViewer ? (
             <PipelineAccessTab
               ssoBlob={sso.status === "ready" ? sso.blob : null}
