@@ -24,12 +24,15 @@ interface Conflict {
 //                      and the current owner loses access (Option B).
 export default function MoveDialog({
   record,
-  pipelines,
+  pipelines: allPipelines,
   stagesByPipeline,
   users,
   ssoBlob,
   onClose,
   onMoved,
+  allowedPipelineIds,
+  forceUnassigned,
+  intro,
 }: {
   record: OpportunityRecord;
   pipelines: { id: string; name: string }[];
@@ -40,12 +43,40 @@ export default function MoveDialog({
   // `transferred` = the owner changed, so the caller can close the panel
   // (the viewer may have just lost access) rather than refresh it in place.
   onMoved: (rec: OpportunityRecord, transferred: boolean) => void;
+  // ---- ITEM 3: opened by a DROP on a Master-view category column ----
+  // A category column can't decide by itself which pipeline is meant
+  // ("Enrollment" is two pipelines), so the drop opens this dialog with the
+  // choice already narrowed to the ones that column stands for.
+  allowedPipelineIds?: string[];
+  // REASSIGN: the point of the column is that nobody owns it yet, so the owner
+  // is forced to Unassigned and the control is locked rather than merely
+  // defaulted — a stray click that re-assigns it would take the record straight
+  // back out of the column it was just dropped into.
+  forceUnassigned?: boolean;
+  // "You're moving Sandra Gonzalez to Enrollment. Which one?"
+  intro?: React.ReactNode;
 }) {
-  const [toPipelineId, setToPipelineId] = useState(record.pipelineId);
+  // When a drop narrows the choice, the dropdown must not offer the others at
+  // all. Filtering the LIST (rather than disabling options) also guarantees the
+  // initial value below can never be a pipeline this drop disallows.
+  const pipelines = useMemo(
+    () =>
+      allowedPipelineIds?.length
+        ? allPipelines.filter((p) => allowedPipelineIds.includes(p.id))
+        : allPipelines,
+    [allPipelines, allowedPipelineIds],
+  );
+  const [toPipelineId, setToPipelineId] = useState(
+    allowedPipelineIds?.length && !allowedPipelineIds.includes(record.pipelineId)
+      ? pipelines[0]?.id || record.pipelineId
+      : record.pipelineId,
+  );
   const [toStageId, setToStageId] = useState(record.stageId);
   // Owner is PREFILLED with the current owner — changing it is what makes this
   // a transfer.
-  const [newOwnerId, setNewOwnerId] = useState(record.ownerId);
+  const [newOwnerId, setNewOwnerId] = useState(
+    forceUnassigned ? "" : record.ownerId,
+  );
   const [reason, setReason] = useState("");
   const [addSender, setAddSender] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -165,6 +196,8 @@ export default function MoveDialog({
         </div>
 
         <div className="movebody">
+          {/* Names what was dropped and what still has to be decided. */}
+          {intro ? <div className="moveintro">{intro}</div> : null}
           <div className="irow" style={{ flexDirection: "column", alignItems: "stretch" }}>
             <label>Pipeline</label>
             <select
@@ -231,17 +264,26 @@ export default function MoveDialog({
             )}
 
             <label>Owner</label>
-            <select
-              value={newOwnerId}
-              onChange={(e) => setNewOwnerId(e.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
-            </select>
+            {forceUnassigned ? (
+              <div className="v ro">
+                Unassigned{" "}
+                <span className="readonly-note">
+                  the receiving team claims it by taking ownership
+                </span>
+              </div>
+            ) : (
+              <select
+                value={newOwnerId}
+                onChange={(e) => setNewOwnerId(e.target.value)}
+              >
+                <option value="">Unassigned</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <label>Reason</label>
             <input
@@ -252,7 +294,21 @@ export default function MoveDialog({
           </div>
 
           {/* Warn ONLY when access is actually lost (owner changed). */}
-          {isTransfer ? (
+          {isTransfer && !newOwnerId ? (
+            // ITEM 4 — an unassigned hand-off is NOT the "you lose access"
+            // case. The server keeps the sender as a follower precisely so this
+            // doesn't vanish from their board while it waits to be claimed, and
+            // the copy has to match what actually happens.
+            <div className="movewarn">
+              <b>This hands the case to a department, not a person.</b> It moves
+              to <b>{destName}</b> with <b>no owner</b>, so the receiving team
+              can claim it by taking ownership. It leaves this column
+              automatically the moment someone does.
+              <br />
+              <b>You keep sight of it</b> — you stay on it as a follower until
+              it&apos;s claimed.
+            </div>
+          ) : isTransfer ? (
             <div className="movewarn">
               <b>This is a transfer.</b> Owner becomes <b>{ownerName}</b>, the case
               moves to <b>{destName} · TRANSFERRED IN</b>, and{" "}

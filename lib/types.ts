@@ -35,6 +35,11 @@ export interface OpportunityRecord {
   pipelineId: string; // the opportunity's native pipelineId
   pipelineName: string; // resolved pipeline name (for the division badge)
   shared: boolean; // true when surfaced via a NON-home pipeline (owner/follower)
+  // ITEM 2 — when this record last changed stage, for the Master view's
+  // days-in-stage. "" when GoHighLevel didn't send it; the UI then renders
+  // NOTHING rather than "0 days", which would be a confident claim about a
+  // record whose history we don't actually know.
+  stageChangedAt?: string;
 }
 
 // Custom-field definition sent to the client to drive the dynamic editors.

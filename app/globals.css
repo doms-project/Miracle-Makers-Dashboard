@@ -607,3 +607,18 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .pagrid th.pamasterhead{border-left:2px solid var(--line);}
 .pagrid td.pamastercell{border-left:2px solid var(--line-soft);}
 .papublic{display:block;margin-top:3px;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);}
+
+/* ── ITEM 2/3: Master view CATEGORY columns ───────────────────────────────
+   A column is a CATEGORY, not a stage or a pipeline, so a drop can't decide
+   by itself which pipeline is meant — it opens Move instead of committing. */
+.mcol .colhead{cursor:help;}
+.mnote.refused{color:var(--blk);background:var(--blk-soft);border:1px solid #f3c6bf;border-radius:8px;margin:8px 22px 0;padding:8px 12px;}
+/* The PIPELINE name, not the division — with category columns "ODP" no longer
+   says which pipeline a card is in. */
+.pill.pipepill{background:var(--plum-soft);color:var(--plum);font-weight:600;border:1px solid var(--plum-line);}
+.mstage{display:flex;align-items:center;gap:6px;}
+.mage{margin-left:auto;font-size:10px;font-weight:700;color:var(--ink-3);background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:0 6px;}
+/* A lead sitting for a fortnight is what this view exists to surface. */
+.mage.stale{color:var(--blk);background:var(--blk-soft);border-color:#f3c6bf;}
+/* Names what was dropped, and what still has to be decided. */
+.moveintro{font-size:12.5px;line-height:1.6;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:10px 12px;margin-bottom:12px;}

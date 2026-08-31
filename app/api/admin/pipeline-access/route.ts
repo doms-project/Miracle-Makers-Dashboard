@@ -66,11 +66,25 @@ export async function GET(request: Request) {
     // ITEM 6b — folders are a SECOND grid in this tab, from the same custom
     // value under its own key. Fetched here so the admin grants pipelines,
     // folders and the Master view in one place and one save.
+    // 🔴 This was `listMediaFolders().catch(() => [])`. A bare swallow turned
+    // EVERY failure — a 401 from a PIT without medias.readonly, a network blip,
+    // a shape change — into the same empty array, which the grid then reported
+    // as the flat statement "no media folders were returned for this location".
+    // That sentence was untrue and, worse, unfalsifiable: there was no way to
+    // tell "none exist" from "the call failed". Keep the tab working when the
+    // folder read fails, but SAY the read failed and why.
+    let foldersError: string | null = null;
     const [users, pipelines, stored, folders] = await Promise.all([
       listLocationUsers(),
       listPipelines(),
       fetchAccessGrantsV2(),
-      listMediaFolders().catch(() => []),
+      listMediaFolders().catch(async (e) => {
+        foldersError =
+          e instanceof GhlError ? await explainGhlError(e) : String(e);
+        // eslint-disable-next-line no-console
+        console.error("[access] the media-folder list failed:", foldersError);
+        return [];
+      }),
     ]);
     const loaded = new Set(pipelineIds());
 
@@ -87,6 +101,9 @@ export async function GET(request: Request) {
         // Folders read LIVE from GHL — a folder created in GHL appears here
         // with no code change, same as users and pipelines.
         folders,
+        // null when the read succeeded. When set, the grid must say the read
+        // FAILED rather than claiming there are no folders.
+        foldersError,
         grants: stored?.pipelines ?? {},
         folderGrants: stored?.folders ?? {},
         masterUsers: stored?.master ?? [],

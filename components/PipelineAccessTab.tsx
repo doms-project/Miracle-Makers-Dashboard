@@ -26,6 +26,9 @@ export default function PipelineAccessTab({
   // Same custom value, same save, a separate grid.
   const [folders, setFolders] = useState<Folder[]>([]);
   const [folderGrants, setFolderGrants] = useState<Grants>({});
+  // Set when the folder READ failed. "No folders" and "we couldn't ask" are
+  // different states and must never render the same sentence.
+  const [foldersError, setFoldersError] = useState<string | null>(null);
   const [publicFolderId, setPublicFolderId] = useState("");
   // ITEM 4 — Master view. One more column in the SAME custom value, as agreed:
   // it is a grant, not a role, and it never widens what a person can see.
@@ -58,6 +61,7 @@ export default function PipelineAccessTab({
       setPipelines(j.pipelines || []);
       setGrants(j.grants || {});
       setFolders(j.folders || []);
+      setFoldersError(j.foldersError || null);
       setFolderGrants(j.folderGrants || {});
       setMasterUsers(j.masterUsers || []);
       setPublicFolderId(j.publicFolderId || "");
@@ -326,7 +330,17 @@ export default function PipelineAccessTab({
         they inherit its permissions — not in a shared folder.
       </div>
 
-      {folders.length === 0 ? (
+      {foldersError ? (
+        <div className="pawarn">
+          <b>Couldn&apos;t read the media folders</b> — this is a failed request,
+          not an empty account, so don&apos;t take it as &ldquo;there are no
+          folders&rdquo;.
+          <ErrorMessage error={foldersError} />
+          <button className="retry" onClick={load} type="button">
+            Try again
+          </button>
+        </div>
+      ) : folders.length === 0 ? (
         <div className="pawarn">
           No media folders were returned for this location. Create one on the
           Resources tab, then grant it here.

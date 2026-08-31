@@ -562,6 +562,12 @@ interface RawOpportunity {
     lastName?: string;
   };
   customFields?: RawCustomField[];
+  // ITEM 2 — when the record last changed stage. GHL's own field name is
+  // lastStageChangeAt; the variants are accepted because this has NEVER been
+  // read here before and the exact spelling on this account is unconfirmed.
+  lastStageChangeAt?: string;
+  lastStageChangedAt?: string;
+  lastStatusChangeAt?: string;
 }
 
 // Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
@@ -730,6 +736,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   pipelineId: [],
   pipelineName: [],
   shared: [],
+  stageChangedAt: [], // native GHL timestamp, not a custom field
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -797,6 +804,20 @@ function normalizeOpportunity(
     pipelineId,
     pipelineName: pipelineNameById.get(pipelineId) || "",
     shared: false, // set true later by the access filter for non-home pipelines
+    // ITEM 2 — days-in-stage. ⚠️ THIS WAS NOT PREVIOUSLY IN THE PAYLOAD: nothing
+    // in the codebase read lastStageChangeAt, and RawOpportunity did not declare
+    // it, so the brief's "already in the API response" was true of GoHighLevel's
+    // response, not of ours. It is read here defensively — several plausible key
+    // spellings, and "" when GHL sends none — so an absent value renders nothing
+    // rather than "0 days", which would be a confident lie about a record we
+    // know nothing about. UNVERIFIED against live GHL: see
+    // scripts/stage-age-probe.mjs.
+    stageChangedAt: String(
+      opp.lastStageChangeAt ??
+        opp.lastStageChangedAt ??
+        opp.lastStatusChangeAt ??
+        "",
+    ),
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
   // Never leak a raw user id to the UI — an unresolvable id reads "Former user"
@@ -1406,13 +1427,30 @@ export async function listMediaFolders(): Promise<MediaFolder[]> {
   const data = await ghlGet<{ files?: RawMedia[]; medias?: RawMedia[] }>(
     `/medias/files?${params.toString()}`,
   );
-  return (data.files || data.medias || [])
+  const raw = data.files || data.medias || [];
+  const folders = raw
     .map((f) => ({
-      id: String(f.id ?? ""),
+      // 🔴 THE FOLDER-FETCH BUG. This read `f.id` ONLY. GoHighLevel's media API
+      // returns the Mongo id as **_id** — which RawMedia has always declared,
+      // three lines above where it was being ignored. Every folder therefore
+      // mapped to id:"" and was then dropped by the .filter() below, so the call
+      // SUCCEEDED and returned an empty array. No error, no 4xx, nothing to see
+      // in a log: the Access tab simply reported "no media folders" for an
+      // account that has two. Read both, _id first.
+      id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? "Untitled"),
     }))
     .filter((f) => f.id)
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // If GHL returned rows and we kept none, the shape changed again. Say so —
+  // that is precisely the failure this bug was, and it is invisible otherwise.
+  if (raw.length && !folders.length)
+    // eslint-disable-next-line no-console
+    console.error(
+      `[media] /medias/files?type=folder returned ${raw.length} row(s) but NONE had a usable id. Keys on the first row: ${Object.keys(raw[0] || {}).join(", ")}`,
+    );
+  return folders;
 }
 
 // ⚠️ GHL AUTO-RENAMES ON COLLISION: creating "OLTL" when one exists yields
@@ -1427,12 +1465,21 @@ export async function createMediaFolder(
   if (!requested) throw new GhlError("A folder needs a name.", 400);
 
   const before = await listMediaFolders();
-  const res = await ghlSend<{ id?: string; name?: string; folder?: MediaFolder }>(
-    "POST",
-    "/medias/folder",
-    { name: requested, altId: locationId, altType: "location" },
+  const res = await ghlSend<{
+    id?: string;
+    _id?: string;
+    name?: string;
+    folder?: { id?: string; _id?: string; name?: string };
+  }>("POST", "/medias/folder", {
+    name: requested,
+    altId: locationId,
+    altType: "location",
+  });
+  // Same _id/id trap as listMediaFolders — read both here too, or a successful
+  // create reports an empty id and the UI can't select the folder it just made.
+  const id = String(
+    res.folder?._id ?? res.folder?.id ?? res._id ?? res.id ?? "",
   );
-  const id = String(res.folder?.id ?? res.id ?? "");
   let actual = String(res.folder?.name ?? res.name ?? "");
 
   if (!actual || !id) {
@@ -2210,6 +2257,12 @@ export async function moveOpportunity(args: {
   const isTransfer =
     typeof args.newOwnerId === "string" &&
     (args.newOwnerId || "") !== (current.ownerId || "");
+  // ITEM 4 — a transfer whose new owner is NOBODY. Still an owner change (so it
+  // keeps the transfer permission rule: only the owner or an admin may do it),
+  // but there is no incoming person, which changes three things downstream: no
+  // user to validate, TRANSFERRED IN stops being mandatory, and the sender is
+  // kept as a follower so the record does not vanish from their view.
+  const unassigning = isTransfer && !args.newOwnerId;
 
   // ITEM 2 — the note's [DIVISION] prefix comes from actorDivision. When that
   // arrives empty, stampDivision correctly returns the body UNCHANGED — which is
@@ -2234,38 +2287,60 @@ export async function moveOpportunity(args: {
 
   let destStageId = args.toStageId || "";
   if (isTransfer) {
-    // Transfers always land in TRANSFERRED IN — verify it EXISTS before any
-    // write, otherwise we would fail at the final step with the owner already moved.
+    // Transfers land in TRANSFERRED IN — verified BEFORE any write, otherwise we
+    // would fail at the final step with the owner already changed.
     const ti = (dest.stages || []).find(
       (s) => (s.name || "").trim().toUpperCase() === "TRANSFERRED IN",
     );
-    if (!ti)
-      throw new GhlError(
-        `"${dest.name}" has no TRANSFERRED IN stage.`,
-        400,
-        "Add a TRANSFERRED IN stage to that pipeline before transferring into it.",
-      );
-    destStageId = ti.id;
-    if (!args.newOwnerId)
-      throw new GhlError("New owner is not a user of this location.", 400, "");
-    const validUsers = await getLocationUserIds();
-    // Same trap as withGrants: getUserMap() swallows a failure and returns an
-    // EMPTY map, so a PIT missing `users.readonly` would make this reject EVERY
-    // transfer with a flatly untrue message ("not a user of this location") that
-    // sends you looking at the wrong thing entirely. An empty list means we
-    // cannot verify, not that the user is invalid — let GoHighLevel be the
-    // authority and reject it on the write if it really is bad.
-    if (!validUsers.size) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[move] cannot verify that "${args.newOwnerId}" is a location user — the users lookup is empty (check the PIT's users.readonly scope). Proceeding; GoHighLevel will reject the owner change if the id is invalid.`,
-      );
-    } else if (!validUsers.has(args.newOwnerId)) {
-      throw new GhlError(
-        "New owner is not a user of this location.",
-        400,
-        String(args.newOwnerId),
-      );
+    // ITEM 4 — HANDING A RECORD TO A DEPARTMENT RATHER THAN A PERSON.
+    //
+    // This threw "New owner is not a user of this location." for an EMPTY owner
+    // — while the Move dialog's owner dropdown has always offered "Unassigned"
+    // as its first option. Choosing it produced a 400 whose message named a
+    // problem that did not exist, and the REASSIGN column could never fill
+    // because nothing was able to put a record into a pipeline unowned.
+    //
+    // An unassigned move is legitimate: it is a hand-off to a DEPARTMENT, and
+    // the absence of an owner is exactly what marks it as unclaimed. So it is
+    // allowed, and only the "is this a real user" check is skipped — there is no
+    // user to check.
+    if (unassigning) {
+      // TRANSFERRED IN is still preferred, but its absence must not block an
+      // unassign: fall back to the chosen stage, then the pipeline's first.
+      destStageId = ti?.id || args.toStageId || (dest.stages || [])[0]?.id || "";
+      if (!destStageId)
+        throw new GhlError(`"${dest.name}" has no stages.`, 400);
+    } else {
+      if (!ti)
+        throw new GhlError(
+          `"${dest.name}" has no TRANSFERRED IN stage.`,
+          400,
+          "Add a TRANSFERRED IN stage to that pipeline before transferring into it.",
+        );
+      destStageId = ti.id;
+    }
+    // Skipped entirely when unassigning — there is no user id to validate, and
+    // running it would emit a warning naming an owner that doesn't exist.
+    if (!unassigning) {
+      const validUsers = await getLocationUserIds();
+      // Same trap as withGrants: getUserMap() swallows a failure and returns an
+      // EMPTY map, so a PIT missing `users.readonly` would make this reject EVERY
+      // transfer with a flatly untrue message ("not a user of this location") that
+      // sends you looking at the wrong thing entirely. An empty list means we
+      // cannot verify, not that the user is invalid — let GoHighLevel be the
+      // authority and reject it on the write if it really is bad.
+      if (!validUsers.size) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[move] cannot verify that "${args.newOwnerId}" is a location user — the users lookup is empty (check the PIT's users.readonly scope). Proceeding; GoHighLevel will reject the owner change if the id is invalid.`,
+        );
+      } else if (!validUsers.has(args.newOwnerId as string)) {
+        throw new GhlError(
+          "New owner is not a user of this location.",
+          400,
+          String(args.newOwnerId),
+        );
+      }
     }
   } else {
     if (!destStageId) {
@@ -2382,7 +2457,11 @@ export async function moveOpportunity(args: {
     await putOpportunityVerified(
       args.oppId,
       {
-        assignedTo: args.newOwnerId,
+        // ITEM 4 — clearing the owner is sent as NULL, not "". null is the shape
+        // the panel's own save route has always used to unassign
+        // (`assignedTo = body.assignedTo ? body.assignedTo : null`), so the two
+        // paths now clear an owner identically instead of one of them guessing.
+        assignedTo: unassigning ? null : args.newOwnerId,
         ...(customFields.length ? { customFields } : {}),
       },
       "transfer-stamps",
@@ -2409,9 +2488,28 @@ export async function moveOpportunity(args: {
       await removeOpportunityFollowers(args.oppId, toRemove);
       steps.push(`cleared ${toRemove.length} follower(s)`);
     }
-    if (args.addSenderAsFollower && current.ownerId) {
-      await addOpportunityFollowers(args.oppId, [current.ownerId]);
-      steps.push("kept sender as follower");
+    // ITEM 4 — ⚠️ THE ACCESS RULE DOES **NOT** KEEP THE SENDER. Verified against
+    // applyAccess: a record is visible when it is in a HOME pipeline and (owned
+    // OR followed OR unassigned), or in ANY pipeline when owned/followed. After
+    // an unassigned move OUT of Bill's division he is neither owner nor
+    // follower, and the destination is not his home pipeline — so the record
+    // disappears from his dashboard entirely, which is exactly what would defeat
+    // the REASSIGN column.
+    //
+    // Fixed HERE rather than in applyAccess. Loosening the access rule to "the
+    // sender can see it" would need a sender to be recorded on every record and
+    // would widen visibility for everyone; making the sender a FOLLOWER uses the
+    // mechanism that already exists, is visible in GHL, and can be removed by
+    // hand. So an unassign always keeps the sender, regardless of the flag.
+    const keepSender =
+      (unassigning || args.addSenderAsFollower) && !!current.ownerId;
+    if (keepSender) {
+      await addOpportunityFollowers(args.oppId, [current.ownerId!]);
+      steps.push(
+        unassigning
+          ? "kept sender as follower (unassigned move — otherwise they lose sight of it)"
+          : "kept sender as follower",
+      );
     }
   } catch (e) {
     return {
@@ -2427,7 +2525,12 @@ export async function moveOpportunity(args: {
   // 3. Note — only now, when the transfer is real.
   try {
     if (current.contactId) {
-      const toName = (await getUserMap()).get(args.newOwnerId!) || args.newOwnerId!;
+      // "New owner: ." is what this produced for an unassigned move. Say what
+      // actually happened — the receiving department reads this note to work out
+      // why the record landed on them.
+      const toName = unassigning
+        ? "Unassigned — for the receiving team to claim"
+        : (await getUserMap()).get(args.newOwnerId!) || args.newOwnerId!;
       const system = `Moved from ${sourceName || "—"} to ${dest.name}. New owner: ${toName}.`;
       await addOpportunityNote(
         current.contactId,
