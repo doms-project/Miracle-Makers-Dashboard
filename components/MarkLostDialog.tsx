@@ -47,17 +47,38 @@ export default function MarkLostDialog({
     [stagesByPipeline, record.pipelineId],
   );
 
-  // A "Lost Reason" custom field if the account has one, matched BY NAME on the
-  // live definitions. When it doesn't exist the reason still isn't dropped — it
-  // goes on the record as a note, which is where the rest of the case history
-  // already lives.
-  const reasonField = useMemo(
-    () =>
-      fieldDefs.find(
-        (d) => /lost\s*reason/i.test(d.name || "") && d.editable,
-      ) || null,
-    [fieldDefs],
-  );
+  // ⚠️ THE LOST REASON FIELD IS PER PIPELINE — five of them, and they all live
+  // in the SAME custom-field folder, so folder scoping cannot tell them apart.
+  // They are therefore matched by NAME: among every field whose name looks like
+  // a lost reason, take the one whose name also names this record's pipeline
+  // (or one of its distinguishing words, so "OLTL Enrollment Lost Reason" is
+  // found for the OLTL Enrollment pipeline).
+  //
+  // The ids in the brief are reference only and appear nowhere here — a field
+  // rebuilt in GoHighLevel keeps working, a hardcoded id does not.
+  //
+  // If exactly one lost-reason field exists overall, it is used as-is. If
+  // several exist and none matches this pipeline, NOTHING is written to a field
+  // rather than writing to a neighbouring pipeline's — the reason still goes on
+  // the record as a note, and the dialog says which happened.
+  const reasonField = useMemo(() => {
+    const lost = fieldDefs.filter(
+      (d) => /lost\s*reason/i.test(d.name || "") && d.editable,
+    );
+    if (!lost.length) return null;
+    if (lost.length === 1) return lost[0];
+    const words = (record.pipelineName || "")
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter((w) => w.length > 2);
+    const scored = lost
+      .map((d) => {
+        const n = (d.name || "").toLowerCase();
+        return { d, score: words.filter((w) => n.includes(w)).length };
+      })
+      .sort((a, b) => b.score - a.score);
+    return scored[0].score > 0 ? scored[0].d : null;
+  }, [fieldDefs, record.pipelineName]);
 
   const submit = async () => {
     if (!lost) return;
@@ -92,7 +113,7 @@ export default function MarkLostDialog({
             headers,
             body: JSON.stringify({
               ssoKey: ssoBlob ?? undefined,
-              body: `Marked LOST. Reason: ${reason.trim()}`,
+              body: `Marked LOST (sent out). Reason: ${reason.trim()}`,
             }),
           });
         } catch {
@@ -167,13 +188,16 @@ export default function MarkLostDialog({
               <div className="imeta">
                 {reasonField ? (
                   <>
-                    Saved to the <b>{reasonField.name}</b> field and added as a
-                    note.
+                    Saved to <b>{reasonField.name}</b> (this pipeline&apos;s Lost
+                    Reason field) and added as a note recording who marked it
+                    lost and why.
                   </>
                 ) : (
                   <>
-                    This account has no <b>Lost Reason</b> field, so the reason is
-                    added as a <b>note</b> on the record.
+                    No Lost Reason field could be matched to{" "}
+                    <b>{record.pipelineName}</b>, so the reason is saved as a{" "}
+                    <b>note</b> only — we won&apos;t write it to another
+                    pipeline&apos;s field.
                   </>
                 )}
               </div>
