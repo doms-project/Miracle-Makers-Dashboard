@@ -42,7 +42,31 @@ export function canSeeRecord(
 
 // Edit permission == visibility (same rule). Kept as a named alias so intent is
 // explicit at the call site.
+//
+// ⚠️ FIELDS ONLY. This does NOT cover changing the OWNER — see canChangeOwner.
 export const canEditRecord = canSeeRecord;
+
+/**
+ * ITEM 14 — who may change the OWNER: the owner or an admin, never a follower.
+ *
+ * canEditRecord is a literal alias of canSeeRecord, so a FOLLOWER could edit
+ * every field including this one. That let someone who transferred a case away
+ * and kept visibility hand it on to a third person, in a division they don't
+ * work in — and it contradicted canManageFollowers, which is already
+ * owner-or-admin on the reasoning that "a follower cannot re-share a record
+ * onward". Changing the owner is the larger version of that same action, so it
+ * gets the same rule.
+ *
+ * Deliberately identical to canManageFollowers rather than calling it: they
+ * answer different questions and should be free to diverge later.
+ */
+export function canChangeOwner(
+  rec: Pick<OpportunityRecord, "ownerId">,
+  session: Pick<GhlSession, "userId" | "role" | "type">,
+): boolean {
+  if (isAdminSession(session.role, session.type)) return true;
+  return rec.ownerId === session.userId;
+}
 
 /**
  * Who may add/remove FOLLOWERS on a record: the OWNER or an admin only.

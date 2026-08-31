@@ -636,3 +636,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .masterboard .card .cn{font-size:14px;margin-bottom:5px;}
 .masterboard .card .cm{font-size:12px;margin-bottom:8px;}
 .mstage{font-size:12.5px;padding:5px 10px;}
+
+/* ── ITEM 11: delete one file ─────────────────────────────────────────────
+   The × sits over the card rather than inside it, so the card stays a single
+   click target for preview/download and the delete can't be hit by accident. */
+.rescardwrap{position:relative;}
+.resfiledel{position:absolute;top:8px;right:8px;width:22px;height:22px;line-height:1;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--ink-3);font-size:15px;cursor:pointer;opacity:0;transition:opacity .12s,color .12s,border-color .12s;}
+.rescardwrap:hover .resfiledel,.resfiledel:focus{opacity:1;}
+.resfiledel:hover{color:var(--blk);border-color:var(--blk);background:var(--blk-soft);}
+
+/* ITEM 1 — an operational warning, not a block. Deliberately not error-red: the
+   move is allowed and often correct. */
+.ownerwarn{font-size:12px;line-height:1.55;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:9px 12px;margin-top:10px;}

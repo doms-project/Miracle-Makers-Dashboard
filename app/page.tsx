@@ -56,7 +56,7 @@ const STAGE_ORDER = [
 ];
 
 // ITEM 6c — one Resources section per folder the viewer may see.
-type ResFile = { name: string; url: string; type: string; size: number };
+type ResFile = { id: string; name: string; url: string; type: string; size: number };
 type ResSection = {
   id: string;
   name: string;
@@ -697,10 +697,13 @@ function ResCard({
   f,
   kind,
   onPreview,
+  onDelete,
 }: {
   f: ResFile;
   kind: "pdf" | "image" | null;
   onPreview: () => void;
+  // ITEM 11 — admin only, and only when GHL gave us an id to delete by.
+  onDelete?: () => void;
 }) {
   const inner = (
     <>
@@ -717,7 +720,7 @@ function ResCard({
       <span className="ropen">{kind ? "Preview" : "Download ↓"}</span>
     </>
   );
-  return kind ? (
+  const card = kind ? (
     <button type="button" className="rescard" onClick={onPreview}>
       {inner}
     </button>
@@ -730,6 +733,25 @@ function ResCard({
     >
       {inner}
     </a>
+  );
+  if (!onDelete) return card;
+  return (
+    <div className="rescardwrap">
+      {card}
+      <button
+        type="button"
+        className="resfiledel"
+        title={`Delete ${f.name}`}
+        aria-label={`Delete ${f.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onDelete();
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -1104,9 +1126,7 @@ export default function Dashboard() {
   // Why a drop was refused (New lead), shown briefly instead of nothing.
   const [dropRefused, setDropRefused] = useState<string | null>(null);
   // Resources tab (folder-scoped GHL media).
-  const [resources, setResources] = useState<
-    { name: string; url: string; type: string; size: number }[]
-  >([]);
+  const [resources, setResources] = useState<ResFile[]>([]);
   // ITEM 6c — one section per folder this viewer may see. `resources` above is
   // the LEGACY single-folder payload, still served when no folder grants exist,
   // so this deploy cannot empty the tab for someone who had files yesterday.
@@ -1124,6 +1144,11 @@ export default function Dashboard() {
     name: string;
     fileCount: number;
   } | null>(null);
+  // ITEM 11 — the file pending deletion. Confirmed by NAME, in an in-app
+  // dialog; a native confirm() returns false silently inside the GHL iframe.
+  const [delFile, setDelFile] = useState<{ id: string; name: string } | null>(
+    null,
+  );
   const [resLoading, setResLoading] = useState(false);
   const [resErr, setResErr] = useState<unknown>(null);
   const [resLoaded, setResLoaded] = useState(false);
@@ -1418,6 +1443,34 @@ export default function Dashboard() {
     [sso],
   );
 
+  const deleteFile = useCallback(async () => {
+    if (!delFile) return;
+    setFolderBusy(true);
+    setFolderErr(null);
+    try {
+      const headers: Record<string, string> = {};
+      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      const res = await fetch(
+        `/api/resources/files?id=${encodeURIComponent(delFile.id)}`,
+        { method: "DELETE", headers },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw apiError(res, j);
+      setUploadMsg(`✓ Deleted ${delFile.name}.`);
+      setDelFile(null);
+      // Refresh the list IN PLACE so the row disappears without leaving the tab.
+      setResLoaded(false);
+      await loadResources();
+    } catch (e) {
+      setFolderErr(e);
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [delFile, sso, loadResources]);
+
   const deleteFolder = useCallback(async () => {
     if (!delFolder) return;
     setFolderBusy(true);
@@ -1687,6 +1740,16 @@ export default function Dashboard() {
     const present: string[] = [];
     const seen = new Set<string>();
     for (const r of preStage) {
+      // ITEM 9 — a SHARED record is not part of this division's stage picture.
+      // A case transferred AWAY and still followed sits at TRANSFERRED IN in
+      // the DESTINATION pipeline, so outgoing and incoming work collapsed into
+      // one chip and the count meant nothing.
+      //
+      // Excluded from the chips rather than given a chip of their own: the
+      // "Show" control above already has a "Shared with me" option, so a chip
+      // would be a second control for the same thing. "All" still counts
+      // everything, and choosing Show → Shared with me still lists them.
+      if (r.shared) continue;
       if (r.stage && !seen.has(r.stage)) {
         seen.add(r.stage);
         present.push(r.stage);
@@ -3307,6 +3370,14 @@ export default function Dashboard() {
                         const kind = previewKind(f);
                         if (kind) setPreview({ name: f.name, url: f.url, kind });
                       }}
+                      onDelete={
+                        canManageFolders && f.id
+                          ? () => {
+                              setDelFile({ id: f.id, name: f.name });
+                              setFolderErr(null);
+                            }
+                          : undefined
+                      }
                     />
                   ))}
                 </div>
@@ -3372,6 +3443,14 @@ export default function Dashboard() {
                               if (kind)
                                 setPreview({ name: f.name, url: f.url, kind });
                             }}
+                            onDelete={
+                              canManageFolders && f.id
+                                ? () => {
+                                    setDelFile({ id: f.id, name: f.name });
+                                    setFolderErr(null);
+                                  }
+                                : undefined
+                            }
                           />
                         ))}
                       </div>
@@ -3679,6 +3758,28 @@ export default function Dashboard() {
             setMasterDrop(null);
             if (transferred) setSelId(null);
             load();
+          }}
+        />
+      ) : null}
+
+      {/* ITEM 11 — file deletion, confirmed by NAME. */}
+      {delFile ? (
+        <ConfirmDialog
+          title="Delete this file?"
+          body={
+            <>
+              <b>{delFile.name}</b> will be removed from GoHighLevel. Anyone
+              linking to it loses it. This can&apos;t be undone.
+            </>
+          }
+          confirmLabel="Delete file"
+          danger
+          busy={folderBusy}
+          error={folderErr}
+          onConfirm={deleteFile}
+          onCancel={() => {
+            setDelFile(null);
+            setFolderErr(null);
           }}
         />
       ) : null}

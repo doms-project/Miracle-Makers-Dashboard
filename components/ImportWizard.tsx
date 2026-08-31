@@ -394,11 +394,16 @@ export default function ImportWizard({
               disabled={!pipeline}
             >
               <option value="">Choose a stage…</option>
-              {(pipeline?.stages || []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
+              {/* ITEM 6 — REASSIGN is a holding queue, never a starting
+                  stage. Importing straight into it would create unowned
+                  records with no followers and no notification. */}
+              {(pipeline?.stages || [])
+                .filter((s) => s.name.trim().toUpperCase() !== "REASSIGN")
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
             </select>
             <label>Source</label>
             <input

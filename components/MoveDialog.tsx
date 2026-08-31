@@ -38,7 +38,15 @@ export default function MoveDialog({
   record: OpportunityRecord;
   pipelines: { id: string; name: string }[];
   stagesByPipeline: Record<string, { id: string; name: string }[]>;
-  users: { id: string; name: string }[];
+  // `divisions` labels each user with the pipelines they hold. ITEM 1 uses it
+  // to FLAG — never to hide — owners without access to the chosen destination.
+  // `pipelineIds` is what ITEM 1 checks against — exact, not a division label.
+  users: {
+    id: string;
+    name: string;
+    divisions?: string[];
+    pipelineIds?: string[];
+  }[];
   ssoBlob: string | null;
   onClose: () => void;
   // `transferred` = the owner changed, so the caller can close the panel
@@ -152,9 +160,20 @@ export default function MoveDialog({
   // unfiltered one — renders first. Picking a stage before picking an owner then
   // selected REASSIGN and moved the card straight back into the column it was
   // being claimed out of. Filtered once, at the source, so every branch sees it.
-  const destStages = requireOwner
-    ? rawDestStages.filter((s2) => s2.name.trim().toUpperCase() !== "REASSIGN")
-    : rawDestStages;
+  // ITEM 6 — REASSIGN IS NEVER A DESTINATION HERE, on any path.
+  //
+  // It was filtered only when `requireOwner` was set, which left the SIMPLE
+  // MOVE path (owner unchanged) offering it — so a rep could park a record in
+  // the queue straight from this dropdown, skipping the owner clear, the
+  // follower add, the "Reassign Followers" write and the notification. It would
+  // sit unowned, with no followers, and nobody would be told.
+  //
+  // The only two things that may set it are reassign step 1 (which forces it
+  // and has no picker) and the panel showing a record already AT that stage
+  // (disabled, never blank).
+  const destStages = rawDestStages.filter(
+    (s2) => s2.name.trim().toUpperCase() !== "REASSIGN",
+  );
   const transferredIn = useMemo(
     () =>
       destStages.find((s) => s.name.trim().toUpperCase() === "TRANSFERRED IN"),
@@ -164,6 +183,28 @@ export default function MoveDialog({
     pipelines.find((p) => p.id === toPipelineId)?.name || "—";
   const ownerName =
     users.find((u) => u.id === newOwnerId)?.name || "Unassigned";
+
+  // ITEM 1 — WARN, DON'T BLOCK.
+  //
+  // Only 4 of 25 users are mapped, so hiding unmapped owners would leave most
+  // pipelines offering a single choice. And the orphan problem was never that
+  // the assignment happened — it was that NOBODY KNEW. A follower can already
+  // be anyone regardless of access, and both grant visibility, so blocking here
+  // would also make the model incoherent.
+  //
+  // `divisions` holds DIVISION labels (from the access map), not pipeline
+  // names, so the destination is matched on its division label too — that is
+  // the same string userDivisions() produces.
+  // Matched on the PIPELINE ID the record is going to. A user with no
+  // `pipelineIds` array at all means the payload didn't tell us — say nothing
+  // rather than accuse someone of missing access we never actually checked.
+  const lacksAccess = (u: { pipelineIds?: string[] } | undefined) =>
+    !!u && !!u.pipelineIds && !u.pipelineIds.includes(toPipelineId);
+  const ownerLacksAccess = useMemo(
+    () => !!newOwnerId && lacksAccess(users.find((x) => x.id === newOwnerId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [users, newOwnerId, toPipelineId],
+  );
   const followersCleared = record.followerIds.filter(
     (f) => f !== newOwnerId,
   ).length;
@@ -320,11 +361,16 @@ export default function MoveDialog({
                 onChange={(e) => setNewOwnerId(e.target.value)}
               >
                 <option value="">Unassigned</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
+                {users.map((u) => {
+                  const lacks = lacksAccess(u);
+                  return (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                      {u.divisions?.length ? ` — ${u.divisions.join(" · ")}` : ""}
+                      {lacks ? `  ⚠️ no access to ${destName}` : ""}
+                    </option>
+                  );
+                })}
               </select>
             )}
 
@@ -352,15 +398,30 @@ export default function MoveDialog({
               it&apos;s claimed.
             </div>
           ) : isTransfer ? (
+            // ITEM 7 — ONE sentence, and it tracks the toggle. This block used
+            // to state all three at once: "you lose access to it", a checkbox
+            // saying you won't, and a note claiming the lead "does not leave the
+            // originating division". The last of those is simply untrue — the
+            // record moves pipeline either way; only the sender's VISIBILITY
+            // differs — so it is gone rather than reworded.
             <div className="movewarn">
-              <b>This is a transfer.</b> Owner becomes <b>{ownerName}</b>, the case
-              moves to <b>{destName} · TRANSFERRED IN</b>, and{" "}
-              <b>you lose access to it</b>.
+              <b>{ownerName}</b> becomes the owner and the case moves to{" "}
+              <b>{destName}</b>.{" "}
+              {addSender ? (
+                <>
+                  You&apos;ll <b>stay on it as a follower</b>, so it will keep
+                  appearing for you under <b>Shared with me</b>.
+                </>
+              ) : (
+                <>
+                  You&apos;ll <b>lose access to it</b>.
+                </>
+              )}
               {followersCleared > 0 ? (
                 <>
                   {" "}
-                  {followersCleared} follower(s) will be removed so it leaves the
-                  originating division.
+                  {followersCleared} other follower
+                  {followersCleared === 1 ? "" : "s"} will be removed.
                 </>
               ) : null}
               <label className="movetoggle">
@@ -369,15 +430,8 @@ export default function MoveDialog({
                   checked={addSender}
                   onChange={(e) => setAddSender(e.target.checked)}
                 />
-                Keep me on this lead — I&apos;ll still see it after the transfer
+                Keep me on this lead
               </label>
-              {addSender ? (
-                <div className="movetoggle-note">
-                  The previous owner stays a follower, so this lead does{" "}
-                  <b>not</b> leave the originating division — it keeps appearing
-                  for them as shared until removed.
-                </div>
-              ) : null}
             </div>
           ) : (
             <div className="imeta">
@@ -385,6 +439,16 @@ export default function MoveDialog({
               changes.
             </div>
           )}
+
+          {/* Allowed, but said out loud — and it updates when the pipeline
+              changes, because destName is in the dependency list. */}
+          {ownerLacksAccess ? (
+            <div className="ownerwarn">
+              ⚠️ <b>{ownerName}</b> won&apos;t be able to see this case in the
+              dashboard until an admin grants them <b>{destName}</b> access in
+              the Access tab. The move will still go through.
+            </div>
+          ) : null}
 
           {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
 
