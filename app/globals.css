@@ -693,3 +693,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    carry. Two short lines beat one clipped one. */
 .mcard .mfrom{font-size:10px;font-weight:600;line-height:1.35;color:var(--ink-2);background:var(--canvas);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-top:5px;display:block;}
 .mcard .mfrom.reassigned{background:var(--gold-soft);border-color:#f0dcbb;color:var(--gold-ink);}
+/* Caregiver stage chips wrap to a second row instead of scrolling sideways:
+   ODP DSP Applicant has ten stages and a hidden chip is a filter nobody finds.
+   `overflow-x:visible` because wrapping and horizontal scrolling contradict. */
+.stages.wrap{flex-wrap:wrap;overflow-x:visible;row-gap:7px;}
