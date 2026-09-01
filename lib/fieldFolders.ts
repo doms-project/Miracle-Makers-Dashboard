@@ -294,3 +294,33 @@ export function groupContactFields(
   }
   return out;
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// ITEM 2 — DISPLAY LABEL ONLY. NEVER A KEY.
+//
+// GoHighLevel field names carry an organisational prefix — "CG - Work State",
+// and "CL - …" once the client contact folder is built. It groups the fields in
+// GHL's own field list and means nothing to a recruiter looking at a record.
+//
+// 🔴 THE STORED NAME IS UNCHANGED. Field resolution in this codebase is BY NAME
+// everywhere — the read-only blocklist (`isFieldEditable`), the system-info set,
+// the hidden set, the Transferred From lookup, the folder matcher. Stripping the
+// prefix anywhere a name is used as a KEY breaks resolution silently, which is
+// the failure mode that has bitten this project repeatedly. So this function is
+// called at exactly one place: rendering a <label>. Not the lookup, not the save
+// payload, not the folder map.
+//
+// Written as a GENERAL prefix strip rather than a "CG - " special case, so
+// "CL - Care Needs" is handled the day Client Care Needs lands, with no edit.
+// Matches an uppercase 2–4 letter code followed by a spaced hyphen — narrow
+// enough that a genuine field name like "E-Verify Status" or a value like
+// "100 - Uploaded into HHA" is untouched.
+const FIELD_PREFIX = /^[A-Z]{2,4}\s+-\s+/;
+
+/** The label to SHOW for a field. The stored name is never modified. */
+export function fieldLabel(name: string): string {
+  const stripped = (name || "").replace(FIELD_PREFIX, "").trim();
+  // Never return an empty label: a field named exactly "CG - " would otherwise
+  // render as a blank row with an editor and no clue what it is.
+  return stripped || name;
+}

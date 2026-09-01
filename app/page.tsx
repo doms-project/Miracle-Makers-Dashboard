@@ -28,7 +28,7 @@ import { useGhlSession } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
-import { groupFieldsForPipeline, groupContactFields } from "@/lib/fieldFolders";
+import { groupFieldsForPipeline, groupContactFields, fieldLabel } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
 import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
@@ -2492,6 +2492,29 @@ export default function Dashboard() {
       .sort((x, y) => y.rows.length - x.rows.length || x.value.localeCompare(y.value));
   }, [cgSorted, cgGroupKey]);
 
+  // ITEM 1 — THE TWO CAREGIVER STATS, and only two.
+  //
+  // Deliberately NOT "total applicants" (the toolbar already prints it) and NOT
+  // a per-stage count (the chips already carry them) — a stats row that repeats
+  // what is six inches away is furniture. And not "by recruiter": that is a
+  // GROUPING, and the Group control does it better than one number can.
+  //
+  // Both are measured against `cgVisible` — what is actually on screen after
+  // pipeline, search and stage chip — so the cards can never contradict the list
+  // below them. Same rule the client "In view" card follows.
+  const cgStats = useMemo(() => {
+    const unassigned = cgVisible.filter((r) => !r.ownerId).length;
+    // Oldest FIRST, so [0] is the one that needs attention. Records with no
+    // stage timestamp are excluded rather than treated as 0 days — the probe
+    // confirms every record on this account has one, so an absence means
+    // something is wrong, not that the applicant arrived today.
+    const aged = cgVisible
+      .map((r) => ({ r, d: daysInStage(r) }))
+      .filter((x): x is { r: OpportunityRecord; d: number } => x.d != null)
+      .sort((a, b) => b.d - a.d);
+    return { unassigned, oldest: aged[0] || null, dated: aged.length };
+  }, [cgVisible]);
+
   const cgToggleSort = (key: string) => {
     if (cgSortKey === key) setCgSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
@@ -3954,6 +3977,33 @@ export default function Dashboard() {
             </div>
           ) : (
             <>
+              {/* ITEM 1 — same markup and same classes as the client stats, so
+                  the two sections read as one app rather than two. */}
+              <div className="stats">
+                <div className="stat gold">
+                  <div className="k">Unassigned</div>
+                  <div className="v">{cgStats.unassigned}</div>
+                  <div className="sub">
+                    {cgStats.unassigned === 0
+                      ? "every applicant has a recruiter"
+                      : `of ${cgVisible.length} shown · nobody is calling them`}
+                  </div>
+                </div>
+                <div className="stat blk">
+                  <div className="k">Oldest in stage</div>
+                  <div className="v">
+                    {cgStats.oldest ? `${cgStats.oldest.d}d` : "—"}
+                  </div>
+                  <div className="sub">
+                    {cgStats.oldest
+                      ? `${cgStats.oldest.r.oppName ||
+                          `${cgStats.oldest.r.first} ${cgStats.oldest.r.last}`.trim()} · ${
+                          cgStats.oldest.r.stage
+                        }`
+                      : "no stage dates on the applicants shown"}
+                  </div>
+                </div>
+              </div>
               <div className="toolbar mtoolbar">
                 <div className="search">
                   <IconSearch />
@@ -5113,7 +5163,14 @@ export default function Dashboard() {
                             className={`f${isWideField(def.dataType) ? " wide" : ""}`}
                             key={`c:${def.id}`}
                           >
-                            <label>{def.name}</label>
+                            {/* ITEM 2 — DISPLAY ONLY. `def.name` is still the
+                                stored name and is still what the save payload,
+                                the read-only blocklist and the folder matcher
+                                use; only the text in this label is stripped.
+                                `title` keeps the real name one hover away, so
+                                anyone cross-referencing GoHighLevel's field
+                                list can still find it. */}
+                            <label title={def.name}>{fieldLabel(def.name)}</label>
                             <FieldControl
                               def={def}
                               value={cFields?.values[def.id]}
