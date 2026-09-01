@@ -28,7 +28,7 @@ import { useGhlSession } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
-import { groupFieldsForPipeline } from "@/lib/fieldFolders";
+import { groupFieldsForPipeline, groupContactFields } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
 import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
@@ -1179,6 +1179,19 @@ export default function Dashboard() {
 
   // Phase 2 editing metadata (from the API) + per-field save state.
   const [fieldDefs, setFieldDefs] = useState<EditableFieldDef[]>([]);
+  // ITEM 3 — CONTACT fields for the open record. Held BESIDE the opportunity
+  // values, never merged into `rec.cf`: merging would make an opportunity write
+  // and a contact write indistinguishable at the call site, and they go to
+  // different endpoints with different scope.
+  const [cFields, setCFields] = useState<{
+    defs: EditableFieldDef[];
+    values: Record<string, unknown>;
+    version: string;
+    opportunityCount: number;
+  } | null>(null);
+  const [cLoading, setCLoading] = useState(false);
+  const [cErr, setCErr] = useState<unknown>(null);
+  const [cSave, setCSave] = useState<Record<string, SaveState>>({});
   const [pipelineStages, setPipelineStages] = useState<
     { id: string; name: string }[]
   >([]);
@@ -2559,6 +2572,102 @@ export default function Dashboard() {
     [data, cgData, selId],
   );
 
+  // ITEM 3 — the contact sections for the OPEN record, by its own kind. A
+  // caregiver record gets the three caregiver folders; a client record gets the
+  // client-side ones (Client Care Needs, once its folder is added to the table).
+  const contactGroups = useMemo(
+    () =>
+      cFields
+        ? groupContactFields(
+            cFields.defs,
+            cgData.some((r) => r.id === selId) ? "caregiver" : "client",
+          )
+        : [],
+    [cFields, cgData, selId],
+  );
+
+  // ITEM 3 — load the open record's CONTACT fields. One request per record,
+  // keyed off `selected.id`; cleared first so a stale person's answers can never
+  // appear under a new name for a frame.
+  useEffect(() => {
+    if (!selected?.contactId) {
+      setCFields(null);
+      setCErr(null);
+      return;
+    }
+    let cancelled = false;
+    setCFields(null);
+    setCErr(null);
+    setCLoading(true);
+    const h: Record<string, string> = {};
+    if (sso.status === "ready") h["x-ghl-sso-key"] = sso.blob;
+    fetch(`/api/contacts/${encodeURIComponent(selected.id)}/fields`, {
+      headers: h,
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const j = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setCErr(j);
+          return;
+        }
+        setCFields({
+          defs: j.fieldDefs || [],
+          values: j.values || {},
+          version: j.version || "",
+          opportunityCount: j.opportunityCount || 0,
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) setCErr(e);
+      })
+      .finally(() => {
+        if (!cancelled) setCLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, selected?.contactId, sso]);
+
+  // Save ONE contact field. Sends the version we read with, so a contact edited
+  // from another opportunity's panel in the meantime is refused, not clobbered.
+  const saveContactField = useCallback(
+    async (def: EditableFieldDef, value: unknown) => {
+      if (!selected) return;
+      setCSave((p) => ({ ...p, [def.id]: { status: "saving" } }));
+      try {
+        const res = await fetch(
+          `/api/contacts/${encodeURIComponent(selected.id)}/fields`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ssoKey: sso.status === "ready" ? sso.blob : undefined,
+              expectedVersion: cFields?.version,
+              fields: [{ id: def.id, value }],
+            }),
+          },
+        );
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setCSave((p) => ({ ...p, [def.id]: { status: "error", err: j } }));
+          return;
+        }
+        setCFields((prev) =>
+          prev
+            ? { ...prev, values: j.values || prev.values, version: j.version || prev.version }
+            : prev,
+        );
+        // Success clears the row — same convention as the opportunity saves.
+        setCSave((p) => ({ ...p, [def.id]: undefined }));
+      } catch (e) {
+        setCSave((p) => ({ ...p, [def.id]: { status: "error", err: e } }));
+      }
+    },
+    [selected, sso, cFields?.version],
+  );
+
   // ITEM 5 — the Transferred From stamp, resolved by field NAME (never a
   // hardcoded id) so it can be surfaced as a badge on rows and cards.
 
@@ -2841,10 +2950,21 @@ export default function Dashboard() {
   // with DIFFERENT ids, so resolving a stage from the merged union can write a
   // foreign id and GHL rejects it with OPPORTUNITY_STAGE_ID_INVALID. Always
   // scope to the record's own pipeline.
+  // ITEM 2 — FALLS BACK TO THE CAREGIVER MAP. `stagesByPipeline` is filled by
+  // load() from /api/opportunities, which returns the CLIENT pipelines. Caregiver
+  // stages arrive from loadCaregivers() into their own state. So on an applicant
+  // record this lookup missed and returned [], and the panel's Stage dropdown
+  // rendered EMPTY — no options at all, on a record whose stage is the main
+  // thing a recruiter changes.
+  //
+  // The two maps stay separate (that separation is ITEM 13's whole point); this
+  // only reads both. Still scoped to the record's OWN pipeline, so the
+  // OPPORTUNITY_STAGE_ID_INVALID trap the original comment describes is
+  // untouched: no union, no cross-pipeline stage id.
   const stagesFor = useCallback(
     (pipelineId: string): { id: string; name: string }[] =>
-      stagesByPipeline[pipelineId] || [],
-    [stagesByPipeline],
+      stagesByPipeline[pipelineId] || cgStagesByPipeline[pipelineId] || [],
+    [stagesByPipeline, cgStagesByPipeline],
   );
 
   const onDragEnd = (e: DragEndEvent) => {
@@ -4964,6 +5084,54 @@ export default function Dashboard() {
                 </Fragment>
               ))}
 
+              {/* ITEM 3 — CONTACT FIELDS. Separated from the opportunity
+                  sections above by a standing scope line, because the two behave
+                  differently and the panel must not let that blur: everything
+                  above belongs to THIS case, everything below belongs to the
+                  PERSON and follows them onto every case they hold. */}
+              {cLoading ? (
+                <div className="sechead">Loading the applicant&apos;s details…</div>
+              ) : cErr ? (
+                <>
+                  <div className="sechead">About this person</div>
+                  <ErrorMessage error={cErr} />
+                </>
+              ) : contactGroups.length ? (
+                <>
+                  <div className="contactscope">
+                    <b>About this person, not this case.</b>{" "}
+                    {cFields && cFields.opportunityCount > 1
+                      ? `Changes here show on all ${cFields.opportunityCount} of their records.`
+                      : "Changes here follow them onto every record they hold."}
+                  </div>
+                  {contactGroups.map((g) => (
+                    <Fragment key={g.key}>
+                      <div className="sechead">{g.label}</div>
+                      <div className="grid">
+                        {g.fields.map((def) => (
+                          <div
+                            className={`f${isWideField(def.dataType) ? " wide" : ""}`}
+                            key={`c:${def.id}`}
+                          >
+                            <label>{def.name}</label>
+                            <FieldControl
+                              def={def}
+                              value={cFields?.values[def.id]}
+                              save={cSave[def.id]}
+                              onSave={(val) => saveContactField(def, val)}
+                              users={users}
+                              isAdmin={isAdminViewer}
+                              ssoBlob={sso.status === "ready" ? sso.blob : null}
+                              onOptionAdded={applyNewOption}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </Fragment>
+                  ))}
+                </>
+              ) : null}
+
               {/* Caregivers (many-to-many association) */}
               {/* BUG 1 — the heading is rendered INSIDE the section now, because
                   it depends on the resolved direction: "Caregivers" on a
@@ -4975,6 +5143,14 @@ export default function Dashboard() {
                 opportunityId={selected.id}
                 ssoBlob={sso.status === "ready" ? sso.blob : null}
                 canManage={canEdit(selected)}
+                // ITEM 2 — decided by WHICH PAYLOAD the record came from, which
+                // is exact: the caregiver scope is a different request against a
+                // different pipeline set, and the two lists never merge.
+                selfRole={
+                  cgData.some((r) => r.id === selected.id)
+                    ? "caregiver"
+                    : "client"
+                }
               />
 
               {/* System info — external ids / derived / automation (collapsed).

@@ -32,10 +32,15 @@ export default function CaregiversSection({
   opportunityId,
   ssoBlob,
   canManage,
+  selfRole,
 }: {
   opportunityId: string;
   ssoBlob: string | null;
   canManage: boolean;
+  // ITEM 2 — THIS record's own role, decided by the caller from which payload
+  // the record came out of. See the note on `otherRole` below for why it had to
+  // be passed in rather than inferred here.
+  selfRole?: "caregiver" | "client";
 }) {
   const [caregivers, setCaregivers] = useState<Caregiver[] | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
@@ -154,8 +159,24 @@ export default function CaregiversSection({
   // What the OTHER side of these relations is, from the server's direction
   // resolution. Falls back to "caregiver" only when there is nothing to go on
   // (an empty list), which is the common case on a client record.
-  const otherRole: "caregiver" | "client" =
-    caregivers?.find((c) => c.role)?.role ?? "caregiver";
+  // 🔴 REPORT 29'S FIX WAS ONLY EVER HALF-WORKING, and this is why.
+  //
+  // It read the direction out of the RELATIONS LIST — fine on a record with at
+  // least one link, but on an applicant with no linked clients the list is
+  // empty, the `?? "caregiver"` default won, and a caregiver's own record was
+  // headed "Caregivers". Exactly the bug 29 set out to fix, still happening on
+  // the records most likely to hit it: brand-new applicants, who have no
+  // relations yet.
+  //
+  // The record's OWN role is known for certain from which payload it came out
+  // of, so it is passed in and WINS. The list is kept only as a fallback for a
+  // caller that doesn't supply it — direction is a fact about this record, not
+  // something to infer from data that may not exist.
+  const otherRole: "caregiver" | "client" = selfRole
+    ? selfRole === "caregiver"
+      ? "client"
+      : "caregiver"
+    : (caregivers?.find((c) => c.role)?.role ?? "caregiver");
   const plural = otherRole === "client" ? "clients" : "caregivers";
   const singular = otherRole === "client" ? "client" : "caregiver";
 
