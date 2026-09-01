@@ -1536,7 +1536,38 @@ export async function getRawNote(
 
 // Fetch + normalize a single opportunity (used by the save route to re-check
 // permissions and to return a fresh record after a write).
+// ITEM 1 — IN-FLIGHT DEDUPE + A 3s TTL.
+//
+// Opening ONE record fires three requests — notes, caregivers, contact-fields —
+// and EVERY ONE of them starts by reading the same opportunity to decide
+// permission. That was three identical GET /opportunities/{id} calls against a
+// 100-per-10s budget, for one click, before any of the work those routes exist
+// to do. On a warm lambda they now collapse to one.
+//
+// Deliberately TINY (3 seconds) and keyed by id: this is a burst-collapser for
+// one user action, not a cache of record state. Anything longer would risk a
+// permission decision made against a stale owner, which is the one thing this
+// read must never get wrong.
+const oppBurst = new Map<string, { at: number; p: Promise<OpportunityRecord | null> }>();
+const OPP_BURST_MS = 3000;
+
 export async function getOpportunityById(
+  id: string,
+): Promise<OpportunityRecord | null> {
+  const hit = oppBurst.get(id);
+  if (hit && Date.now() - hit.at < OPP_BURST_MS) return hit.p;
+  const p = getOpportunityByIdUncached(id);
+  oppBurst.set(id, { at: Date.now(), p });
+  // A rejected promise must never be served to the next caller.
+  p.catch(() => oppBurst.delete(id));
+  if (oppBurst.size > 200) {
+    const cutoff = Date.now() - OPP_BURST_MS;
+    for (const [k, v] of oppBurst) if (v.at < cutoff) oppBurst.delete(k);
+  }
+  return p;
+}
+
+async function getOpportunityByIdUncached(
   id: string,
 ): Promise<OpportunityRecord | null> {
   let data: { opportunity?: RawOpportunity };
