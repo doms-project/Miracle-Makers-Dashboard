@@ -676,3 +676,9 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    have shipped two more invisible icons. */
 .rail .raildiv{width:26px;height:1px;background:rgba(255,255,255,.18);margin:9px 0 4px;flex:none;}
 .rail .raillabel{font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);flex:none;}
+
+/* ITEM B — the "organisation, not security" line beside the upload control.
+   Deliberately not an alert box: it is a standing fact about GoHighLevel media
+   URLs, not an error, and a red banner that never goes away stops being read. */
+.reswarn{font-size:11px;line-height:1.35;color:var(--ink-2);background:var(--gold-soft);border:1px solid rgba(0,0,0,.06);border-radius:8px;padding:6px 10px;max-width:340px;}
+.reswarn b{color:var(--gold-ink);font-weight:700;}

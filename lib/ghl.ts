@@ -2873,17 +2873,38 @@ export async function moveOpportunity(args: {
       // at this point, and failing it over a tag would be worse than the missing
       // tag. The step list records whether it made it.
       if (current.contactId) {
-        const tag = `transferred-to-${normalizeTag(divisionLabel(dest.name) || dest.name)}`;
+        const destLabel = normalizeTag(divisionLabel(dest.name) || dest.name);
+        // ITEM C — HOW THE RECORD GOT HERE. An ordinary transfer and a reassign
+        // hand-off both land in Sent out and, until now, wrote the SAME tag —
+        // so the card could not say which had happened. The reassign path
+        // (`unassigning`: a transfer whose new owner is nobody) now writes a
+        // second, distinct tag beside it.
+        //
+        // Chosen over the note text (editable by its author, so the marker can
+        // be edited away) and over a new field. A field WAS considered: the
+        // existing "Reassign Followers" field is written on this path — but
+        // `clearReassignFollowers` wipes it when the case is CLAIMED, and a card
+        // only becomes Sent out after a claim, so it is gone exactly when this
+        // needs it.
+        //
+        // ⚠️ KNOWN LIMIT, ACCEPTED. Tags are CONTACT-scoped, not
+        // opportunity-scoped. A contact reassigned once and transferred later
+        // carries both tags, and a card cannot then tell which event was its
+        // own. The existing `transferred-to-` tag already has that limit, so
+        // this is no worse — but it is not exact, and the UI says so rather
+        // than hiding it. Only an opportunity-scoped field would be exact.
+        const tag = `transferred-to-${destLabel}`;
+        const tags = unassigning ? [tag, `reassigned-from-${normalizeTag(divisionLabel(current.pipelineName) || current.pipelineName)}`] : [tag];
         try {
-          await addContactTags(current.contactId, [tag]);
-          steps.push(`tagged contact "${tag}"`);
+          await addContactTags(current.contactId, tags);
+          steps.push(`tagged contact ${tags.map((t) => `"${t}"`).join(" + ")}`);
         } catch (e) {
           // eslint-disable-next-line no-console
           console.error(
-            `[move] contact tag "${tag}" failed for ${current.contactId} — the transfer itself is complete:`,
+            `[move] contact tags "${tags.join('", "')}" failed for ${current.contactId} — the transfer itself is complete:`,
             await explainGhlError(e),
           );
-          steps.push(`tag "${tag}" FAILED (transfer completed)`);
+          steps.push(`tags ${tags.map((t) => `"${t}"`).join(" + ")} FAILED (transfer completed)`);
         }
       }
       return { transferred: true, steps, addedFollowers };
