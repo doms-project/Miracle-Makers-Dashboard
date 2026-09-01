@@ -69,6 +69,10 @@ export interface EditableFieldDef {
   name: string;
   dataType: string; // TEXT | LARGE_TEXT | SINGLE_OPTIONS | MULTIPLE_OPTIONS | DATE | NUMERICAL | MONETORY | CHECKBOX
   options: string[]; // option strings for *_OPTIONS / CHECKBOX
+  // ITEM 3 — the folder's NAME when GoHighLevel supplies one. Folders are
+  // matched by name first (a name survives a folder being recreated; an id does
+  // not), falling back to parentId when absent.
+  parentName?: string;
   editable: boolean; // false for the read-only blocklist
   parentId: string; // custom-field folder id (drives folder-driven field sets)
   // GHL's authored display order WITHIN a folder (spaced in 50s so fields can be

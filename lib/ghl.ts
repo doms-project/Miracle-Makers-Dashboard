@@ -449,19 +449,38 @@ export interface FieldDefinition {
 let cache: {
   pipelines?: Pipeline[];
   fieldDefs?: FieldDefinition[]; // full opportunity custom-field definitions
+  // ITEM 3 — CONTACT custom-field definitions, cached SEPARATELY. Deliberately
+  // not one merged list: a field id is only meaningful together with its model,
+  // and merging would let an opportunity write and a contact write resolve the
+  // same name to the wrong field.
+  contactFieldDefs?: FieldDefinition[];
   fieldMap?: Map<string, string>; // custom field id -> field name
   userMap?: Map<string, string>; // user id -> display name
 } = {};
 
 // Reused by both the read path (name resolution) and the future write path
 // (id + dataType + options). Fetched once per warm lambda.
-export async function getFieldDefinitions(): Promise<FieldDefinition[]> {
-  if (cache.fieldDefs) return cache.fieldDefs;
+// ITEM 3 — MODEL-AWARE, not caregiver-special.
+//
+// The caregiver fields (Application 18 / Compliance 16 / Availability 6) are
+// CONTACT fields, and this only ever asked for `model=opportunity`, so the panel
+// could not see them however they were mapped. Client Care Needs (25) is
+// contact-side too — so this is parameterised rather than given a caregiver
+// branch, and the client panel gets the same machinery for free. Building it
+// twice is how the two drift.
+export type FieldModel = "opportunity" | "contact";
+
+export async function getFieldDefinitions(
+  model: FieldModel = "opportunity",
+): Promise<FieldDefinition[]> {
+  const slot = model === "contact" ? "contactFieldDefs" : "fieldDefs";
+  const cached = cache[slot];
+  if (cached) return cached;
   const { locationId } = requireEnv();
   let defs: FieldDefinition[] = [];
   try {
     const data = await ghlGet<{ customFields?: FieldDefinition[] }>(
-      `/locations/${encodeURIComponent(locationId)}/customFields?model=opportunity`,
+      `/locations/${encodeURIComponent(locationId)}/customFields?model=${model}`,
     );
     defs = data.customFields || [];
   } catch (e) {
@@ -485,7 +504,7 @@ export async function getFieldDefinitions(): Promise<FieldDefinition[]> {
     );
     return defs;
   }
-  cache.fieldDefs = defs;
+  cache[slot] = defs;
   return defs;
 }
 
@@ -1075,8 +1094,10 @@ function optionStrings(def: FieldDefinition): string[] {
 }
 
 // Editable field definitions for the client (id, dataType, options, editable).
-export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
-  const defs = await getFieldDefinitions();
+export async function getEditableFieldDefs(
+  model: FieldModel = "opportunity",
+): Promise<EditableFieldDef[]> {
+  const defs = await getFieldDefinitions(model);
   return defs.map((d) => ({
     id: d.id,
     name: d.name,
@@ -1086,6 +1107,14 @@ export async function getEditableFieldDefs(): Promise<EditableFieldDef[]> {
     parentId: String(
       (d as Record<string, unknown>).parentId ??
         (d as Record<string, unknown>).folderId ??
+        "",
+    ),
+    // ITEM 3 — the folder NAME when GHL sends one, under any of the spellings
+    // seen. Empty when it doesn't, and the folder match falls back to parentId.
+    parentName: String(
+      (d as Record<string, unknown>).parentName ??
+        (d as Record<string, unknown>).folderName ??
+        (d as Record<string, unknown>).parentFolderName ??
         "",
     ),
     // GHL's authored order within the folder. Missing/unparseable sorts last
@@ -2148,6 +2177,37 @@ export async function addFieldOption(
   if (current.some((o) => o.trim().toLowerCase() === value.toLowerCase()))
     return current;
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔴 GOHIGHLEVEL NORMALISES EN-DASHES. PROVEN, AND IT IS SILENT.
+  //
+  //   sent   : "100 – Uploaded into HHA"   (U+2013 EN DASH)
+  //   stored : "100 - Uploaded into HHA"   (U+002D HYPHEN-MINUS)
+  //
+  // No error, no warning, no hint in the response. The value simply comes back
+  // different from the one you wrote.
+  //
+  // WHY THIS MATTERS FOR THE WORKFLOW REBUILD:
+  // The old account's compliance picklists mixed en-dashes and hyphens. Those
+  // values CANNOT be reproduced on this account — anything with an en-dash is
+  // silently converted. So ANY workflow condition copied across from the old
+  // account that matches on an en-dash WILL NEVER FIRE. It will not error; the
+  // workflow will just sit there doing nothing, which is the worst failure
+  // shape to debug. Rewrite such conditions against plain hyphens.
+  //
+  // ⚠️ THE SEPARATOR DISTINCTION IS DELIBERATE AND DOES SURVIVE — it is a
+  // hyphen-vs-nothing difference, not a dash-type difference, so GHL leaves it
+  // alone. Do not "tidy" these into one shape:
+  //
+  //   CG - HHA App Status / DocuSign Status / E-Verify Status / Medi Check
+  //       -> "100 - Uploaded into HHA"     (number, space, HYPHEN, space, text)
+  //   CG - Patch Check / LEIE Status / FBI Check / Child Line Status
+  //       -> "100 Uploaded into HHA"       (number, space, text — NO separator)
+  //
+  // This function does NOT transliterate on the way out: the value is sent as
+  // typed, and GHL decides. Normalising here would hide the behaviour rather
+  // than record it, and the option list would then disagree with what an admin
+  // typed for a different reason.
+  // ═══════════════════════════════════════════════════════════════════════
   const options = [...current, value];
   const path = `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`;
   try {
@@ -3607,4 +3667,100 @@ export async function deleteCaregiverRelation(
       detail,
     );
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// ITEM 3 — CONTACT CUSTOM FIELDS
+//
+// The caregiver field block (Application 18 / Compliance 16 / Availability 6)
+// and the client's Client Care Needs (25) all live on the CONTACT, not the
+// opportunity. These are the read and write halves; the definitions come from
+// getEditableFieldDefs("contact").
+//
+// ⚠️ A CONTACT CAN HOLD SEVERAL OPPORTUNITIES. Writing one of these changes it
+// for every one of them. That is correct — the value describes the PERSON, not
+// the case — but it is why the read below also returns how many opportunities
+// the contact has, so the panel can say so instead of implying case scope.
+// ═════════════════════════════════════════════════════════════════════════
+
+export interface ContactFieldsRead {
+  contactId: string;
+  /** fieldId -> raw stored value. Codes, never labels — see the note below. */
+  values: Record<string, unknown>;
+  /** GHL's updatedAt, for the same optimistic-concurrency check writes use. */
+  version: string;
+}
+
+/**
+ * Read a contact's custom-field values.
+ *
+ * ⚠️ VALUES ARE CODES, NOT LABELS — "PAID", "LIVE_IN", "DRIVE_CLIENTS". The
+ * application form's routing conditions on these exact strings. Nothing here
+ * transliterates, title-cases or trims them into something friendlier: a
+ * display map belongs in the UI, and the stored value must stay the code.
+ */
+export async function getContactCustomFields(
+  contactId: string,
+): Promise<ContactFieldsRead> {
+  const data = await ghlGet<{ contact?: RawContact }>(
+    `/contacts/${encodeURIComponent(contactId)}`,
+  );
+  const c = data.contact || {};
+  const values: Record<string, unknown> = {};
+  const raw = (c as Record<string, unknown>).customFields;
+  if (Array.isArray(raw)) {
+    for (const f of raw as Record<string, unknown>[]) {
+      const id = String(f.id ?? f.customFieldId ?? "");
+      if (!id) continue;
+      // GHL returns the value under a few keys depending on the field type.
+      // `field_value` is the documented one; the others are seen in the wild.
+      values[id] = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
+    }
+  }
+  return {
+    contactId,
+    values,
+    version: String(
+      (c as Record<string, unknown>).dateUpdated ??
+        (c as Record<string, unknown>).updatedAt ??
+        "",
+    ),
+  };
+}
+
+/** How many opportunities this contact holds — the scope the panel must state. */
+export async function countContactOpportunities(contactId: string): Promise<number> {
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    location_id: locationId,
+    contact_id: contactId,
+    limit: "100",
+  });
+  try {
+    const res = await ghlGet<{ opportunities?: unknown[]; meta?: { total?: number } }>(
+      `/opportunities/search?${params.toString()}`,
+    );
+    return res.meta?.total ?? (res.opportunities?.length || 0);
+  } catch {
+    // Best-effort. The panel says "all of this person's records" rather than a
+    // number when this fails — never blocks the read.
+    return 0;
+  }
+}
+
+/**
+ * Write custom-field values onto a contact.
+ *
+ * The value is sent AS GIVEN. See the codes-not-labels note above.
+ */
+export async function updateContactCustomFields(
+  contactId: string,
+  entries: { id: string; value: unknown }[],
+): Promise<void> {
+  if (!entries.length) return;
+  await ghlSend(
+    "PUT",
+    `/contacts/${encodeURIComponent(contactId)}`,
+    { customFields: entries.map((e) => ({ id: e.id, field_value: e.value })) },
+  );
 }

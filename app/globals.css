@@ -697,3 +697,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    ODP DSP Applicant has ten stages and a hidden chip is a filter nobody finds.
    `overflow-x:visible` because wrapping and horizontal scrolling contradict. */
 .stages.wrap{flex-wrap:wrap;overflow-x:visible;row-gap:7px;}
+/* ITEM 3 — the contact-field scope line. States that these values belong to the
+   PERSON and follow them onto every case, because the edit genuinely is not
+   case-scoped and the panel must not imply otherwise. */
+.contactscope{font-size:11.5px;line-height:1.45;color:var(--gold-ink);background:var(--gold-soft);border:1px solid #f3e2c4;border-radius:8px;padding:9px 12px;margin:16px 22px 2px;}
+.contactscope b{font-weight:700;}

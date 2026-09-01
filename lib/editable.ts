@@ -20,6 +20,13 @@
 export const READ_ONLY_FIELDS: string[] = [
   // Automation-critical — this field TRIGGERS the compliance automation (WF3).
   "APP - Compliance Cleared",
+  // The CAREGIVER equivalent, and a workflow trigger for the same reason: it
+  // must be set by the compliance workflow once every check clears, never by a
+  // recruiter ticking a box. Blocklisted by NAME now, ahead of contact fields
+  // rendering in the panel (that work is item 2), so it cannot arrive editable
+  // by default the day they do. A different field from "APP - Compliance
+  // Cleared" above — same job, caregiver side.
+  "CG - Compliance Cleared",
   // Derived by the Move action — must not be hand-edited.
   "Transferred From",
   "Transferred Date",
