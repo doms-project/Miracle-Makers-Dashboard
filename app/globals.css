@@ -682,3 +682,14 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    URLs, not an error, and a red banner that never goes away stops being read. */
 .reswarn{font-size:11px;line-height:1.35;color:var(--ink-2);background:var(--gold-soft);border:1px solid rgba(0,0,0,.06);border-radius:8px;padding:6px 10px;max-width:340px;}
 .reswarn b{color:var(--gold-ink);font-weight:700;}
+/* ITEM #10 — a reassign hand-off reads differently from a plain transfer, so it
+   is tinted differently. Colour is the SECOND signal; the word is the first. */
+.fromtag.reassigned{background:var(--gold-soft);color:var(--gold-ink);border-color:#f0dcbb;}
+/* ITEM #10 — the route line on a Master card. Sits under the stage, above the
+   pipeline badge: it explains how the card arrived, so it reads before "where
+   it is now". */
+/* WRAPS, never truncates. The Sent out column is narrow and an ellipsis ate the
+   source ("…from OLTL Enrollmen") — which is the one fact this line exists to
+   carry. Two short lines beat one clipped one. */
+.mcard .mfrom{font-size:10px;font-weight:600;line-height:1.35;color:var(--ink-2);background:var(--canvas);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-top:5px;display:block;}
+.mcard .mfrom.reassigned{background:var(--gold-soft);border-color:#f0dcbb;color:var(--gold-ink);}

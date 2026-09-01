@@ -30,6 +30,17 @@ export interface OpportunityRecord {
   status: string; // native opportunity status (open/won/lost/abandoned)
   monetaryValue: number; // native value
   cf: Record<string, unknown>; // fieldId -> current raw value (arrays preserved)
+  // ITEM #10 — the CONTACT's tags, carried through so a card can say HOW a
+  // record reached Sent out. `transferred-to-*` is written on every transfer;
+  // `reassigned-from-*` only on the reassign path, so its PRESENCE is the
+  // discriminator. Deliberately only presence: tags are contact-scoped, so the
+  // value's "from" half is unreliable (a within-division reassign writes
+  // `reassigned-from-oltl` beside `transferred-to-oltl`). The accurate source
+  // comes from the "Transferred From" FIELD instead — one job each.
+  //
+  // [] when GoHighLevel's opportunity search sends no contact tags. The card
+  // then falls back to the neutral wording rather than guessing.
+  tags: string[];
   contactId: string; // linked contact — notes are stored on the contact
   // Multi-pipeline (v2). A record now belongs to one of several pipelines.
   pipelineId: string; // the opportunity's native pipelineId
