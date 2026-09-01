@@ -1240,7 +1240,7 @@ export default function Dashboard() {
   const [cgQuery, setCgQuery] = useState("");
   // ITEM A2/A3 — the caregiver section gets the same controls the client
   // section has, minus the ones that are client concepts (office, county).
-  const [cgView, setCgView] = useState<"list" | "board">("board");
+  const [cgView, setCgView] = useState<"list" | "board" | "resources">("board");
   const [cgStage, setCgStage] = useState<string | null>(null);
   const [cgSortKey, setCgSortKey] = useState<string | null>(null);
   const [cgSortDir, setCgSortDir] = useState<"asc" | "desc">("asc");
@@ -1497,11 +1497,19 @@ export default function Dashboard() {
     }
   }, [sso]);
 
-  // Load the Resources tab once, when first opened.
+  // Load the Resources tab once, when first opened — from EITHER section.
+  // ITEM 3 — this used to test `view === "resources"` alone, which is the client
+  // section's route to it. Reached from the Caregivers section `view` is
+  // "caregivers" and `cgView` is "resources", so the fetch never fired and the
+  // pane rendered its empty state over data that had simply never been asked
+  // for. Still ONE request, still once: `resLoaded` is shared, so opening it
+  // from one section and then the other does not re-fetch.
+  const resourcesOpen =
+    view === "resources" || (view === "caregivers" && cgView === "resources");
   useEffect(() => {
-    if (view === "resources" && !resLoaded && sso.status !== "loading")
+    if (resourcesOpen && !resLoaded && sso.status !== "loading")
       loadResources();
-  }, [view, resLoaded, sso.status, loadResources]);
+  }, [resourcesOpen, resLoaded, sso.status, loadResources]);
 
   // Admin upload → the configured Resources folder (server-side; token never in
   // browser).
@@ -2989,6 +2997,265 @@ export default function Dashboard() {
     </div>
   );
 
+  // ITEM 3 — RESOURCES IS ONE SYSTEM, REACHABLE FROM EITHER SECTION.
+  //
+  // Defined ONCE and rendered from both the client branch and the caregiver
+  // branch. Deliberately NOT a second file browser and NOT a caregiver-specific
+  // folder list: same component, same request, same per-folder grants. A
+  // recruiter sees "Caregiver Documents" because it is GRANTED TO THEM — never
+  // because they arrived from the Caregivers section. Arriving from there
+  // changes nothing about what is listed.
+  //
+  // Extracted rather than copied: two copies of ~270 lines of JSX would drift
+  // apart the first time either was touched.
+  const resourcesPane = (
+          <div className="scroll reswrap">
+            {/* toolbar: search + folder picker + admin upload / new folder */}
+            <div className="restoolbar">
+              <div className="search">
+                <IconSearch />
+                <input
+                  placeholder="Search resources by name…"
+                  value={resQuery}
+                  onChange={(e) => setResQuery(e.target.value)}
+                />
+              </div>
+              {/* ITEM 6c — UPLOAD ASKS WHICH FOLDER. With several folders on
+                  screen, an "Upload" button alone can only guess, and a document
+                  filed into a folder the uploader wasn't looking at is worse
+                  than a refused upload. Shown once there is a real choice; with
+                  one folder there is nothing to ask. */}
+              {canManageFolders && resSections.length > 1 ? (
+                <div className="officefilter">
+                  <label htmlFor="upFolder">Upload to</label>
+                  <select
+                    id="upFolder"
+                    value={uploadFolder}
+                    onChange={(e) => setUploadFolder(e.target.value)}
+                    disabled={uploading}
+                  >
+                    {resSections.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              {canManageFolders ? (
+                <button
+                  type="button"
+                  className="ighost resnewfolder"
+                  onClick={() => {
+                    setNewFolderOpen(true);
+                    setNewFolderName("");
+                    setFolderErr(null);
+                  }}
+                >
+                  + New folder
+                </button>
+              ) : null}
+              {/* ITEM B — ORGANISATION, NOT SECURITY. Said on screen because an
+                  admin who sees per-folder access grants will otherwise assume
+                  they protect the file. They do not: a GoHighLevel media URL is
+                  reachable by ANYONE holding it, so a grant scopes what people
+                  see LISTED here, not what they can open. Anything that must
+                  not be readable by an outsider does not belong in the media
+                  library at all. */}
+              {isAdminViewer ? (
+                <span
+                  className="reswarn"
+                  title="A GoHighLevel media link works for anyone who has it, signed in or not. Folder access controls what is listed here, not who can open a file."
+                >
+                  Folder access controls what is <b>listed</b> here — a
+                  GoHighLevel file link still opens for anyone who has it.
+                </span>
+              ) : null}
+              {isAdminViewer ? (
+                <label className={`resupload ${uploading ? "busy" : ""}`}>
+                  <input
+                    type="file"
+                    hidden
+                    disabled={uploading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) uploadResource(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  {uploading ? "Uploading…" : "⬆ Upload"}
+                </label>
+              ) : null}
+            </div>
+            {uploadMsg ? (
+              <div
+                className={`resuploadmsg ${uploadMsg.startsWith("✗") ? "err" : "ok"}`}
+              >
+                {uploadMsg}
+              </div>
+            ) : null}
+
+            {resLoading ? (
+              <div className="statewrap">
+                <div className="statecard">
+                  <div className="spinner" />
+                  <h3>Loading resources…</h3>
+                  <p>Fetching documents from the shared Resources folder.</p>
+                </div>
+              </div>
+            ) : resErr ? (
+              <div className="statewrap">
+                <div className="statecard">
+                  <h3>
+                    <span className="errdot">●</span> Couldn&apos;t load resources
+                  </h3>
+                  <ErrorMessage error={resErr} className="errbody" />
+                  <button
+                    className="retry"
+                    onClick={loadResources}
+                    type="button"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : resSections.length === 0 && resources.length === 0 ? (
+              // ITEM 6c — NO GRANTS gets the SAME empty-state pattern as no
+              // pipeline access: this is fail-closed working correctly, and the
+              // person reading it has done nothing wrong. Admins see every
+              // folder, so for them an empty tab genuinely means no folders.
+              <div className="empty noaccess">
+                <b>
+                  {canManageFolders
+                    ? "No resource folders yet"
+                    : "No folders shared with you yet"}
+                </b>
+                <br />
+                {canManageFolders
+                  ? "Create a folder above, then grant it to people in the Access tab."
+                  : "You'll see documents here once an admin gives you access to a folder."}
+              </div>
+            ) : resSections.length === 0 ? (
+              // Legacy single-folder path — still served when the location has
+              // no folder grants and RESOURCES_FOLDER_ID is set, so nobody who
+              // had files yesterday loses them to this deploy.
+              visibleResources.length === 0 ? (
+                <div className="empty">
+                  <b>No matches</b>
+                  <br />
+                  No resource name contains “{resQuery}”.
+                </div>
+              ) : (
+                <div className="resgrid">
+                  {visibleResources.map((f, i) => (
+                    <ResCard
+                      key={`${f.url}-${i}`}
+                      f={f}
+                      kind={previewKind(f)}
+                      onPreview={() => {
+                        const kind = previewKind(f);
+                        if (kind) setPreview({ name: f.name, url: f.url, kind });
+                      }}
+                      onDelete={
+                        canManageFolders && f.id
+                          ? () => {
+                              setDelFile({ id: f.id, name: f.name });
+                              setFolderErr(null);
+                            }
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              )
+            ) : (
+              // ITEM 6c — SECTIONS PER FOLDER, not a selector. A selector shows
+              // one folder at a time and hides the fact that the others exist;
+              // sections make the whole shared set readable in one scroll, which
+              // is what people are actually doing on this tab.
+              <>
+                {resQuery.trim() && sectionFileCount > 0 &&
+                visibleSections.every((s) => s.files.length === 0) ? (
+                  <div className="empty">
+                    <b>No matches</b>
+                    <br />
+                    No resource name contains “{resQuery}”.
+                  </div>
+                ) : null}
+                {visibleSections.map((s) => (
+                  <section className="ressection" key={s.id}>
+                    <div className="ressechead">
+                      <h3>{s.name}</h3>
+                      {s.isPublic ? (
+                        <span
+                          className="respill"
+                          title="Marked visible to everyone in the location."
+                        >
+                          everyone
+                        </span>
+                      ) : null}
+                      <span className="rescount">
+                        {s.files.length} file{s.files.length === 1 ? "" : "s"}
+                      </span>
+                      {canManageFolders ? (
+                        <button
+                          type="button"
+                          className="resdel"
+                          onClick={() => askDeleteFolder(s.id, s.name)}
+                          title="Delete this folder and everything in it"
+                        >
+                          Delete folder
+                        </button>
+                      ) : null}
+                    </div>
+                    {s.failed ? (
+                      <div className="empty">
+                        Couldn&apos;t read this folder&apos;s files. The other
+                        folders above are unaffected.
+                      </div>
+                    ) : s.files.length === 0 ? (
+                      <div className="empty">
+                        {resQuery.trim() ? "No matches here." : "Empty."}
+                      </div>
+                    ) : (
+                      <div className="resgrid">
+                        {s.files.map((f, i) => (
+                          <ResCard
+                            key={`${f.url}-${i}`}
+                            f={f}
+                            kind={previewKind(f)}
+                            onPreview={() => {
+                              const kind = previewKind(f);
+                              if (kind)
+                                setPreview({ name: f.name, url: f.url, kind });
+                            }}
+                            onDelete={
+                              canManageFolders && f.id
+                                ? () => {
+                                    setDelFile({ id: f.id, name: f.name });
+                                    setFolderErr(null);
+                                  }
+                                : undefined
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                ))}
+                {/* 🔴 ORGANISATION, NOT SECURITY — said here, where people
+                    upload, rather than only in the admin tab. */}
+                <div className="imeta">
+                  These folders decide what is <b>listed</b> here. A GoHighLevel
+                  media link works for anyone who has it, so{" "}
+                  <b>client-specific documents belong on the client&apos;s
+                  record</b>, not in a shared folder.
+                </div>
+              </>
+            )}
+          </div>
+  );
+
   // ITEM 15 — WHERE THE RAIL SAYS YOU ARE. The rail used to answer exactly one
   // question ("Clients or Caregivers?"), so "not caregivers" was a good enough
   // test for Clients. Now that Import and Access live there too, that same test
@@ -3179,6 +3446,19 @@ export default function Dashboard() {
               >
                 <IconBoard />
                 Board
+              </button>
+              {/* ITEM 3 — the SAME Resources tab, reachable from here too. Not a
+                  caregiver file browser: one component, one folder list, one set
+                  of grants. Recruiting staff shouldn't have to leave their own
+                  section to open a document they've been granted. */}
+              <button
+                className={cgView === "resources" ? "on" : ""}
+                onClick={() => setCgView("resources")}
+                type="button"
+                title="Shared documents — the same folders and grants as the Clients section"
+              >
+                <IconDoc />
+                Resources
               </button>
             </div>
           ) : null}
@@ -3513,9 +3793,15 @@ export default function Dashboard() {
 
         {/* content: Import tab (admin), Resources tab, else loading / error / list / board */}
         {view === "caregivers" ? (
-          // ITEM 13 — the caregiver section. Same kanban, same record panel; a
-          // different pipeline family and nothing else shared.
-          cgLoading ? (
+          // ITEM 3 — Resources is checked FIRST, before the applicant loading /
+          // error / no-pipeline-access states. Those describe the applicant
+          // payload, and Resources does not depend on it: a recruiter with no
+          // applicant pipeline granted must still be able to open the documents
+          // they DO have access to, rather than hitting "No applicant pipelines
+          // assigned yet" on a tab that has nothing to do with pipelines.
+          cgView === "resources" ? (
+            resourcesPane
+          ) : cgLoading ? (
             <div className="statewrap">
               <div className="statecard">
                 <div className="spinner" />
@@ -3625,7 +3911,17 @@ export default function Dashboard() {
               {/* ITEM A3 — STAGE CHIPS. Counted against `cgPreStage` (everything
                   but the stage filter itself), so a chip says how many it would
                   reveal, not how many are showing now. */}
-              <div className="chips">
+              {/* 🔴 BUG (mine, report 51). This was `className="chips"` — a class
+                  that does not exist in globals.css. With no container rule the
+                  chips, which are themselves `display:flex`, laid out as blocks
+                  and stacked ONE PER LINE. The client section's container is
+                  `.stages`; reusing it is the fix.
+                  `wrap` is a caregiver-only modifier: ODP DSP Applicant has ten
+                  stages, and `.stages` alone is one row with `overflow-x:auto`,
+                  which hides half of them behind a sideways scroll. Wrapping to
+                  a second row keeps all ten countable at a glance. The client
+                  row is left exactly as it was. */}
+              <div className="stages wrap">
                 <button
                   className={`chip ${cgStage === null ? "on" : ""}`}
                   onClick={() => setCgStage(null)}
@@ -3896,251 +4192,7 @@ export default function Dashboard() {
             </>
           )
         ) : view === "resources" ? (
-          <div className="scroll reswrap">
-            {/* toolbar: search + folder picker + admin upload / new folder */}
-            <div className="restoolbar">
-              <div className="search">
-                <IconSearch />
-                <input
-                  placeholder="Search resources by name…"
-                  value={resQuery}
-                  onChange={(e) => setResQuery(e.target.value)}
-                />
-              </div>
-              {/* ITEM 6c — UPLOAD ASKS WHICH FOLDER. With several folders on
-                  screen, an "Upload" button alone can only guess, and a document
-                  filed into a folder the uploader wasn't looking at is worse
-                  than a refused upload. Shown once there is a real choice; with
-                  one folder there is nothing to ask. */}
-              {canManageFolders && resSections.length > 1 ? (
-                <div className="officefilter">
-                  <label htmlFor="upFolder">Upload to</label>
-                  <select
-                    id="upFolder"
-                    value={uploadFolder}
-                    onChange={(e) => setUploadFolder(e.target.value)}
-                    disabled={uploading}
-                  >
-                    {resSections.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-              {canManageFolders ? (
-                <button
-                  type="button"
-                  className="ighost resnewfolder"
-                  onClick={() => {
-                    setNewFolderOpen(true);
-                    setNewFolderName("");
-                    setFolderErr(null);
-                  }}
-                >
-                  + New folder
-                </button>
-              ) : null}
-              {/* ITEM B — ORGANISATION, NOT SECURITY. Said on screen because an
-                  admin who sees per-folder access grants will otherwise assume
-                  they protect the file. They do not: a GoHighLevel media URL is
-                  reachable by ANYONE holding it, so a grant scopes what people
-                  see LISTED here, not what they can open. Anything that must
-                  not be readable by an outsider does not belong in the media
-                  library at all. */}
-              {isAdminViewer ? (
-                <span
-                  className="reswarn"
-                  title="A GoHighLevel media link works for anyone who has it, signed in or not. Folder access controls what is listed here, not who can open a file."
-                >
-                  Folder access controls what is <b>listed</b> here — a
-                  GoHighLevel file link still opens for anyone who has it.
-                </span>
-              ) : null}
-              {isAdminViewer ? (
-                <label className={`resupload ${uploading ? "busy" : ""}`}>
-                  <input
-                    type="file"
-                    hidden
-                    disabled={uploading}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) uploadResource(f);
-                      e.target.value = "";
-                    }}
-                  />
-                  {uploading ? "Uploading…" : "⬆ Upload"}
-                </label>
-              ) : null}
-            </div>
-            {uploadMsg ? (
-              <div
-                className={`resuploadmsg ${uploadMsg.startsWith("✗") ? "err" : "ok"}`}
-              >
-                {uploadMsg}
-              </div>
-            ) : null}
-
-            {resLoading ? (
-              <div className="statewrap">
-                <div className="statecard">
-                  <div className="spinner" />
-                  <h3>Loading resources…</h3>
-                  <p>Fetching documents from the shared Resources folder.</p>
-                </div>
-              </div>
-            ) : resErr ? (
-              <div className="statewrap">
-                <div className="statecard">
-                  <h3>
-                    <span className="errdot">●</span> Couldn&apos;t load resources
-                  </h3>
-                  <ErrorMessage error={resErr} className="errbody" />
-                  <button
-                    className="retry"
-                    onClick={loadResources}
-                    type="button"
-                  >
-                    Try again
-                  </button>
-                </div>
-              </div>
-            ) : resSections.length === 0 && resources.length === 0 ? (
-              // ITEM 6c — NO GRANTS gets the SAME empty-state pattern as no
-              // pipeline access: this is fail-closed working correctly, and the
-              // person reading it has done nothing wrong. Admins see every
-              // folder, so for them an empty tab genuinely means no folders.
-              <div className="empty noaccess">
-                <b>
-                  {canManageFolders
-                    ? "No resource folders yet"
-                    : "No folders shared with you yet"}
-                </b>
-                <br />
-                {canManageFolders
-                  ? "Create a folder above, then grant it to people in the Access tab."
-                  : "You'll see documents here once an admin gives you access to a folder."}
-              </div>
-            ) : resSections.length === 0 ? (
-              // Legacy single-folder path — still served when the location has
-              // no folder grants and RESOURCES_FOLDER_ID is set, so nobody who
-              // had files yesterday loses them to this deploy.
-              visibleResources.length === 0 ? (
-                <div className="empty">
-                  <b>No matches</b>
-                  <br />
-                  No resource name contains “{resQuery}”.
-                </div>
-              ) : (
-                <div className="resgrid">
-                  {visibleResources.map((f, i) => (
-                    <ResCard
-                      key={`${f.url}-${i}`}
-                      f={f}
-                      kind={previewKind(f)}
-                      onPreview={() => {
-                        const kind = previewKind(f);
-                        if (kind) setPreview({ name: f.name, url: f.url, kind });
-                      }}
-                      onDelete={
-                        canManageFolders && f.id
-                          ? () => {
-                              setDelFile({ id: f.id, name: f.name });
-                              setFolderErr(null);
-                            }
-                          : undefined
-                      }
-                    />
-                  ))}
-                </div>
-              )
-            ) : (
-              // ITEM 6c — SECTIONS PER FOLDER, not a selector. A selector shows
-              // one folder at a time and hides the fact that the others exist;
-              // sections make the whole shared set readable in one scroll, which
-              // is what people are actually doing on this tab.
-              <>
-                {resQuery.trim() && sectionFileCount > 0 &&
-                visibleSections.every((s) => s.files.length === 0) ? (
-                  <div className="empty">
-                    <b>No matches</b>
-                    <br />
-                    No resource name contains “{resQuery}”.
-                  </div>
-                ) : null}
-                {visibleSections.map((s) => (
-                  <section className="ressection" key={s.id}>
-                    <div className="ressechead">
-                      <h3>{s.name}</h3>
-                      {s.isPublic ? (
-                        <span
-                          className="respill"
-                          title="Marked visible to everyone in the location."
-                        >
-                          everyone
-                        </span>
-                      ) : null}
-                      <span className="rescount">
-                        {s.files.length} file{s.files.length === 1 ? "" : "s"}
-                      </span>
-                      {canManageFolders ? (
-                        <button
-                          type="button"
-                          className="resdel"
-                          onClick={() => askDeleteFolder(s.id, s.name)}
-                          title="Delete this folder and everything in it"
-                        >
-                          Delete folder
-                        </button>
-                      ) : null}
-                    </div>
-                    {s.failed ? (
-                      <div className="empty">
-                        Couldn&apos;t read this folder&apos;s files. The other
-                        folders above are unaffected.
-                      </div>
-                    ) : s.files.length === 0 ? (
-                      <div className="empty">
-                        {resQuery.trim() ? "No matches here." : "Empty."}
-                      </div>
-                    ) : (
-                      <div className="resgrid">
-                        {s.files.map((f, i) => (
-                          <ResCard
-                            key={`${f.url}-${i}`}
-                            f={f}
-                            kind={previewKind(f)}
-                            onPreview={() => {
-                              const kind = previewKind(f);
-                              if (kind)
-                                setPreview({ name: f.name, url: f.url, kind });
-                            }}
-                            onDelete={
-                              canManageFolders && f.id
-                                ? () => {
-                                    setDelFile({ id: f.id, name: f.name });
-                                    setFolderErr(null);
-                                  }
-                                : undefined
-                            }
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </section>
-                ))}
-                {/* 🔴 ORGANISATION, NOT SECURITY — said here, where people
-                    upload, rather than only in the admin tab. */}
-                <div className="imeta">
-                  These folders decide what is <b>listed</b> here. A GoHighLevel
-                  media link works for anyone who has it, so{" "}
-                  <b>client-specific documents belong on the client&apos;s
-                  record</b>, not in a shared folder.
-                </div>
-              </>
-            )}
-          </div>
+          resourcesPane
         ) : loading ? (
           <div className="statewrap">
             <div className="statecard">
