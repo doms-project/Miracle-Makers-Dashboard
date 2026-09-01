@@ -2107,6 +2107,16 @@ export default function Dashboard() {
   // known, so paging or filtering only ever asks for the new ones.
   useEffect(() => {
     if (sso.status === "loading") return;
+    // ITEM 1 — STAND DOWN WHILE A RECORD IS OPEN. This batch asks about up to 60
+    // contacts at concurrency 6, off the SAME 100-per-10s GoHighLevel budget the
+    // open panel is trying to use for notes, relations and contact fields. The
+    // badges it feeds are a nicety on rows nobody is looking at while a panel
+    // covers them; the panel's own requests are what the person is waiting for.
+    //
+    // Not cancelled mid-flight — deliberately: an in-flight batch has already
+    // spent its budget, and aborting would waste it and re-request the same ids
+    // on close. It simply does not START a new one until the panel closes.
+    if (selId) return;
     const ids = [
       ...new Set(
         visible
@@ -2143,7 +2153,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [visible, sso, relCounts]);
+  }, [visible, sso, relCounts, selId]);
 
   // The badge text for one record: "1 caregiver" / "2 clients", or "" when the
   // contact has no links (or its counts haven't arrived yet).
@@ -2595,6 +2605,46 @@ export default function Dashboard() {
     [data, cgData, selId],
   );
 
+  // ITEM 2 — COLLAPSIBLE PANEL SECTIONS, remembered PER USER.
+  //
+  // The applicant panel is 58 fields in one scroll, fourteen of them day
+  // dropdowns rendering 48 options each, with Notes a long way below all of it.
+  //
+  // ⚠️ The state is keyed by SECTION, never by record — keying it per record
+  // would re-collapse everything on every applicant, which is worse than not
+  // remembering at all. It lives in localStorage so it survives a reload, and
+  // it is per browser, i.e. per user.
+  //
+  // ⚠️ GENERAL, not caregiver-specific: the client panel has twelve
+  // opportunity folders and gains a contact section the day Client Care Needs
+  // lands. Any section can opt in by asking `collapsed(key, default)`.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("mm.openSections");
+      if (raw) setOpenSections(JSON.parse(raw) as Record<string, boolean>);
+    } catch {
+      // A browser with storage blocked just gets the defaults every time.
+    }
+  }, []);
+  const toggleSection = useCallback((key: string, openNow: boolean) => {
+    setOpenSections((prev) => {
+      const next = { ...prev, [key]: !openNow };
+      try {
+        window.localStorage.setItem("mm.openSections", JSON.stringify(next));
+      } catch {
+        /* not fatal — the toggle still works for this session */
+      }
+      return next;
+    });
+  }, []);
+  // `defaultOpen` decides only what happens before the user has an opinion.
+  const isSectionOpen = useCallback(
+    (key: string, defaultOpen: boolean) =>
+      key in openSections ? openSections[key] : defaultOpen,
+    [openSections],
+  );
+
   // ITEM 3 — the contact sections for the OPEN record, by its own kind. A
   // caregiver record gets the three caregiver folders; a client record gets the
   // client-side ones (Client Care Needs, once its folder is added to the table).
@@ -2624,32 +2674,42 @@ export default function Dashboard() {
     setCLoading(true);
     const h: Record<string, string> = {};
     if (sso.status === "ready") h["x-ghl-sso-key"] = sso.blob;
-    fetch(`/api/contacts/${encodeURIComponent(selected.id)}/fields`, {
-      headers: h,
-      cache: "no-store",
-    })
-      .then(async (res) => {
-        const j = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok) {
-          setCErr(j);
-          return;
-        }
-        setCFields({
-          defs: j.fieldDefs || [],
-          values: j.values || {},
-          version: j.version || "",
-          opportunityCount: j.opportunityCount || 0,
+    // ITEM 1 — STAGGERED behind notes rather than fired alongside it. Two
+    // requests leaving together can both hit GoHighLevel's rate limit and both
+    // fail, and the report-47 retry is ONE attempt with backoff — it rescues a
+    // straggler, not a collision. A short gap costs nothing a person can see
+    // (the section renders its own loading line) and takes the panel's opening
+    // burst from three simultaneous calls down to one, then one.
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      fetch(`/api/contacts/${encodeURIComponent(selected.id)}/fields`, {
+        headers: h,
+        cache: "no-store",
+      })
+        .then(async (res) => {
+          const j = await res.json().catch(() => ({}));
+          if (cancelled) return;
+          if (!res.ok) {
+            setCErr(j);
+            return;
+          }
+          setCFields({
+            defs: j.fieldDefs || [],
+            values: j.values || {},
+            version: j.version || "",
+            opportunityCount: j.opportunityCount || 0,
+          });
+        })
+        .catch((e) => {
+          if (!cancelled) setCErr(e);
+        })
+        .finally(() => {
+          if (!cancelled) setCLoading(false);
         });
-      })
-      .catch((e) => {
-        if (!cancelled) setCErr(e);
-      })
-      .finally(() => {
-        if (!cancelled) setCLoading(false);
-      });
+    }, 350);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [selected?.id, selected?.contactId, sso]);
 
@@ -5154,9 +5214,27 @@ export default function Dashboard() {
                       ? `Changes here show on all ${cFields.opportunityCount} of their records.`
                       : "Changes here follow them onto every record they hold."}
                   </div>
-                  {contactGroups.map((g) => (
+                  {contactGroups.map((g, gi) => {
+                    // First section open, the rest collapsed — Caregiver
+                    // Application is what a recruiter reads first, and it is
+                    // first in CONTACT_FOLDERS. Derived from position rather
+                    // than named, so the same rule holds for the client panel.
+                    const open = isSectionOpen(g.key, gi === 0);
+                    return (
                     <Fragment key={g.key}>
-                      <div className="sechead">{g.label}</div>
+                      <button
+                        type="button"
+                        className={`sechead sectoggle${open ? " open" : ""}`}
+                        onClick={() => toggleSection(g.key, open)}
+                        aria-expanded={open}
+                      >
+                        <span className="secarrow" aria-hidden="true">
+                          {open ? "▾" : "▸"}
+                        </span>
+                        {g.label}
+                        <span className="seccount">{g.fields.length}</span>
+                      </button>
+                      {open ? (
                       <div className="grid">
                         {g.fields.map((def) => (
                           <div
@@ -5184,8 +5262,10 @@ export default function Dashboard() {
                           </div>
                         ))}
                       </div>
+                      ) : null}
                     </Fragment>
-                  ))}
+                    );
+                  })}
                 </>
               ) : null}
 
@@ -5208,6 +5288,14 @@ export default function Dashboard() {
                     ? "caregiver"
                     : "client"
                 }
+                // ITEM 1 — a POSITIVE signal, not `!cLoading`. `cLoading` is
+                // still false on the first commit (the effect that sets it runs
+                // in the same pass this child mounts in), so `!cLoading` read
+                // TRUE at exactly the moment it needed to read false — measured:
+                // the caregivers call still went out ahead of the contact
+                // fields. This is true only once the fields have actually
+                // resolved, one way or the other.
+                panelReady={cFields !== null || cErr !== null}
               />
 
               {/* System info — external ids / derived / automation (collapsed).

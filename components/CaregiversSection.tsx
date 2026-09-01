@@ -33,10 +33,19 @@ export default function CaregiversSection({
   ssoBlob,
   canManage,
   selfRole,
+  panelReady,
 }: {
   opportunityId: string;
   ssoBlob: string | null;
   canManage: boolean;
+  // ITEM 1 — true once the panel ABOVE this section has finished loading and
+  // laid out. Visibility alone is not a usable trigger: at mount the contact
+  // sections do not exist yet, so this section sits high in a short panel and
+  // is genuinely on screen — the observer fired immediately and the lazy-load
+  // did nothing. Measured, not assumed: the caregivers call still went out at
+  // +90ms with the observer in place. So visibility is only consulted once the
+  // panel is its real height.
+  panelReady?: boolean;
   // ITEM 2 — THIS record's own role, decided by the caller from which payload
   // the record came out of. See the note on `otherRole` below for why it had to
   // be passed in rather than inferred here.
@@ -75,13 +84,55 @@ export default function CaregiversSection({
     }
   }, [opportunityId, headers]);
 
+  // ITEM 1 — LAZY. This section sits at the BOTTOM of a 58-field panel, below
+  // fourteen day-dropdowns, and most opens never scroll to it — yet it fired a
+  // GoHighLevel /associations/relations call the instant the panel mounted,
+  // alongside notes and the contact fields. Three requests at once against a
+  // 100-per-10s budget is how the 429 arrived, and it arrived HERE because this
+  // is simply the call that lost the race.
+  //
+  // Nothing is fetched until the section is actually scrolled into view. An
+  // open that never reaches it costs zero GHL calls.
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [seen, setSeen] = useState(false);
+
+  useEffect(() => {
+    setSeen(false);
+  }, [opportunityId]);
+
+  useEffect(() => {
+    if (seen) return;
+    if (panelReady === false) return; // panel still growing — measuring now is meaningless
+    const el = hostRef.current;
+    if (!el) return;
+    // No IntersectionObserver (old webview, jsdom) → fall back to eager, which
+    // is exactly the old behaviour. Degrade to slower, never to broken.
+    if (typeof IntersectionObserver === "undefined") {
+      setSeen(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      // A little early, so the list is usually there by the time it is read.
+      { root: null, rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen, opportunityId, panelReady]);
+
   useEffect(() => {
     setCaregivers(null);
     setQ("");
     setHits([]);
     setActionErr(null);
+    if (!seen) return;
     load();
-  }, [load]);
+  }, [load, seen]);
 
   // Debounced typeahead search.
   useEffect(() => {
@@ -181,7 +232,7 @@ export default function CaregiversSection({
   const singular = otherRole === "client" ? "client" : "caregiver";
 
   return (
-    <div className="cgsec">
+    <div className="cgsec" ref={hostRef}>
       {/* Direction decides the heading: this record is in the caregiver slot ->
           the other side is a CLIENT, and vice versa. */}
       <div className="sechead cghead">
