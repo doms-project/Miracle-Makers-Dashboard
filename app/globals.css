@@ -660,8 +660,19 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* ── ITEM 13: the rail is a SECTION switch (Clients / Caregivers) ─────────
    Caregiver recruitment is different work from client enrolment, so the split
    is top-level rather than another tab beside List/Board. */
-.rail .railsec{display:flex;flex-direction:column;align-items:center;gap:5px;width:100%;padding:11px 4px;background:transparent;border:0;border-radius:10px;color:var(--ink-3);cursor:pointer;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:.02em;transition:background .12s,color .12s;}
+.rail .railsec{display:flex;flex-direction:column;align-items:center;gap:5px;width:100%;height:auto;flex:none;padding:11px 4px;background:transparent;border:0;border-radius:10px;color:var(--ink-3);cursor:pointer;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:.02em;transition:background .12s,color .12s;}
 .rail .railsec svg{width:19px;height:19px;}
 .rail .railsec:hover{color:var(--plum);background:var(--plum-soft);}
 .rail .railsec.active{color:#fff;background:var(--plum);}
 .rail .railsec.active:hover{background:var(--plum-mid);}
+
+/* ── ITEM 15: admin ACTIONS sit below the sections (Import / Access) ──────
+   A hairline and a caption rather than a third section heading: these are
+   things you DO, not places the records live.
+   `height:auto` above is a fix, not a tweak — `.rail button{height:42px}`
+   (one class + one element) was beating `.rail .railsec`, which sets width but
+   never set a height, so every rail icon was laid out at 19x1px and had been
+   invisible since the sections landed. Adding Import and Access here would
+   have shipped two more invisible icons. */
+.rail .raildiv{width:26px;height:1px;background:rgba(255,255,255,.18);margin:9px 0 4px;flex:none;}
+.rail .raillabel{font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);flex:none;}
