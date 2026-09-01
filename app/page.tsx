@@ -868,6 +868,29 @@ const isLostStage = (name: string) =>
 // `transferredFrom` is resolved inside the component (it needs the live field
 // definitions to find the field's id), so it is passed IN rather than looked up
 // here — the classifier stays a pure function of the record plus that one fact.
+// ITEM #10 — WHICH ROUTE PUT THIS CARD HERE.
+//
+// A reassign hand-off and an ordinary transfer both land in Sent out, and until
+// the reassign path started writing its own tag they were indistinguishable:
+// same destination tag, same note shape.
+//
+// PRESENCE ONLY, never the value. `divisionLabel` collapses "OLTL Enrollment"
+// and "OLTL Transfer" to one division, so a within-division reassign writes
+// `reassigned-from-oltl` beside `transferred-to-oltl` and the tag's "from" half
+// says nothing. Reading only whether ANY such tag exists makes that harmless.
+//
+// The SOURCE comes from the "Transferred From" field instead. One job each:
+// the tag answers "which route", the field answers "from where", and there is
+// no duplicated fact to drift apart.
+//
+// ⚠️ Tags are CONTACT-scoped. A contact reassigned once and transferred later
+// carries the tag for good, so a subsequent plain transfer of that same contact
+// will read as a reassign. Accepted — the existing `transferred-to-` tag has
+// the same limit — and the tooltip says so rather than hiding it.
+const REASSIGN_TAG_PREFIX = "reassigned-from-";
+const wasReassigned = (r: OpportunityRecord): boolean =>
+  r.tags.some((t) => t.toLowerCase().startsWith(REASSIGN_TAG_PREFIX));
+
 const isSentOutRec = (r: OpportunityRecord, hasTransferStamp: boolean) =>
   hasTransferStamp && !!r.ownerId && !isReassignStage(r.stage);
 const isNewLeadRec = (r: OpportunityRecord) =>
@@ -994,12 +1017,18 @@ function MasterCard({
   relBadge,
   canDrag,
   onOpen,
+  from,
 }: {
   r: OpportunityRecord;
   following: boolean;
   relBadge?: string;
   canDrag: boolean;
   onOpen: () => void;
+  // ITEM #10 — the "Transferred From" value, resolved by the parent. This
+  // component is module-level and the field's ID can only be looked up against
+  // the live field definitions, which live in Dashboard's state — so the FACT
+  // is passed in rather than re-derived here.
+  from?: string;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `m:${r.id}`,
@@ -1043,6 +1072,26 @@ function MasterCard({
           </span>
         ) : null}
       </div>
+      {/* ITEM #10 — HOW THIS CARD GOT HERE. A reassign hand-off and an ordinary
+          transfer both end up in Sent out and the card said nothing about which
+          — the two are different events and the receiving team reads them
+          differently ("nobody wanted it" vs "it was given to us").
+          The WORD comes from the contact's reassign tag (presence only); the
+          SOURCE comes from the Transferred From field. Rendered on any card
+          carrying the stamp, not just Sent out ones, because the same question
+          applies wherever a transferred record shows up. */}
+      {from ? (
+        <div
+          className={`mfrom${wasReassigned(r) ? " reassigned" : ""}`}
+          title={
+            wasReassigned(r)
+              ? `Reassigned from ${from} — given up by that division, then claimed here. Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps the tag.`
+              : `Transferred from ${from} — handed straight to a new owner.`
+          }
+        >
+          ← {wasReassigned(r) ? "Reassigned" : "Transferred"} from {from}
+        </div>
+      ) : null}
       <div className="cf">
         {/* 🔴 THE PIPELINE, NOT THE DIVISION. This showed divisionLabel() — "ODP"
             — which was enough when the column WAS the pipeline. With category
@@ -2194,8 +2243,16 @@ export default function Dashboard() {
             </span>
           ) : null}
           {transferredFrom(r) ? (
-            <span className="fromtag" title="Transferred from">
-              ← from {transferredFrom(r)}
+            <span
+              className={`fromtag${wasReassigned(r) ? " reassigned" : ""}`}
+              title={
+                wasReassigned(r)
+                  ? `Reassigned from ${transferredFrom(r)} — given up by that division and claimed here. (Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps it.)`
+                  : `Transferred from ${transferredFrom(r)} — handed directly to a new owner.`
+              }
+            >
+              ← {wasReassigned(r) ? "Reassigned" : "Transferred"} from{" "}
+              {transferredFrom(r)}
             </span>
           ) : null}
           {r.cg && r.cg !== "—" ? (
@@ -3805,6 +3862,7 @@ export default function Dashboard() {
                             relBadge={relBadge(r)}
                             canDrag={canEdit(r)}
                             onOpen={() => setSelId(r.id)}
+                            from={transferredFrom(r)}
                           />
                         ))
                       ) : (

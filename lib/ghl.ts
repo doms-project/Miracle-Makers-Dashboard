@@ -706,6 +706,12 @@ interface RawOpportunity {
     name?: string;
     firstName?: string;
     lastName?: string;
+    // ITEM #10 — GoHighLevel's opportunity search embeds the contact, and its
+    // documented shape includes tags. NOT PREVIOUSLY DECLARED HERE, so nothing
+    // read them. Optional and defensively normalised: if this account's
+    // response omits it, `tags` lands as [] and the card degrades to the
+    // neutral wording instead of claiming a route it cannot know.
+    tags?: unknown;
   };
   customFields?: RawCustomField[];
   // ITEM 2 — when the record last changed stage. GHL's own field name is
@@ -884,6 +890,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   monetaryValue: [],
   cf: [],
   contactId: [],
+  tags: [], // not a custom field — read off the embedded contact
   pipelineId: [],
   pipelineName: [],
   shared: [],
@@ -953,6 +960,9 @@ function normalizeOpportunity(
     monetaryValue: typeof opp.monetaryValue === "number" ? opp.monetaryValue : 0,
     cf: {},
     contactId: opp.contactId || opp.contact?.id || "",
+    tags: Array.isArray(opp.contact?.tags)
+      ? opp.contact.tags.filter((t): t is string => typeof t === "string")
+      : [],
     pipelineId,
     pipelineName: pipelineNameById.get(pipelineId) || "",
     shared: false, // set true later by the access filter for non-home pipelines
