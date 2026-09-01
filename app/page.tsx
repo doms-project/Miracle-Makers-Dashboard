@@ -87,6 +87,44 @@ type SortKey =
   | "cm"
   | "checked";
 
+// ITEM A2 — CAREGIVER COLUMNS. Deliberately NOT the client set: Harmony ID,
+// Office, County, Road Blocker and Case Manager are client concepts and would be
+// blank on every applicant row. Every column below is backed by a field that is
+// native to the opportunity (or already carried for the Master view), so none of
+// them can come back empty for structural reasons.
+//
+// ⬜ SOURCE IS NOT HERE ON PURPOSE. `src` is an opportunity custom field, so it
+// exists on an applicant record, but whether recruiting actually fills it is
+// unverified. A column that is empty on every row is worse than no column — add
+// it once it is confirmed to carry data.
+type CgSortKey = "applicant" | "stage" | "days" | "recruiter" | "pipeline";
+const CG_COLUMNS: { key: CgSortKey; label: string }[] = [
+  { key: "applicant", label: "Applicant" },
+  { key: "stage", label: "Stage" },
+  { key: "days", label: "Days in stage" },
+  { key: "recruiter", label: "Recruiter" },
+  { key: "pipeline", label: "Pipeline" },
+];
+
+// A caregiver record's value for one column, as a display string. Kept separate
+// from the client `recordStr` rather than folded into it: the two column sets
+// share only `stage`, and a shared accessor would invite a client key leaking
+// into an applicant sort menu.
+function cgStr(r: OpportunityRecord, key: string): string {
+  switch (key) {
+    case "applicant":
+      return (r.oppName || `${r.first} ${r.last}`.trim() || "").trim();
+    case "stage":
+      return r.stage;
+    case "recruiter":
+      return r.rep || "Unassigned";
+    case "pipeline":
+      return r.pipelineName;
+    default:
+      return "";
+  }
+}
+
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "client", label: "Client" },
   { key: "stage", label: "Stage" },
@@ -1151,6 +1189,13 @@ export default function Dashboard() {
   const [cgLoaded, setCgLoaded] = useState(false);
   const [cgPipeline, setCgPipeline] = useState<string>("all");
   const [cgQuery, setCgQuery] = useState("");
+  // ITEM A2/A3 — the caregiver section gets the same controls the client
+  // section has, minus the ones that are client concepts (office, county).
+  const [cgView, setCgView] = useState<"list" | "board">("board");
+  const [cgStage, setCgStage] = useState<string | null>(null);
+  const [cgSortKey, setCgSortKey] = useState<string | null>(null);
+  const [cgSortDir, setCgSortDir] = useState<"asc" | "desc">("asc");
+  const [cgGroupKey, setCgGroupKey] = useState<string | null>(null);
   // ITEM 3 — a card dropped on a Master category column, held while its dialog
   // is open.
   //
@@ -2075,6 +2120,30 @@ export default function Dashboard() {
     }
   };
 
+  // ITEM A2 — one applicant row. Days in stage renders NOTHING when GoHighLevel
+  // sent no stage date, rather than "0 days" — a confident claim about a record
+  // whose history we don't have. Same rule the Master card already follows.
+  const renderCgRow = (r: OpportunityRecord) => {
+    const age = daysInStage(r);
+    return (
+      <tr
+        key={r.id}
+        className={r.id === selId ? "sel" : ""}
+        onClick={() => setSelId(r.id)}
+      >
+        <td className="strong">
+          <div className="clientcell">
+            <span className="clname">{cgStr(r, "applicant") || "—"}</span>
+          </div>
+        </td>
+        <td>{r.stage || "—"}</td>
+        <td>{age == null ? "—" : `${age} day${age === 1 ? "" : "s"}`}</td>
+        <td>{r.rep || <span className="muted">Unassigned</span>}</td>
+        <td>{r.pipelineName || "—"}</td>
+      </tr>
+    );
+  };
+
   const renderRow = (r: OpportunityRecord) => (
     <tr
       key={r.id}
@@ -2290,15 +2359,74 @@ export default function Dashboard() {
     [cgStagesByPipeline, cgActivePipeline],
   );
 
-  const cgVisible = useMemo(() => {
+  // Everything EXCEPT the stage filter — the stage chips count against this, so
+  // a chip shows how many it would reveal rather than how many are showing now.
+  // Same rule as the client chips (report 42), for the same reason.
+  const cgPreStage = useMemo(() => {
     const needle = cgQuery.trim().toLowerCase();
     return cgData.filter(
       (r) =>
         r.pipelineId === cgActivePipeline &&
         (needle === "" ||
-          `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
+          // Stage is searchable here as well as the name: with no office or
+          // county to filter on, it is the only other thing worth typing.
+          `${r.oppName} ${r.first} ${r.last} ${r.stage}`
+            .toLowerCase()
+            .includes(needle)),
     );
   }, [cgData, cgActivePipeline, cgQuery]);
+
+  const cgVisible = useMemo(
+    () => (cgStage ? cgPreStage.filter((r) => r.stage === cgStage) : cgPreStage),
+    [cgPreStage, cgStage],
+  );
+
+  // Sorted copy. `days` sorts NUMERICALLY and pushes unknowns last in both
+  // directions — a record whose stage date GoHighLevel never sent is not "0
+  // days", and letting it sort as 0 would put it top of an "oldest first" list.
+  const cgSorted = useMemo(() => {
+    if (!cgSortKey) return cgVisible;
+    const dir = cgSortDir === "asc" ? 1 : -1;
+    return [...cgVisible].sort((a, b) => {
+      if (cgSortKey === "days") {
+        const x = daysInStage(a);
+        const y = daysInStage(b);
+        if (x == null && y == null) return 0;
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return (x - y) * dir;
+      }
+      return cgStr(a, cgSortKey).localeCompare(cgStr(b, cgSortKey)) * dir;
+    });
+  }, [cgVisible, cgSortKey, cgSortDir]);
+
+  const cgGrouped = useMemo(() => {
+    if (!cgGroupKey) return null;
+    const m = new Map<string, OpportunityRecord[]>();
+    for (const r of cgSorted) {
+      const v = cgStr(r, cgGroupKey) || "—";
+      const arr = m.get(v);
+      if (arr) arr.push(r);
+      else m.set(v, [r]);
+    }
+    return [...m.entries()]
+      .map(([value, rows]) => ({ value, rows }))
+      .sort((x, y) => y.rows.length - x.rows.length || x.value.localeCompare(y.value));
+  }, [cgSorted, cgGroupKey]);
+
+  const cgToggleSort = (key: string) => {
+    if (cgSortKey === key) setCgSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setCgSortKey(key);
+      setCgSortDir("asc");
+    }
+  };
+
+  // A stage the chip filter is pinned to can stop existing when the pipeline
+  // changes. Clear it rather than showing an empty board with a chip lit.
+  useEffect(() => {
+    if (cgStage && !cgStages.includes(cgStage)) setCgStage(null);
+  }, [cgStages, cgStage]);
 
   // ITEM 3 — the pipelines a drop on each category may choose between. Derived
   // from the live pipeline NAMES, never hardcoded ids.
@@ -2919,6 +3047,14 @@ export default function Dashboard() {
           {/* ITEM 3 — Add Lead. Beside the tabs, but deliberately NOT one of
               them: it opens a modal you complete and leave, the same shape as
               Move. A tab would imply somewhere to return to. */}
+          {/* ITEM A3 — HIDDEN IN CAREGIVERS. AddClientDialog creates a CLIENT
+              opportunity in a client pipeline. Rendered in the applicant
+              section it invited someone adding a caregiver to file a client
+              record instead — in a pipeline they may not even be able to see.
+              Hidden rather than rewired: adding applicants from here is its own
+              piece of work, and a button that does the wrong thing is worse
+              than no button. */}
+          {railWhere === "caregivers" ? null : (
           <button
             type="button"
             className="addclientbtn"
@@ -2927,18 +3063,35 @@ export default function Dashboard() {
           >
             + Add Lead
           </button>
+          )}
           {/* Replaces refresh-on-focus. ONE request per press, and the person
               looking at the screen decides when — rather than one payload per
               alt-tab, which is what tripped GoHighLevel's rate limit. */}
+          {/* ITEM A1 — SECTION-AWARE. This button used to call load()
+              unconditionally, which fetches /api/opportunities with no
+              ?scope=caregiver: pressed in the Caregivers section it re-read
+              CLIENT records the viewer wasn't even looking at and left the
+              applicants on screen stale. That is why a second Refresh grew
+              inside the caregiver toolbar. Now the one button refreshes
+              whichever section is open, and the second one is gone — so the
+              control keeps one position across every section. */}
           <button
             type="button"
             className="refreshbtn"
-            onClick={() => load()}
-            disabled={loading}
-            title="Re-read everything from GoHighLevel"
+            onClick={() =>
+              railWhere === "caregivers" ? loadCaregivers() : load()
+            }
+            disabled={railWhere === "caregivers" ? cgLoading : loading}
+            title={
+              railWhere === "caregivers"
+                ? "Re-read the applicants from GoHighLevel"
+                : "Re-read everything from GoHighLevel"
+            }
           >
             <IconRefresh />
-            {loading ? "Refreshing…" : "Refresh"}
+            {(railWhere === "caregivers" ? cgLoading : loading)
+              ? "Refreshing…"
+              : "Refresh"}
           </button>
           {/* ITEM 15 — the segmented control is the CLIENT RECORD VIEWS, so it
               shows in the Clients section and nowhere else. Caregivers already
@@ -2946,6 +3099,32 @@ export default function Dashboard() {
               none of List / Board / Master / Resources describes what is on
               screen there, and a control left up with nothing selected reads as
               broken. The rail is the way back. */}
+          {/* ITEM A2 — the applicant section gets its own two-button switch, in
+              the SAME position as the client one. Only List and Board: Master
+              sorts on New lead / Reassign / Sent out / Enrollment / Transfer,
+              which are client-work categories, and lib/ghl.ts:527 already
+              records that a caregiver pipeline cannot be reassigned into.
+              Resources is not per-section. */}
+          {railWhere === "caregivers" ? (
+            <div className="seg">
+              <button
+                className={cgView === "list" ? "on" : ""}
+                onClick={() => setCgView("list")}
+                type="button"
+              >
+                <IconList />
+                List
+              </button>
+              <button
+                className={cgView === "board" ? "on" : ""}
+                onClick={() => setCgView("board")}
+                type="button"
+              >
+                <IconBoard />
+                Board
+              </button>
+            </div>
+          ) : null}
           {railWhere === "clients" ? (
           <div className="seg">
             <button
@@ -3338,19 +3517,78 @@ export default function Dashboard() {
                     </select>
                   </div>
                 ) : null}
+                {/* ITEM A3 — sort and group, the same controls the client
+                    section has. Office and county are deliberately NOT here:
+                    both are client custom fields and would offer an applicant
+                    a dimension every row is blank on. */}
+                <div className="officefilter">
+                  <label htmlFor="cgSortSel">Sort</label>
+                  <select
+                    id="cgSortSel"
+                    value={cgSortKey || ""}
+                    onChange={(e) => setCgSortKey(e.target.value || null)}
+                  >
+                    <option value="">Default order</option>
+                    {CG_COLUMNS.map((c) => (
+                      <option key={c.key} value={c.key}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  className="dirbtn"
+                  onClick={() =>
+                    setCgSortDir((d) => (d === "asc" ? "desc" : "asc"))
+                  }
+                  disabled={!cgSortKey}
+                  title={cgSortDir === "asc" ? "Ascending" : "Descending"}
+                >
+                  {cgSortDir === "asc" ? "▲" : "▼"}
+                </button>
+                <div className="officefilter">
+                  <label htmlFor="cgGroupSel">Group</label>
+                  <select
+                    id="cgGroupSel"
+                    value={cgGroupKey || ""}
+                    onChange={(e) => setCgGroupKey(e.target.value || null)}
+                  >
+                    <option value="">No grouping</option>
+                    <option value="stage">Stage</option>
+                    <option value="recruiter">Recruiter</option>
+                    <option value="pipeline">Pipeline</option>
+                  </select>
+                </div>
                 <span className="count">
                   {cgVisible.length} applicant
                   {cgVisible.length === 1 ? "" : "s"}
                 </span>
+              </div>
+              {/* ITEM A3 — STAGE CHIPS. Counted against `cgPreStage` (everything
+                  but the stage filter itself), so a chip says how many it would
+                  reveal, not how many are showing now. */}
+              <div className="chips">
                 <button
+                  className={`chip ${cgStage === null ? "on" : ""}`}
+                  onClick={() => setCgStage(null)}
                   type="button"
-                  className="refreshbtn"
-                  onClick={() => loadCaregivers()}
-                  disabled={cgLoading}
                 >
-                  <IconRefresh />
-                  Refresh
+                  All<span className="n">{cgPreStage.length}</span>
                 </button>
+                {cgStages.map((st) => (
+                  <button
+                    key={st}
+                    className={`chip ${cgStage === st ? "on" : ""}`}
+                    onClick={() => setCgStage(st)}
+                    type="button"
+                  >
+                    {st}
+                    <span className="n">
+                      {cgPreStage.filter((r) => r.stage === st).length}
+                    </span>
+                  </button>
+                ))}
               </div>
               {/* ⬜ Said on screen, not just in a report: the caregiver custom
                   fields don't exist yet, so opening a record shows the native
@@ -3361,8 +3599,55 @@ export default function Dashboard() {
                 haven&apos;t been created in GoHighLevel yet, so a record shows
                 its stage, owner and notes only.
               </div>
+              {cgView === "list" ? (
+                <div className="scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        {CG_COLUMNS.map((c) => (
+                          <th
+                            key={c.key}
+                            className={`sortable ${cgSortKey === c.key ? "sorted" : ""}`}
+                            onClick={() => cgToggleSort(c.key)}
+                            title={`Sort by ${c.label}`}
+                          >
+                            {c.label}
+                            <span className="sortcaret">
+                              {cgSortKey === c.key
+                                ? cgSortDir === "asc"
+                                  ? "▲"
+                                  : "▼"
+                                : "↕"}
+                            </span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cgGrouped
+                        ? cgGrouped.map((g) => (
+                            <Fragment key={g.value}>
+                              <tr className="grouprow">
+                                <td colSpan={CG_COLUMNS.length}>
+                                  <span className="gvalue">{g.value}</span>
+                                  <span className="gcount">{g.rows.length}</span>
+                                </td>
+                              </tr>
+                              {g.rows.map((r) => renderCgRow(r))}
+                            </Fragment>
+                          ))
+                        : cgSorted.map((r) => renderCgRow(r))}
+                    </tbody>
+                  </table>
+                  {cgVisible.length === 0 ? (
+                    <div className="empty">No applicants match this filter.</div>
+                  ) : null}
+                </div>
+              ) : (
               <div className="board">
-                {cgStages.map((st) => {
+                {cgStages
+                  .filter((st) => !cgStage || st === cgStage)
+                  .map((st) => {
                   const inCol = cgVisible.filter((r) => r.stage === st);
                   return (
                     <BoardColumn key={st} stage={st} count={inCol.length}>
@@ -3389,6 +3674,7 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              )}
             </>
           )
         ) : view === "access" ? (
@@ -3597,6 +3883,22 @@ export default function Dashboard() {
                 >
                   + New folder
                 </button>
+              ) : null}
+              {/* ITEM B — ORGANISATION, NOT SECURITY. Said on screen because an
+                  admin who sees per-folder access grants will otherwise assume
+                  they protect the file. They do not: a GoHighLevel media URL is
+                  reachable by ANYONE holding it, so a grant scopes what people
+                  see LISTED here, not what they can open. Anything that must
+                  not be readable by an outsider does not belong in the media
+                  library at all. */}
+              {isAdminViewer ? (
+                <span
+                  className="reswarn"
+                  title="A GoHighLevel media link works for anyone who has it, signed in or not. Folder access controls what is listed here, not who can open a file."
+                >
+                  Folder access controls what is <b>listed</b> here — a
+                  GoHighLevel file link still opens for anyone who has it.
+                </span>
               ) : null}
               {isAdminViewer ? (
                 <label className={`resupload ${uploading ? "busy" : ""}`}>
