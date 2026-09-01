@@ -2804,6 +2804,16 @@ export default function Dashboard() {
     </div>
   );
 
+  // ITEM 15 — WHERE THE RAIL SAYS YOU ARE. The rail used to answer exactly one
+  // question ("Clients or Caregivers?"), so "not caregivers" was a good enough
+  // test for Clients. Now that Import and Access live there too, that same test
+  // would light Clients up while you are standing in Access. The answer is
+  // derived once, here, and every rail button reads it.
+  const railWhere: "clients" | "caregivers" | "import" | "access" =
+    view === "caregivers" || view === "import" || view === "access"
+      ? view
+      : "clients";
+
   return (
     <div className="app">
       <nav className="rail">
@@ -2815,7 +2825,7 @@ export default function Dashboard() {
             the separation obvious to the person using it, not just true in the
             data. */}
         <button
-          className={view === "caregivers" ? "railsec" : "railsec active"}
+          className={railWhere === "clients" ? "railsec active" : "railsec"}
           title="Client enrolments"
           type="button"
           onClick={() => setView("board")}
@@ -2824,7 +2834,7 @@ export default function Dashboard() {
           <span>Clients</span>
         </button>
         <button
-          className={view === "caregivers" ? "railsec active" : "railsec"}
+          className={railWhere === "caregivers" ? "railsec active" : "railsec"}
           title="Caregiver and DSP applicants"
           type="button"
           onClick={() => setView("caregivers")}
@@ -2832,6 +2842,44 @@ export default function Dashboard() {
           <IconPeople />
           <span>Caregivers</span>
         </button>
+        {/* ITEM 15 — ADMIN ACTIONS. Import and Access used to sit in the top
+            segmented control beside List / Board / Master / Resources, which
+            said they were ways of LOOKING at records. They are not: one WRITES
+            new records into GoHighLevel, the other decides who may see a
+            pipeline at all. Neither is a lens on the list, and neither belongs
+            to the Clients section it was filed under. They move to the rail —
+            below the sections and separated from them — because the rail is
+            already where this app answers "where am I", and an admin action is
+            somewhere you go rather than a view you switch to.
+
+            Hiding them from non-admins is still convenience, NOT the boundary:
+            /api/import, /api/import/meta and /api/admin/pipeline-access each
+            re-derive the role from the SSO blob server-side (isAdminSession)
+            and answer 403 otherwise. This move does not touch that. */}
+        {isAdminViewer && (
+          <>
+            <div className="raildiv" aria-hidden="true" />
+            <div className="raillabel">Admin</div>
+            <button
+              className={railWhere === "import" ? "railsec active" : "railsec"}
+              title="Bulk import records from a spreadsheet"
+              type="button"
+              onClick={() => setView("import")}
+            >
+              <IconUpload />
+              <span>Import</span>
+            </button>
+            <button
+              className={railWhere === "access" ? "railsec active" : "railsec"}
+              title="Who may see which pipeline"
+              type="button"
+              onClick={() => setView("access")}
+            >
+              <IconKey />
+              <span>Access</span>
+            </button>
+          </>
+        )}
         <div
           className="railnote"
           title="Embedded inside GoHighLevel. Contacts, comms and settings stay in native GHL."
@@ -2892,7 +2940,13 @@ export default function Dashboard() {
             <IconRefresh />
             {loading ? "Refreshing…" : "Refresh"}
           </button>
-          {view === "caregivers" ? null : (
+          {/* ITEM 15 — the segmented control is the CLIENT RECORD VIEWS, so it
+              shows in the Clients section and nowhere else. Caregivers already
+              hid it; Import and Access now do the same, for the same reason —
+              none of List / Board / Master / Resources describes what is on
+              screen there, and a control left up with nothing selected reads as
+              broken. The rail is the way back. */}
+          {railWhere === "clients" ? (
           <div className="seg">
             <button
               className={view === "list" ? "on" : ""}
@@ -2934,28 +2988,8 @@ export default function Dashboard() {
               <IconDoc />
               Resources
             </button>
-            {isAdminViewer && (
-              <button
-                className={view === "import" ? "on" : ""}
-                onClick={() => setView("import")}
-                type="button"
-              >
-                <IconUpload />
-                Import
-              </button>
-            )}
-            {isAdminViewer && (
-              <button
-                className={view === "access" ? "on" : ""}
-                onClick={() => setView("access")}
-                type="button"
-              >
-                <IconKey />
-                Access
-              </button>
-            )}
           </div>
-          )}
+          ) : null}
         </div>
 
         {/* Opportunity controls — LIST and BOARD only.
