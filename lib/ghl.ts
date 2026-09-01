@@ -3687,7 +3687,17 @@ export interface ContactFieldsRead {
   contactId: string;
   /** fieldId -> raw stored value. Codes, never labels — see the note below. */
   values: Record<string, unknown>;
-  /** GHL's updatedAt, for the same optimistic-concurrency check writes use. */
+  /**
+   * 🔴 GHL's `dateUpdated` — CONTACTS DO NOT HAVE `updatedAt` AT ALL.
+   *
+   * VERIFIED LIVE: `"dateUpdated": "2026-09-01T14:39:06.979Z"`, with no
+   * `updatedAt` key in the response. Opportunities are the other way round
+   * (normalizeOpportunity reads `updatedAt` first), so a guard written against
+   * the opportunity spelling finds NOTHING on a contact — and `isStale()`
+   * treats a missing stored version as "go ahead". The concurrency check would
+   * then silently no-op: precisely the failure it exists to prevent, with no
+   * error to notice. Read `dateUpdated` FIRST and keep it that way.
+   */
   version: string;
 }
 
@@ -3712,8 +3722,9 @@ export async function getContactCustomFields(
     for (const f of raw as Record<string, unknown>[]) {
       const id = String(f.id ?? f.customFieldId ?? "");
       if (!id) continue;
-      // GHL returns the value under a few keys depending on the field type.
-      // `field_value` is the documented one; the others are seen in the wild.
+      // ✅ `value` FIRST — that is what a CONTACT returns (verified live). The
+      // rest are tolerated fallbacks for field types seen to differ; do not
+      // reorder them to match the opportunity path.
       values[id] = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
     }
   }
@@ -3761,6 +3772,16 @@ export async function updateContactCustomFields(
   await ghlSend(
     "PUT",
     `/contacts/${encodeURIComponent(contactId)}`,
-    { customFields: entries.map((e) => ({ id: e.id, field_value: e.value })) },
+    // 🔴 `value`, NOT `field_value`. VERIFIED LIVE: contacts speak
+    // { id, value }; opportunities speak { id, field_value }. This originally
+    // sent the OPPORTUNITY spelling — the exact "assume the shapes match"
+    // mistake. The read side below was already `value`-first; the write was not.
+    //
+    // ✅ VERIFIED LIVE: a PARTIAL customFields array UPDATES, it does not
+    // replace. Writing one field left Record Type (and every other unlisted
+    // field) intact. So the panel sends ONLY the field that changed — no
+    // read-modify-write, and no risk of a stale read blanking a field someone
+    // else set in between.
+    { customFields: entries.map((e) => ({ id: e.id, value: e.value })) },
   );
 }

@@ -131,6 +131,35 @@ export async function PATCH(
     // contact reached from two different opportunity panels is exactly the
     // concurrent case this guards: two people on two cases, one shared person.
     const before = await getContactCustomFields(g.contactId);
+
+    // 🔴 FAILS CLOSED HERE, unlike the opportunity path — on purpose.
+    //
+    // `isStale()` treats a MISSING stored version as "go ahead", which is right
+    // for opportunities: GoHighLevel does not always send one, and refusing
+    // every write over an absent field would be worse than the last-write-wins
+    // behaviour that came before it.
+    //
+    // Contacts are different: `dateUpdated` is VERIFIED ALWAYS PRESENT on this
+    // account. So an empty version here does not mean "GHL didn't send one", it
+    // means the response shape has changed under us — and quietly proceeding
+    // would be the silent no-op this check exists to prevent. If the caller
+    // asked for the check, and we cannot perform it, say so instead of pretending.
+    if (body.expectedVersion && !before.version) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[version] contact-fields PATCH on ${g.contactId}: caller sent expectedVersion but the contact read returned NO dateUpdated. The concurrency check could not run — refusing rather than writing blind. Check the /contacts/{id} response shape.`,
+      );
+      return NextResponse.json(
+        {
+          error: "Couldn't confirm nobody else changed this person in the meantime. Reopen the record and try again.",
+          detail:
+            "The contact came back without a dateUpdated timestamp, so the concurrency check could not run.",
+          status: 409,
+        } as ApiError,
+        { status: 409 },
+      );
+    }
+
     const conflict = versionGuard(
       { id: g.contactId, version: before.version },
       body.expectedVersion,
