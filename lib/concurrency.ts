@@ -108,3 +108,48 @@ export function versionGuard(
   );
   return conflictResponse({ expected: expected || "", actual: stored || "" });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PARALLEL FETCH WITH A CAP.
+//
+// ⚠️ Different sense of "concurrency" from the rest of this file, which is about
+// OPTIMISTIC concurrency (version checks on writes). Both live here because the
+// caller was told to look here for it; they share nothing but the word.
+//
+// Why a cap at all: GoHighLevel allows 100 requests per 10 seconds. Firing an
+// unbounded wave is how you turn a slow load into a 429 — the failure this
+// project has spent two rounds removing. `limit` is the promise that we never
+// widen faster than the budget allows.
+//
+// SETTLED, NOT ALL-OR-NOTHING. `Promise.all` rejects on the first failure and
+// abandons the rest, so one pipeline timing out would lose the four that
+// succeeded. Each result is returned tagged instead, and the caller decides.
+export type Settled<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown };
+
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<Settled<R>[]> {
+  const out: Settled<R>[] = new Array(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: width }, async () => {
+      // Each worker pulls the next index until the queue is empty, so a single
+      // slow item never blocks the others behind a fixed chunk boundary.
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        try {
+          out[i] = { ok: true, value: await fn(items[i], i) };
+        } catch (error) {
+          out[i] = { ok: false, error };
+        }
+      }
+    }),
+  );
+  return out;
+}

@@ -162,6 +162,9 @@ export interface Viewer {
 
 export interface OpportunitiesResponse {
   records: OpportunityRecord[];
+  // A pipeline whose fetch failed. Its records are ABSENT from `records`, and
+  // that is indistinguishable from "this pipeline is empty" unless we say so.
+  failedPipelines?: { id: string; name: string; error: string }[];
   pipeline: { id: string; name: string } | null; // legacy single-pipeline summary (v2: null)
   count: number;
   viewer?: Viewer;

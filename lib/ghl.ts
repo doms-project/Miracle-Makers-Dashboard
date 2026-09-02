@@ -6,6 +6,7 @@ import type {
 import { isFieldEditable } from "./editable";
 import { PIPELINE_FOLDERS } from "./fieldFolders";
 import { divisionLabel } from "./division";
+import { mapLimit } from "./concurrency";
 
 // Account-specific — MUST come from env (re-derive per account with
 // scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
@@ -1143,6 +1144,9 @@ export async function getOltlOpportunities(
   scope: PipelineScope = "client",
 ): Promise<{
   records: OpportunityRecord[];
+  // A pipeline whose fetch failed. Its records are ABSENT from `records`, and
+  // that is indistinguishable from "this pipeline is empty" unless we say so.
+  failedPipelines?: { id: string; name: string; error: string }[];
   pipeline: { id: string; name: string } | null;
   pipelines: { id: string; name: string }[];
   stages: { id: string; name: string }[];
@@ -1178,18 +1182,50 @@ export async function getOltlOpportunities(
     getEditableFieldDefs(),
   ]);
 
-  // Fetch each pipeline's opportunities SEQUENTIALLY to stay well under GHL's
-  // 100-req/10s burst limit. Budget: ceil(records/100) pages per pipeline. Even
-  // the largest observed (OLTL Transfer, 100+ ≈ 2 pages) across five pipelines
-  // plus the three shared lookups totals ~10-15 requests — comfortably safe.
+  // PARALLEL, CAPPED. This ran SEQUENTIALLY — `for (const p of selected) await
+  // searchAll(p.id)` — so the load's wall-clock was the SUM of five round trips
+  // plus their pages, one waiting on the last for no reason. The request COUNT
+  // is unchanged (5-10 pages either way, ~8-13 for the whole load); they simply
+  // stop queueing behind each other. That is "wait less", never "retry more".
+  //
+  // The cap is the point: 100 requests per 10 seconds is the budget, and an
+  // unbounded wave is how a slow load becomes a 429.
+  //
+  // 🔴 ONE PIPELINE FAILING MUST NOT FAIL THE LOAD. mapLimit returns settled
+  // results rather than rejecting, so a pipeline that times out costs its own
+  // records and nothing else.
+  //
+  // ⚠️ BUT IT MUST NOT BE SILENT EITHER. A dropped pipeline looks exactly like
+  // an empty one, and a rep seeing their division empty concludes there is no
+  // work rather than that the load half-failed. The names come back in
+  // `failedPipelines` so the UI can say which.
+  //
+  // The 401 "Command timed out" retry lives in ghlGet (report 47) and still
+  // applies per request — GoHighLevel returns 401 for its OWN timeouts, so that
+  // one retry happens beneath this and usually means nothing lands here at all.
+  const PIPELINE_CONCURRENCY = 5;
+  const settled = await mapLimit(selected, PIPELINE_CONCURRENCY, (p) =>
+    searchAll(p.id),
+  );
   const raw: RawOpportunity[] = [];
-  for (const p of selected) {
-    const batch = await searchAll(p.id);
+  const failedPipelines: { id: string; name: string; error: string }[] = [];
+  settled.forEach((res, i) => {
+    const p = selected[i];
+    if (!res.ok) {
+      const msg = res.error instanceof Error ? res.error.message : String(res.error);
+      // eslint-disable-next-line no-console
+      console.error(
+        `[load] pipeline "${p.name}" (${p.id}) FAILED — its records are missing from this payload; the other ${selected.length - 1} are unaffected:`,
+        msg,
+      );
+      failedPipelines.push({ id: p.id, name: p.name, error: msg.slice(0, 200) });
+      return;
+    }
     // GHL returns pipelineId on each opp; stamp it as a fallback so stage +
     // pipeline resolution is never ambiguous.
-    for (const o of batch) if (!o.pipelineId) o.pipelineId = p.id;
-    raw.push(...batch);
-  }
+    for (const o of res.value) if (!o.pipelineId) o.pipelineId = p.id;
+    raw.push(...res.value);
+  });
 
   const records = raw.map((o) =>
     normalizeOpportunity(o, fieldMap, userMap, stageNameByKey, pipelineNameById),
@@ -1205,6 +1241,7 @@ export async function getOltlOpportunities(
     stagesByPipeline,
     users,
     fieldDefs,
+    failedPipelines,
   };
 }
 
