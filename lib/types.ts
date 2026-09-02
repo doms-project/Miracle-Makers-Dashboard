@@ -40,6 +40,16 @@ export interface OpportunityRecord {
   //
   // [] when GoHighLevel's opportunity search sends no contact tags. The card
   // then falls back to the neutral wording rather than guessing.
+  // ITEM 1 — the contact's NATIVE name/phone/email, carried through so the panel
+  // can say how to reach the person. NOT custom fields and NOT in any folder, so
+  // CONTACT_FOLDERS never sees them; they get their own block at the top.
+  //
+  // ⚠️ NO EXTRA GHL CALL. These already ride along in the opportunity search's
+  // embedded `contact` object — the same object `tags` came from. They were
+  // simply never declared, so nothing read them.
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
   tags: string[];
   contactId: string; // linked contact — notes are stored on the contact
   // Multi-pipeline (v2). A record now belongs to one of several pipelines.

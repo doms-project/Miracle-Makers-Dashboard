@@ -561,10 +561,21 @@ function FieldControl({
             input went. Name-driven: rename the field in GHL to drop "and Time"
             and this disappears by itself. */}
         {nameImpliesTime(def.name) ? (
-          <div className="datewarn">
-            Date only — GoHighLevel can&apos;t store a time on this field. Record
-            the time in a note.
-          </div>
+          {/* ITEM 2 — the helper text is GONE because the FIELDS WERE RENAMED:
+                  "AAA/MCO In Person Date and Time" -> "AAA/MCO In Person Date".
+                  The name no longer promises a time, so explaining its absence
+                  only drew attention to it.
+
+                  ⚠️ RESOLUTION IS BY NAME and picks the new names up with no
+                  code change. The GHL KEYS are unchanged on rename
+                  (opportunity.aaa_in_person_date_and_time) — do not "tidy" them
+                  to match, and do not resolve by key.
+
+                  🔴 DO NOT RETRY STORING A TIME HERE. GoHighLevel cannot do it:
+                  "Contact Custom fields do not support the Date Time structure"
+                  — stated across three of their support articles and open on
+                  their feature board for 2-3 years. The client has decided date
+                  alone is enough; there are NO companion time fields. */}
         ) : null}
       </>
     );
@@ -3464,8 +3475,20 @@ export default function Dashboard() {
   // test for Clients. Now that Import and Access live there too, that same test
   // would light Clients up while you are standing in Access. The answer is
   // derived once, here, and every rail button reads it.
-  const railWhere: "clients" | "caregivers" | "import" | "access" =
-    view === "caregivers" || view === "import" || view === "access"
+  const railWhere:
+    | "clients"
+    | "caregivers"
+    | "master"
+    | "import"
+    | "access" =
+    view === "caregivers" ||
+    view === "import" ||
+    view === "access" ||
+    // ITEM 3 — Master is a CROSS-PIPELINE LENS, not another way of looking at
+    // one pipeline's records, and it is the only entry in that row with its own
+    // Access-tab grant. That makes it a place you go, like Caregivers — so it
+    // belongs on the rail, not beside List / Board.
+    view === "master"
       ? view
       : "clients";
 
@@ -3497,6 +3520,22 @@ export default function Dashboard() {
           <IconPeople />
           <span>Caregivers</span>
         </button>
+        {/* ITEM 3 — gated on the SAME server-decided grant the tab used
+            (`canSeeMaster`, re-derived on every payload), so someone without
+            master access simply has no rail entry. Hiding it is convenience,
+            not the boundary: the view only re-arranges records the server has
+            already decided to send. */}
+        {canSeeMaster && (
+          <button
+            className={railWhere === "master" ? "railsec active" : "railsec"}
+            title="Every pipeline you can access, side by side"
+            type="button"
+            onClick={() => setView("master")}
+          >
+            <IconMaster />
+            <span>Master</span>
+          </button>
+        )}
         {/* ITEM 15 — ADMIN ACTIONS. Import and Access used to sit in the top
             segmented control beside List / Board / Master / Resources, which
             said they were ways of LOOKING at records. They are not: one WRITES
@@ -3688,17 +3727,6 @@ export default function Dashboard() {
                 every payload; hiding the tab is convenience, not the boundary
                 (there is nothing to gate here — the view re-arranges records
                 the server already sent). */}
-            {canSeeMaster && (
-              <button
-                className={view === "master" ? "on" : ""}
-                onClick={() => setView("master")}
-                type="button"
-                title="Every pipeline you can access, side by side"
-              >
-                <IconMaster />
-                Master
-              </button>
-            )}
             <button
               className={view === "resources" ? "on" : ""}
               onClick={() => setView("resources")}
@@ -4974,6 +5002,46 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="pbody">
+              {/* ITEM 1 — HOW TO REACH THIS PERSON. First thing on the panel and
+                  NOT collapsible: a record panel that cannot tell you the
+                  phone number has failed at its basic job.
+                  Applies to CLIENTS TOO — a client's phone and email are on the
+                  contact as well, and the panel showed neither.
+                  ⚠️ Native contact fields, so they belong to no folder and
+                  CONTACT_FOLDERS never carries them. They already arrive with
+                  the opportunity search, so this costs NO extra GHL call.
+                  ⚠️ The NAME shown here is the CONTACT's. On a client record the
+                  Client First/Last Name CUSTOM fields can disagree with it —
+                  see the report; the contact is authoritative for reaching
+                  someone, which is what this block is for. */}
+              {(selected.contactName ||
+                selected.contactPhone ||
+                selected.contactEmail) ? (
+                <div className="contactbar">
+                  <div className="cbname">
+                    {selected.contactName || "No name on the contact"}
+                  </div>
+                  <div className="cbrow">
+                    {selected.contactPhone ? (
+                      <a
+                        className="cbitem"
+                        href={`tel:${selected.contactPhone.replace(/[^\d+]/g, "")}`}
+                      >
+                        {selected.contactPhone}
+                      </a>
+                    ) : (
+                      <span className="cbitem none">No phone</span>
+                    )}
+                    {selected.contactEmail ? (
+                      <a className="cbitem" href={`mailto:${selected.contactEmail}`}>
+                        {selected.contactEmail}
+                      </a>
+                    ) : (
+                      <span className="cbitem none">No email</span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
               <div className="editbanner">
                 Edits save to GoHighLevel instantly. External IDs and the
                 compliance field are read-only.
