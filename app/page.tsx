@@ -1292,6 +1292,19 @@ export default function Dashboard() {
   } | null>(null);
   // Why a drop was refused (New lead), shown briefly instead of nothing.
   const [dropRefused, setDropRefused] = useState<string | null>(null);
+  // 🔴 WHICH RECORD A DRAG LAST TRIED TO SAVE.
+  //
+  // A failed drag save reverted the card and said NOTHING: `saveMsgFor` is only
+  // rendered inside the record panel, and `dropRefused` belongs to the Master
+  // board. So on either kanban a save could fail and all you saw was the card
+  // going back where it came from — which is indistinguishable from "the drop
+  // didn't take" and is precisely why the caregiver snap-back stayed invisible
+  // for three rounds of diagnosis.
+  //
+  // Reuses the existing saveState plumbing rather than adding a second error
+  // channel: the error is already recorded under skey(id,"stage"); all that was
+  // missing was somewhere on the board to show it.
+  const [dragSaveId, setDragSaveId] = useState<string | null>(null);
   // Resources tab (folder-scoped GHL media).
   const [resources, setResources] = useState<ResFile[]>([]);
   // ITEM 6c — one section per folder this viewer may see. `resources` above is
@@ -3094,6 +3107,7 @@ export default function Dashboard() {
     // list would happily hand back another pipeline's id.
     const target = stagesFor(rec.pipelineId).find((s) => s.name === targetStage);
     if (!target) return;
+    setDragSaveId(rec.id);
     // Reuse the proven save path: optimistic move + PATCH (pipelineStageId) +
     // revert-on-error. Save by stage ID, never name.
     saveField(
@@ -3125,6 +3139,7 @@ export default function Dashboard() {
     // even though the client map has never heard of its pipeline.
     const target = stagesFor(rec.pipelineId).find((st) => st.name === targetStage);
     if (!target) return;
+    setDragSaveId(rec.id);
     saveField(
       rec,
       "stage",
@@ -3224,6 +3239,24 @@ export default function Dashboard() {
     stages,
     boardVisible,
   ]);
+
+  // The banner a kanban shows when the last drag's save failed. Names the record
+  // and carries the REAL error, so a revert can never again look like nothing
+  // happened.
+  const dragSaveErr = (): ReactNode => {
+    if (!dragSaveId) return null;
+    const st = saveState[skey(dragSaveId, "stage")];
+    if (st?.status !== "error") return null;
+    const rec =
+      data.find((r) => r.id === dragSaveId) ||
+      cgData.find((r) => r.id === dragSaveId);
+    return (
+      <div className="mnote refused">
+        ✗ <b>{rec?.oppName || "That card"}</b> could not be moved — it has been
+        put back. <ErrorMessage error={st.err ?? "Save failed"} />
+      </div>
+    );
+  };
 
   const saveMsgFor = (id: string, fk: string): ReactNode => {
     const s = saveState[skey(id, fk)];
@@ -3735,7 +3768,7 @@ export default function Dashboard() {
                 type="button"
               >
                 <IconBoard />
-                Board
+                Kanban
               </button>
               {/* ITEM 3 — the SAME Resources tab, reachable from here too. Not a
                   caregiver file browser: one component, one folder list, one set
@@ -3768,7 +3801,7 @@ export default function Dashboard() {
               type="button"
             >
               <IconBoard />
-              Board
+              Kanban
             </button>
             {/* ITEM 4 — shown only to viewers the server GRANTED it to. The
                 grant is decided in the Access tab and re-derived server-side on
@@ -4324,11 +4357,14 @@ export default function Dashboard() {
                   ) : null}
                 </div>
               ) : (
-              // Drag-and-drop, same as the client board: stage change WITHIN one
-              // pipeline. There is no cross-pipeline move here and there must not
-              // be — an applicant does not move between PP Caregiver Applicants
-              // and ODP DSP Applicant (report 57), so the columns are the only
-              // drop targets, and Move is hidden on these records.
+              <>
+              {dragSaveErr()}
+              {/* Drag-and-drop, same as the client board: stage change WITHIN one
+                  pipeline. There is no cross-pipeline move here and there must
+                  not be — an applicant does not move between PP Caregiver
+                  Applicants and ODP DSP Applicant (report 57), so the columns
+                  are the only drop targets, and Move is hidden on these
+                  records. */}
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCorners}
@@ -4390,6 +4426,7 @@ export default function Dashboard() {
                 })()}
               </DragOverlay>
               </DndContext>
+              </>
               )}
             </>
           )
@@ -4646,12 +4683,13 @@ export default function Dashboard() {
                 it becomes a trap as the LANDING view: someone whose only records
                 are shared with them lands on columns with nothing in them and no
                 clue that their records exist one tab away. Say so. */}
+            {dragSaveErr()}
             {boardVisible.length === 0 && data.length > 0 ? (
               <div className="empty boardhint">
                 <b>Nothing in your own pipelines</b>
                 <br />
                 You have {data.length} record{data.length === 1 ? "" : "s"}{" "}
-                shared with you or owned in another division. The board shows
+                shared with you or owned in another division. The kanban shows
                 only your own division&apos;s work —{" "}
                 <button
                   type="button"
