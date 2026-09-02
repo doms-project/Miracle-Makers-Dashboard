@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getOpportunityById,
+  invalidateOpportunity,
   moveOpportunity,
   explainGhlError,
   GhlError,
@@ -225,6 +226,12 @@ async function postHandler(
       );
     }
 
+    // 🔴 SAME TRAP AS THE PATCH ROUTE. `target` above cached this record's
+    // PRE-MOVE state, and the move completes well inside the 3s burst window —
+    // so without this evict, the "fresh record" below would be the record as it
+    // was before the transfer, and every caller downstream (the webhook payload
+    // included) would be told the move had not happened.
+    invalidateOpportunity(id);
     const record = await getOpportunityById(id);
 
     // ITEM 5 — ONE event for what GoHighLevel sees as several unrelated writes.

@@ -419,7 +419,11 @@ export async function updateOpportunity(
   body: Record<string, unknown>,
 ): Promise<OpportunityRecord | null> {
   await ghlSend("PUT", `/opportunities/${encodeURIComponent(id)}`, body);
-  return getOpportunityById(id);
+  // 🔴 EVICT FIRST, THEN READ UNCACHED. Both are needed: evicting alone would
+  // still let a concurrent caller re-populate the entry from a read that
+  // started before the write landed. See the note on oppBurst above.
+  invalidateOpportunity(id);
+  return getOpportunityByIdUncached(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,6 +1602,29 @@ export async function getRawNote(
 // one user action, not a cache of record state. Anything longer would risk a
 // permission decision made against a stale owner, which is the one thing this
 // read must never get wrong.
+//
+// 🔴 AND IT MUST BE INVALIDATED ON WRITE. This is the bug it caused in v59-v61,
+// which is worth spelling out because the shape is easy to reintroduce:
+//
+//   1. PATCH /api/opportunities/{id} reads the record to check permission
+//      -> caches the PRE-WRITE record at T0
+//   2. it writes (PUT), which takes a few hundred ms
+//   3. updateOpportunity re-reads to return "the fresh record"
+//      -> still inside the 3s window, so it gets the CACHED PRE-WRITE record
+//   4. the route answers {ok:true, record:<pre-write>} and the client, doing
+//      exactly the right thing, replaces its correct optimistic update with
+//      that stale record
+//
+// The card snaps back to its old stage, the write HAS landed in GoHighLevel,
+// and a reload shows the new value. Not a race — deterministic, because a write
+// always completes well inside 3 seconds.
+//
+// It hit every write on both boards, not just caregivers; it only LOOKED like a
+// caregiver drag bug because v59-v61 shipped together, so the dedupe and the
+// caregiver board went live in the same deploy.
+//
+// `invalidateOpportunity` is therefore not optional bookkeeping — any write to
+// an opportunity MUST call it before re-reading.
 const oppBurst = new Map<string, { at: number; p: Promise<OpportunityRecord | null> }>();
 const OPP_BURST_MS = 3000;
 
@@ -1615,6 +1642,14 @@ export async function getOpportunityById(
     for (const [k, v] of oppBurst) if (v.at < cutoff) oppBurst.delete(k);
   }
   return p;
+}
+
+/**
+ * Drop the burst entry for one opportunity. MUST be called by anything that
+ * writes to that opportunity, before it re-reads — see the note above.
+ */
+export function invalidateOpportunity(id: string): void {
+  oppBurst.delete(id);
 }
 
 async function getOpportunityByIdUncached(
