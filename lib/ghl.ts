@@ -1666,9 +1666,27 @@ async function getOpportunityByIdUncached(
   }
   const opp = data.opportunity;
   if (!opp) return null;
-  // Build the composite stage map + pipeline-name lookup across all selected
-  // pipelines, so this single opp resolves its stage name by pipelineId+stageId.
-  const selected = await getSelectedPipelines();
+  // 🔴 EVERY PIPELINE ON THE LOCATION, not `getSelectedPipelines()`.
+  //
+  // That helper defaults to scope "client", so this map only ever held the five
+  // CLIENT pipelines. A CAREGIVER record read by id therefore resolved NEITHER
+  // its stage name NOR its pipeline name:
+  //
+  //     rec.stage = stageNameByKey.get(stageKey(pipelineId, stageId)) || ""
+  //                                                                     ^^ ""
+  //
+  // This function is what the PATCH route returns as "the fresh record" after a
+  // write. So a caregiver drag wrote correctly, then handed the client back a
+  // record with an EMPTY stage — the card matched no column and vanished, which
+  // reads exactly like "it snapped back". A reload fixed it because
+  // loadCaregivers() fetches with scope=caregiver, where the stages do resolve.
+  //
+  // Reading by ID is inherently scope-free: the caller has an opportunity id and
+  // no idea which family it belongs to, so restricting the lookup to one family
+  // could only ever be wrong. `stageKey` is namespaced by pipelineId, so a
+  // union cannot collide even though stage NAMES repeat across pipelines.
+  // getPipelines() is cached per warm lambda, so this costs nothing extra.
+  const selected = await getPipelines();
   const stageNameByKey = new Map<string, string>();
   const pipelineNameById = new Map<string, string>();
   for (const p of selected) {
