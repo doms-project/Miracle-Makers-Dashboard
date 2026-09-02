@@ -4369,6 +4369,26 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              {/* The moving copy. WITHOUT THIS the caregiver card was invisible
+                  while dragging: BoardCard deliberately applies no transform of
+                  its own (the overlay is what moves, unclipped by the column's
+                  overflow), so a DndContext with no DragOverlay drags nothing
+                  visible at all. The client board has had one; this one was
+                  added without it. */}
+              <DragOverlay dropAnimation={null}>
+                {(() => {
+                  const r = dragId ? cgData.find((x) => x.id === dragId) : null;
+                  return r ? (
+                    <div className="card dragging" style={{ width: 242 }}>
+                      <CardBody
+                        r={r}
+                        following={followsNotOwns(r)}
+                        relBadge={undefined}
+                      />
+                    </div>
+                  ) : null;
+                })()}
+              </DragOverlay>
               </DndContext>
               )}
             </>
