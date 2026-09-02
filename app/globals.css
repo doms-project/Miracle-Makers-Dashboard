@@ -709,3 +709,10 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .sechead.sectoggle .secarrow{font-size:10px;color:var(--ink-3);width:10px;flex:none;}
 .sechead.sectoggle .seccount{margin-left:auto;font-size:10px;font-weight:600;color:var(--ink-3);background:var(--canvas);border:1px solid var(--line);border-radius:20px;padding:1px 7px;}
 .sechead.sectoggle:hover{color:var(--plum);}
+/* ITEM 1 — the contact bar. Top of the panel, never collapsible. */
+.contactbar{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:10px 13px;margin-bottom:10px;}
+.contactbar .cbname{font-size:14px;font-weight:700;color:var(--ink);}
+.contactbar .cbrow{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:5px;}
+.contactbar .cbitem{font-size:12.5px;font-weight:600;color:var(--plum);text-decoration:none;}
+.contactbar .cbitem:hover{text-decoration:underline;}
+.contactbar .cbitem.none{color:var(--ink-3);font-weight:500;}

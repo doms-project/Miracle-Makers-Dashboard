@@ -731,6 +731,10 @@ interface RawOpportunity {
     // response omits it, `tags` lands as [] and the card degrades to the
     // neutral wording instead of claiming a route it cannot know.
     tags?: unknown;
+    // ITEM 1 — present on the search response (100/100 records carried
+    // email+phone per the tags probe) but never declared, so never read.
+    email?: string;
+    phone?: string;
   };
   customFields?: RawCustomField[];
   // ITEM 2 — when the record last changed stage. GHL's own field name is
@@ -909,7 +913,10 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   monetaryValue: [],
   cf: [],
   contactId: [],
-  tags: [], // not a custom field — read off the embedded contact
+  contactName: [],
+  contactEmail: [],
+  contactPhone: [],
+  tags: [], // not custom fields — read off the embedded contact
   pipelineId: [],
   pipelineName: [],
   shared: [],
@@ -979,6 +986,12 @@ function normalizeOpportunity(
     monetaryValue: typeof opp.monetaryValue === "number" ? opp.monetaryValue : 0,
     cf: {},
     contactId: opp.contactId || opp.contact?.id || "",
+    contactName: (
+      opp.contact?.name ||
+      [opp.contact?.firstName, opp.contact?.lastName].filter(Boolean).join(" ")
+    ).trim(),
+    contactEmail: (opp.contact?.email || "").trim(),
+    contactPhone: (opp.contact?.phone || "").trim(),
     tags: Array.isArray(opp.contact?.tags)
       ? opp.contact.tags.filter((t): t is string => typeof t === "string")
       : [],
