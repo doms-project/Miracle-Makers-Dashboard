@@ -721,3 +721,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .loadwarn{margin:0 22px 12px;padding:9px 13px;border:1px solid #f0c9c9;background:#fdf2f2;border-radius:9px;font-size:12px;color:#7a2727;}
 .loadwarn b{font-weight:700;}
 .loadwarn .linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#7a2727;text-decoration:underline;cursor:pointer;}
+/* Message — same weight as "Move this case": both leave the dashboard for GHL,
+   neither is the primary action. An <a>, not a button, so it opens in a tab. */
+.msgbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s;}
+.msgbtn:hover{background:var(--plum-soft);border-color:var(--plum);}
