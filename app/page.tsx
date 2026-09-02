@@ -2941,7 +2941,20 @@ export default function Dashboard() {
       optimistic: (r: OpportunityRecord) => OpportunityRecord,
     ) => {
       setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: { status: "saving" } }));
-      setData((prev) => prev.map((r) => (r.id === rec.id ? optimistic(r) : r)));
+      // 🔴 BOTH LISTS. This only ever touched `data` — the CLIENT list — so an
+      // edit to a CAREGIVER record mapped over a list that does not contain it
+      // and silently did nothing: no optimistic update, no server record
+      // written back, no revert on failure. The panel kept showing the old
+      // value until a manual Refresh, on every field, not just stage.
+      //
+      // Applying to both is safe by construction: the two lists never hold the
+      // same id (different pipeline families, different requests), so exactly
+      // one map can ever match.
+      const applyBoth = (fn: (r: OpportunityRecord) => OpportunityRecord) => {
+        setData((prev) => prev.map((r) => (r.id === rec.id ? fn(r) : r)));
+        setCgData((prev) => prev.map((r) => (r.id === rec.id ? fn(r) : r)));
+      };
+      applyBoth(optimistic);
       try {
         const res = await fetch(`/api/opportunities/${rec.id}`, {
           method: "PATCH",
@@ -2964,11 +2977,11 @@ export default function Dashboard() {
         if (!res.ok || !j.ok || !j.record)
           throw apiError(res, j);
         // Reflect the server's canonical record (esp. array-wrapped values).
-        setData((prev) => prev.map((r) => (r.id === rec.id ? j.record! : r)));
+        applyBoth(() => j.record!);
         setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
       } catch (e) {
         // Revert to the pre-edit record; never show a false "saved".
-        setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+        applyBoth(() => rec);
         setSaveState((p) => ({
           ...p,
           [skey(rec.id, fk)]: {
@@ -3083,6 +3096,35 @@ export default function Dashboard() {
     if (!target) return;
     // Reuse the proven save path: optimistic move + PATCH (pipelineStageId) +
     // revert-on-error. Save by stage ID, never name.
+    saveField(
+      rec,
+      "stage",
+      { stageId: target.id },
+      (r) => ({ ...r, stage: targetStage, stageId: target.id }),
+    );
+  };
+
+  // Caregiver board drag — the same shape as onDragEnd above, against cgData.
+  //
+  // ⚠️ Kept SEPARATE rather than making onDragEnd search both lists. The two
+  // boards resolve their stages from different maps and their records from
+  // different payloads; one handler serving both would have to guess which,
+  // and guessing wrong writes a stage id from the wrong pipeline — the exact
+  // OPPORTUNITY_STAGE_ID_INVALID trap the client handler already warns about.
+  const onCgDragEnd = (e: DragEndEvent) => {
+    setDragId(null);
+    const { active, over } = e;
+    if (!over) return;
+    const overId = String(over.id);
+    if (!overId.startsWith("col:")) return;
+    const targetStage = overId.slice(4);
+    const rec = cgData.find((x) => x.id === active.id);
+    if (!rec || rec.stage === targetStage || !canEdit(rec)) return;
+    // Resolved from the RECORD'S OWN pipeline, via stagesFor — which now falls
+    // back to cgStagesByPipeline (report 59), so an applicant's stages resolve
+    // even though the client map has never heard of its pipeline.
+    const target = stagesFor(rec.pipelineId).find((st) => st.name === targetStage);
+    if (!target) return;
     saveField(
       rec,
       "stage",
@@ -4282,6 +4324,18 @@ export default function Dashboard() {
                   ) : null}
                 </div>
               ) : (
+              // Drag-and-drop, same as the client board: stage change WITHIN one
+              // pipeline. There is no cross-pipeline move here and there must not
+              // be — an applicant does not move between PP Caregiver Applicants
+              // and ODP DSP Applicant (report 57), so the columns are the only
+              // drop targets, and Move is hidden on these records.
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCorners}
+                onDragStart={(e) => setDragId(String(e.active.id))}
+                onDragCancel={() => setDragId(null)}
+                onDragEnd={onCgDragEnd}
+              >
               <div className="board">
                 {cgStages
                   .filter((st) => !cgStage || st === cgStage)
@@ -4294,7 +4348,10 @@ export default function Dashboard() {
                           <BoardCard
                             key={r.id}
                             r={r}
-                            canDrag={false}
+                            // Same permission rule as the client board: admins
+                            // drag anything, others only what they own or
+                            // follow. The PATCH route's 403 is the backstop.
+                            canDrag={canEdit(r)}
                             following={followsNotOwns(r)}
                             relBadge={undefined}
                             onOpen={() => setSelId(r.id)}
@@ -4312,6 +4369,7 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              </DndContext>
               )}
             </>
           )
@@ -5083,6 +5141,17 @@ export default function Dashboard() {
                   >
                     ✉ Send Email
                   </button>
+                  {/* HIDDEN ON APPLICANTS. Move is a CROSS-PIPELINE transfer
+                      between client pipelines — it writes the Transferred
+                      From/Date stamps, the transferred-to tag and a division
+                      note, and its destination list is built from client
+                      pipelines. An applicant has nowhere to go: the two
+                      applicant pipelines are different jobs, not two stages of
+                      one process (report 57), and lib/ghl.ts:527 already
+                      records that a caregiver pipeline cannot be reassigned
+                      into. It rendered here until now purely because
+                      `.panelactions` was gated on canEdit alone. */}
+                  {cgData.some((r) => r.id === selected.id) ? null : (
                   <button
                     type="button"
                     className="movebtn"
@@ -5090,6 +5159,35 @@ export default function Dashboard() {
                   >
                     ⇄ Move this case
                   </button>
+                  )}
+                  {/* MESSAGE — opens the contact's Conversations thread in GHL.
+                      All pipelines, clients and caregivers alike.
+
+                      ✅ NOT admin-gated, unlike "Open in GoHighLevel" in the
+                      panel footer. That one is correctly restricted because it
+                      targets /opportunities/, which reps have switched OFF
+                      (opportunitiesEnabled false). Conversations and Contacts
+                      are ON for them (conversationsEnabled / contactsEnabled
+                      true), so this link works for a rep and hiding it would
+                      take away something they can actually use.
+
+                      ⚠️ NO ?category=team-inbox&tab=unread — those filter the
+                      inbox LIST and are wrong for a direct thread.
+
+                      ⚠️ contactId is already on the record; no fetch. When it
+                      is missing the button is HIDDEN rather than rendered
+                      pointing at a URL that 404s. */}
+                  {selected.contactId ? (
+                    <a
+                      className="msgbtn"
+                      href={`https://app.gohighlevel.com/v2/location/${LOCATION_ID}/conversations/conversations/${selected.contactId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this person's conversation in GoHighLevel"
+                    >
+                      💬 Message
+                    </a>
+                  ) : null}
                 </div>
               ) : null}
 
