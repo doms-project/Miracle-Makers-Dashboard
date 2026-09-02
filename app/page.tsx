@@ -1243,6 +1243,11 @@ export default function Dashboard() {
   const [selId, setSelId] = useState<string | null>(null);
   // ITEM 4 — the Master view GRANT, decided server-side (admins always).
   const [canSeeMaster, setCanSeeMaster] = useState(false);
+  // Pipelines whose fetch failed on the last load. Their records are missing —
+  // said out loud, because an absent pipeline looks exactly like an empty one.
+  const [failedPipelines, setFailedPipelines] = useState<
+    { id: string; name: string; error: string }[]
+  >([]);
 
   // ---- ITEM 13: CAREGIVERS ----
   //
@@ -1386,6 +1391,7 @@ export default function Dashboard() {
       if (body.viewer?.homePipelineIds)
         setHomePipelineIds(body.viewer.homePipelineIds);
       setCanSeeMaster(!!body.viewer?.canSeeMaster);
+      setFailedPipelines(body.failedPipelines || []);
     } catch (e) {
       setError({
         error: "Could not reach the dashboard API.",
@@ -3750,6 +3756,27 @@ export default function Dashboard() {
             office — in its own toolbar below. */}
         {(view === "list" || view === "board") && (
         <>
+        {/* A pipeline that failed to load is NOT an empty pipeline, and the
+            difference matters: a rep seeing their division empty concludes
+            there is no work. Named, with a way to retry. */}
+        {failedPipelines.length ? (
+          <div className="loadwarn">
+            <b>
+              {failedPipelines.length === 1
+                ? `${failedPipelines[0].name} didn't load.`
+                : `${failedPipelines.length} pipelines didn't load.`}
+            </b>{" "}
+            {failedPipelines.length > 1
+              ? failedPipelines.map((f) => f.name).join(", ") + ". "
+              : ""}
+            Records from{" "}
+            {failedPipelines.length === 1 ? "it are" : "them are"} missing from
+            everything on this screen — this is not an empty division.{" "}
+            <button type="button" className="linkbtn" onClick={() => load()}>
+              Try again
+            </button>
+          </div>
+        ) : null}
         <div className="stats">
           <div className="stat">
             {/* Measured against the CURRENT pipeline/division selection, not

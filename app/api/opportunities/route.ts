@@ -33,7 +33,7 @@ async function buildResponse(
   blob: string | null,
   scope: PipelineScope = "client",
 ): Promise<Response> {
-  const { records, pipeline, pipelines, stages, stagesByPipeline, users, fieldDefs } =
+  const { records, pipeline, pipelines, stages, stagesByPipeline, users, fieldDefs, failedPipelines } =
     await getOltlOpportunities(scope);
   // Label every user with their division(s) for the owner/follower pickers.
   const pipelineNameById = new Map(pipelines.map((p) => [p.id, p.name]));
@@ -99,6 +99,9 @@ async function buildResponse(
 
   const body: OpportunitiesResponse = {
     records: visible,
+    // Passed through so the UI can name a pipeline whose fetch failed. Without
+    // it a half-failed load is indistinguishable from an empty division.
+    failedPipelines,
     pipeline,
     count: visible.length,
     viewer: {
