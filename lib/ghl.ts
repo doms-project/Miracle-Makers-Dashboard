@@ -2695,15 +2695,33 @@ export async function moveOpportunity(args: {
   if (!current)
     throw new GhlError("Opportunity not found.", 404, `id ${args.oppId}`);
 
-  const isTransfer =
+  // Did the OWNER actually change? Used for the permission rule and for the
+  // "is there a person to validate" question — NOT for deciding a reassign.
+  const ownerChanged =
     typeof args.newOwnerId === "string" &&
     (args.newOwnerId || "") !== (current.ownerId || "");
-  // ITEM 4 — a transfer whose new owner is NOBODY. Still an owner change (so it
-  // keeps the transfer permission rule: only the owner or an admin may do it),
-  // but there is no incoming person, which changes three things downstream: no
-  // user to validate, TRANSFERRED IN stops being mandatory, and the sender is
-  // kept as a follower so the record does not vanish from their view.
-  const unassigning = isTransfer && !args.newOwnerId;
+
+  // 🔴 UNASSIGNING IS A PROPERTY OF THE REQUEST, NOT OF THE OWNER DIFFERENCE.
+  //
+  // This was `isTransfer && !args.newOwnerId`, i.e. it required the owner to be
+  // CHANGING. A reassign sends newOwnerId: "" — so on an ALREADY-UNASSIGNED
+  // record `"" !== ""` is false, isTransfer was false, and the whole reassign
+  // branch was skipped: the record took the ordinary simple-move path, landing
+  // wherever the caller's stage said instead of REASSIGN, with no followers
+  // added, no master users notified and the previous followers left attached.
+  //
+  // That is NOT an edge case. WF-06 creates applicants unassigned, and a record
+  // that has ALREADY been reassigned is unassigned by definition — so
+  // re-reassigning one, the single most likely repeat action, always missed.
+  //
+  // Asking the REQUEST ("did you send an empty owner?") instead of the DIFF
+  // ("did the owner change?") is what makes it hold on an unowned record.
+  const unassigning =
+    typeof args.newOwnerId === "string" && args.newOwnerId === "";
+
+  // A reassign is a transfer even when it changes no owner: it still has to
+  // resolve the REASSIGN stage, write the stamps and rebuild the followers.
+  const isTransfer = ownerChanged || unassigning;
 
   // ITEM 2 — the note's [DIVISION] prefix comes from actorDivision. When that
   // arrives empty, stampDivision correctly returns the body UNCHANGED — which is
@@ -2972,7 +2990,16 @@ export async function moveOpportunity(args: {
     // Never re-add someone already on the record: we must be able to tell OUR
     // additions apart from a follower who was there first, or claiming the case
     // would strip a person who has nothing to do with the reassign.
-    const already = new Set(current.followerIds);
+    //
+    // 🔴 MEASURED AFTER THE REMOVAL ABOVE, not before it. `toRemove` has just
+    // been DELETED, so anyone in it is no longer following — treating them as
+    // "already there" would skip re-adding them. On a RE-reassign that is
+    // exactly the master-view holders: cleared a moment ago, then judged
+    // already-present and never restored, leaving the queue watched by nobody.
+    const removed = new Set(toRemove);
+    const already = new Set(
+      current.followerIds.filter((f) => !removed.has(f)),
+    );
     const added = [...wanted].filter((u) => !already.has(u));
     if (added.length) {
       await addOpportunityFollowers(args.oppId, added);
