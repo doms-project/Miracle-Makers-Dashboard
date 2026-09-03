@@ -1929,6 +1929,14 @@ export default function Dashboard() {
     const needle = q.trim().toLowerCase();
     return data.filter(
       (r) =>
+        // 🔴 ITEM 5a — REASSIGN IS A MASTER-VIEW QUEUE, NOT PIPELINE WORK.
+        //
+        // The board columns (boardStages) and the stage chips (stages) already
+        // drop REASSIGN, but this set — which feeds the LIST rows, the count
+        // line and the stat cards — did NOT, so with the default "All" chip a
+        // reassigned record showed as an ordinary list row a rep could open and
+        // treat as their work. Master reads `data` directly and is unaffected.
+        !isReassignRec(r) &&
         (office === "all" || r.office === office) &&
         (scope === "all" ||
           (scope === "shared"
@@ -1955,6 +1963,9 @@ export default function Dashboard() {
     () =>
       data.filter(
         (r) =>
+          // ITEM 5a — reassigned records are not part of the pipeline total the
+          // list reports against; they live only in Master.
+          !isReassignRec(r) &&
           (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
           (scope === "all" ||
             (scope === "shared"
@@ -2381,6 +2392,10 @@ export default function Dashboard() {
     const home = new Set(homePipelineIds);
     return data.filter(
       (r) =>
+        // ITEM 5a — same rule as preStage: a REASSIGN record has no column on
+        // the ordinary kanban, so it must not count toward boardVisible either,
+        // or the "nothing in your own pipelines" hint miscounts.
+        !isReassignRec(r) &&
         !r.shared &&
         (home.size === 0 || home.has(r.pipelineId)) &&
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
