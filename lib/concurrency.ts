@@ -62,7 +62,23 @@ export function isStale(
  * version" is something a rep can act on, and it does not imply their own work
  * was wrong — only that it arrived second.
  */
-export function conflictResponse(info: ConflictInfo): NextResponse {
+export function conflictResponse(
+  info: ConflictInfo,
+  // The CURRENT server record. Echoed in the 409 body so the client can, WITHOUT
+  // a second round trip, (1) see whether the field IT is changing actually moved
+  // or whether only `updatedAt` did, and (2) retry with the fresh version if the
+  // 409 was spurious. A stale version is common and benign here: GoHighLevel's
+  // /opportunities/search index lags the direct GET, so the list hands the
+  // client an older updatedAt than this route reads — a first drag then 409s
+  // even though nobody touched the field.
+  record?: Pick<OpportunityRecord, "id" | "version"> &
+    Partial<
+      Pick<
+        OpportunityRecord,
+        "stageId" | "status" | "ownerId" | "monetaryValue" | "cf"
+      >
+    >,
+): NextResponse {
   return NextResponse.json(
     {
       error:
@@ -71,6 +87,7 @@ export function conflictResponse(info: ConflictInfo): NextResponse {
       // tell us whether this was a genuine race or a stale client.
       detail: `Expected version ${info.expected || "(none)"}, but the record is now at ${info.actual || "(none)"}.`,
       status: 409,
+      ...(record ? { record } : {}),
     } as ApiError,
     { status: 409 },
   );
@@ -84,7 +101,13 @@ export function conflictResponse(info: ConflictInfo): NextResponse {
  * that lost rather than just to a route.
  */
 export function versionGuard(
-  record: Pick<OpportunityRecord, "id" | "version">,
+  record: Pick<OpportunityRecord, "id" | "version"> &
+    Partial<
+      Pick<
+        OpportunityRecord,
+        "stageId" | "status" | "ownerId" | "monetaryValue" | "cf"
+      >
+    >,
   expected: string | undefined,
   label: string,
 ): NextResponse | null {
@@ -106,7 +129,7 @@ export function versionGuard(
   console.warn(
     `[version] ${label} on ${record.id} REFUSED: caller had ${expected}, record is at ${stored}. Someone else wrote in between.`,
   );
-  return conflictResponse({ expected: expected || "", actual: stored || "" });
+  return conflictResponse({ expected: expected || "", actual: stored || "" }, record);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
