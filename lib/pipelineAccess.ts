@@ -193,9 +193,13 @@ export function hasMasterView(userId: string, isAdmin: boolean): boolean {
 // BEFORE a reassign happens is in that reassign's follower list, because the
 // list is built at the moment of the reassign from the map as it then stands.
 //
-// Admins are NOT included. They see every record already, so adding them as
-// followers would add nothing and would put them on the GHL notification for
-// every reassign on the account.
+// Admins are NOT in this array — they are not written to the access map (they
+// bypass it via isAdminSession). But they DO hold the Master view, so they must
+// be added to a reassign's followers too. That union — mapped holders + admins,
+// read live from GET /users — is done at the async call site (the move route),
+// because this function is sync and shared with hasMasterView's per-record path,
+// which cannot become async. A future caller that needs "everyone who can see
+// the queue" must union admins the same way, not rely on this array alone.
 export function getMasterUsers(): string[] {
   return [...(masterStore.getStore() ?? [])];
 }
