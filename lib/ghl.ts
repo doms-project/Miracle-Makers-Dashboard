@@ -2956,21 +2956,29 @@ export async function moveOpportunity(args: {
       await removeOpportunityFollowers(args.oppId, toRemove);
       steps.push(`cleared ${toRemove.length} follower(s)`);
     }
-    // ITEM 4 — ⚠️ THE ACCESS RULE DOES **NOT** KEEP THE SENDER. Verified against
-    // applyAccess: a record is visible when it is in a HOME pipeline and (owned
-    // OR followed OR unassigned), or in ANY pipeline when owned/followed. After
-    // an unassigned move OUT of Bill's division he is neither owner nor
-    // follower, and the destination is not his home pipeline — so the record
-    // disappears from his dashboard entirely, which is exactly what would defeat
-    // the REASSIGN column.
+    // 🔴 THE SENDER IS KEPT ONLY BY THE TOGGLE — NEVER BY A REASSIGN.
     //
-    // Fixed HERE rather than in applyAccess. Loosening the access rule to "the
-    // sender can see it" would need a sender to be recorded on every record and
-    // would widen visibility for everyone; making the sender a FOLLOWER uses the
-    // mechanism that already exists, is visible in GHL, and can be removed by
-    // hand. So an unassign always keeps the sender, regardless of the flag.
-    const keepSender =
-      (unassigning || args.addSenderAsFollower) && !!current.ownerId;
+    // This read `(unassigning || args.addSenderAsFollower)`. The ITEM 4
+    // reasoning behind that `unassigning` clause was: after an unassigned move
+    // the sender is neither owner nor follower, so the record vanishes from
+    // their dashboard — keep them as a follower so it doesn't.
+    //
+    // ⚠️ THAT REASONING IS NOW REVERSED, DELIBERATELY. A reassign MEANS giving
+    // the case up. Keeping the previous owner attached means it never actually
+    // leaves them: it stays in their list as shared, which is the opposite of
+    // what handing a case on is for. Confirmed live on v70 — the previous owner
+    // was appearing in the followers beside the master-view holders.
+    //
+    // ⚠️ AND THE CLAUSE HAD SILENTLY WIDENED. It was written when `unassigning`
+    // required an owner CHANGE, so it only fired on a transfer-to-nobody.
+    // Report 71 corrected `unassigning` to mean "the request sent an empty
+    // owner" — right in itself, but it made this clause fire on EVERY reassign.
+    // The two are now decoupled: `unassigning` decides the reassign path,
+    // `addSenderAsFollower` alone decides whether a sender stays.
+    //
+    // The toggle ("Keep me on this lead", Move dialog → transfers only) is the
+    // ONLY thing that keeps a sender attached. `ReassignDialog` never sends it.
+    const keepSender = args.addSenderAsFollower === true && !!current.ownerId;
 
     // ITEM 5b — 🔴 FOLLOWERS GO ON **BEFORE** THE STAGE CHANGE.
     //
