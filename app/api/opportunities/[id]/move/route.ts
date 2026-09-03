@@ -13,7 +13,7 @@ import {
   getUserHomePipelines,
   getMasterUsers,
 } from "@/lib/pipelineAccess";
-import { listPipelines } from "@/lib/ghl";
+import { listPipelines, listLocationUsers } from "@/lib/ghl";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
@@ -183,6 +183,36 @@ async function postHandler(
     //   d. divisionLabel() returned nothing for those names
     const actorDivision = await resolveActorDivision(session);
 
+    // 🔴 EVERYONE WHO CAN SEE THE QUEUE, NOT JUST THE MAPPED USERS.
+    //
+    // getMasterUsers() returns the `master` array from the access map — the
+    // EXPLICITLY granted non-admins. But admins hold the Master view too, via
+    // isAdminSession (hasMasterView returns true for them), and they are never
+    // in that array. On an admin-only account the array is empty, so a reassign
+    // added NOBODY as a follower and the GHL workflow notified nobody — the
+    // person watching the queue was the one not told.
+    //
+    // So the follower list is the SAME set the view itself uses: the mapped
+    // users PLUS every admin, read LIVE from GET /users (never a cached list,
+    // for the same reason the access map is read live), de-duplicated.
+    //
+    // A failed users fetch must NOT fail the reassign: fall back to the mapped
+    // list and log, rather than leaving a record stuck because we couldn't read
+    // roles. The move matters more than a complete follower list.
+    let adminIds: string[] = [];
+    try {
+      adminIds = (await listLocationUsers())
+        .filter((u) => isAdminSession(u.role))
+        .map((u) => u.id);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[reassign] could not read location users to add admins as followers — proceeding with the mapped master-view holders only:",
+        e,
+      );
+    }
+    const masterUsers = [...new Set([...getMasterUsers(), ...adminIds])];
+
     const result = await moveOpportunity({
       oppId: id,
       toPipelineId: body.toPipelineId,
@@ -196,7 +226,8 @@ async function postHandler(
       // single request. Never cached and never carried over from a previous
       // reassign: that is what makes a user granted the Master view five minutes
       // ago appear in the very next reassign's followers with no backfill.
-      masterUsers: getMasterUsers(),
+      // Now the union of mapped holders + admins (see above).
+      masterUsers,
     });
 
     // A partial move is reported as 500 WITH the completed steps, so the caller
