@@ -145,19 +145,27 @@ async function postHandler(
     const conflict = versionGuard(target, body.expectedVersion, "MOVE");
     if (conflict) return conflict;
 
-    const isTransfer =
+    // 🔴 THE PERMISSION RULE KEYS OFF WHETHER AN OWNER IS BEING TAKEN AWAY,
+    // not off "is this a transfer". Taking a case off its owner is owner-or-admin
+    // (canManageFollowers). But a reassign of an ALREADY-UNOWNED record — the
+    // common case, since WF-06 creates applicants unassigned and an
+    // already-reassigned record is unowned — removes nothing from anyone, and
+    // canManageFollowers would REFUSE it for every non-admin: it requires
+    // `rec.ownerId === session.userId`, which no one can satisfy when ownerId is
+    // empty. That would have swapped one broken reassign for another.
+    const ownerChanged =
       typeof body.newOwnerId === "string" &&
       (body.newOwnerId || "") !== (target.ownerId || "");
 
     if (enforce && session) {
-      const allowed = isTransfer
+      const allowed = ownerChanged
         ? canManageFollowers(target, session) // owner or admin
         : canEditRecord(target, session);
       if (!allowed)
         return NextResponse.json(
           {
             error: "Not permitted.",
-            detail: isTransfer
+            detail: ownerChanged
               ? "Only the record owner or an admin can transfer a record to a new owner."
               : "You can only move records you own or follow.",
             status: 403,
