@@ -2961,6 +2961,34 @@ export default function Dashboard() {
 
   // ---- Phase 2 save: optimistic update, revert on failure ----
   const skey = (id: string, fk: string) => `${id}:${fk}`;
+  // 🔴 IS THE FIELD BEING CHANGED STILL WHAT THIS CLIENT HAD?
+  //
+  // Compares only the field(s) this write touches (from `patch`) between the
+  // client's PRE-edit record (`was`) and the server's CURRENT record (`now`).
+  // TRUE means the 409 was spurious — updatedAt moved for some other reason
+  // (a background workflow, the search-index lag, another field) and a silent
+  // retry is safe. FALSE means someone changed THIS field: a real conflict the
+  // user must see. An unrecognised patch shape returns FALSE — surface it
+  // rather than risk a blind overwrite (report 46).
+  const stableCf = (v: unknown) => JSON.stringify(v ?? null);
+  const fieldUnchangedOnServer = (
+    patch: Record<string, unknown>,
+    was: OpportunityRecord,
+    now: OpportunityRecord,
+  ): boolean => {
+    if ("stageId" in patch) return (was.stageId || "") === (now.stageId || "");
+    if ("status" in patch) return (was.status || "") === (now.status || "");
+    // The panel sends the owner as `assignedTo`; the record holds it as ownerId.
+    if ("assignedTo" in patch) return (was.ownerId || "") === (now.ownerId || "");
+    if ("monetaryValue" in patch)
+      return (was.monetaryValue || 0) === (now.monetaryValue || 0);
+    if (Array.isArray(patch.customFields))
+      return (patch.customFields as { id: string }[]).every(
+        (cf) => stableCf(was.cf[cf.id]) === stableCf(now.cf[cf.id]),
+      );
+    return false;
+  };
+
   const saveField = useCallback(
     async (
       rec: OpportunityRecord,
@@ -2983,16 +3011,17 @@ export default function Dashboard() {
         setCgData((prev) => prev.map((r) => (r.id === rec.id ? fn(r) : r)));
       };
       applyBoth(optimistic);
-      try {
+
+      // One PATCH attempt at a given expected version. Kept as a closure so a
+      // spurious 409 can be retried with a fresh version without duplicating
+      // the request shape.
+      const attempt = async (expectedVersion: string | undefined) => {
         const res = await fetch(`/api/opportunities/${rec.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ssoKey: sso.status === "ready" ? sso.blob : undefined,
-            // ITEM 5 — the version this client last READ. `rec` is the record
-            // as it was when the edit started, which is exactly the right one:
-            // the optimistic update above changes local state only.
-            expectedVersion: rec.version,
+            expectedVersion,
             ...patch,
           }),
         });
@@ -3002,9 +3031,31 @@ export default function Dashboard() {
           error?: string;
           detail?: string;
         };
-        if (!res.ok || !j.ok || !j.record)
-          throw apiError(res, j);
-        // Reflect the server's canonical record (esp. array-wrapped values).
+        return { res, j };
+      };
+
+      try {
+        // ITEM 5 — the version this client last READ. `rec` is the record as it
+        // was when the edit started; the optimistic update changed local state
+        // only.
+        let { res, j } = await attempt(rec.version);
+
+        // 🔴 SPURIOUS-409 RETRY (report 68 item). The held version can be stale
+        // through no fault of a competing edit: GoHighLevel's search index (the
+        // list load) lags the direct GET this route does, so a first drag 409s
+        // even though nobody touched the field. The version guard must stay
+        // meaningful (report 46), so we do NOT retry blindly — we retry ONLY
+        // when the FIELD we are changing is still what this client had. If that
+        // field moved, it is a real conflict and must surface.
+        if (res.status === 409 && j.record && fieldUnchangedOnServer(patch, rec, j.record)) {
+          // The 409 body carries the fresh server record — retry ONCE with its
+          // version, silently. No banner: the card just moves.
+          ({ res, j } = await attempt(j.record.version));
+        }
+
+        if (!res.ok || !j.ok || !j.record) throw apiError(res, j);
+        // Reflect the server's canonical record (esp. array-wrapped values) —
+        // this also keeps the held version fresh for the next edit.
         applyBoth(() => j.record!);
         setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
       } catch (e) {
