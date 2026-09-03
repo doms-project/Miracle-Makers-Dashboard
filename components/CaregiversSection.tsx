@@ -246,7 +246,7 @@ export default function CaregiversSection({
       ) : loadErr ? (
         <ErrorMessage error={loadErr} className="savemsg err" />
       ) : caregivers.length === 0 ? (
-        <div className="cgmuted">No caregivers assigned yet.</div>
+        <div className="cgmuted">No {plural} assigned yet.</div>
       ) : (
         <ul className="cglist">
           {caregivers.map((c) => (
@@ -280,7 +280,7 @@ export default function CaregiversSection({
         <div className="cgadd">
           <input
             className="cgsearch"
-            placeholder="Add a caregiver — type a name…"
+            placeholder={`Add a ${singular} — type a name…`}
             value={q}
             disabled={busy}
             onFocus={() => setOpen(true)}
@@ -297,7 +297,7 @@ export default function CaregiversSection({
                 </div>
               ) : hits.length === 0 ? (
                 <div className="cgmuted" style={{ padding: "8px 10px" }}>
-                  No caregiver contacts match.
+                  No {singular} contacts match.
                 </div>
               ) : (
                 hits.map((h) => {
