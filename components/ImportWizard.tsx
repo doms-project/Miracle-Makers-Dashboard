@@ -27,6 +27,32 @@ const CHUNK = 25;
 const STEPS = ["Upload", "Destination", "Map", "Preview", "Import"] as const;
 type StepIdx = 0 | 1 | 2 | 3 | 4;
 
+// ONE fixed vocabulary, ONE choice per import.
+//
+// This was a free-text input. Free text is how a channel ends up counted twice:
+// "Indeed", "indeed" and "Indeed.com" are three rows in the "By source" tile
+// and one real channel. The workflows that set `source` on inbound leads write
+// exactly these strings, so an import has to be able to write nothing else —
+// which means the vocabulary belongs in the picker, not in whoever is typing.
+//
+// A CSV COLUMN is deliberately not offered: a column fragments the count the
+// same way and puts it in the hands of whoever prepared the file. One import,
+// one source.
+const SOURCE_OPTIONS = [
+  "Indeed",
+  "Facebook",
+  "Google Ads",
+  "Website",
+  "Referral",
+  "Other",
+] as const;
+
+/** Match a stored/typed value to the vocabulary, or "" if it isn't in it. */
+function canonicalSource(v: string): string {
+  const k = (v || "").trim().toLowerCase();
+  return SOURCE_OPTIONS.find((o) => o.toLowerCase() === k) || "";
+}
+
 export default function ImportWizard({
   ssoBlob,
 }: {
@@ -44,7 +70,10 @@ export default function ImportWizard({
 
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState("");
-  const [source, setSource] = useState("Indeed");
+  // Starts EMPTY, not on "Indeed". A default that is a real channel stamps that
+  // channel on an import of some other channel whenever nobody looks at this
+  // step — the exact miscount the fixed vocabulary exists to prevent.
+  const [source, setSource] = useState("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
 
@@ -263,7 +292,10 @@ export default function ImportWizard({
       for (const c of parsed.columns) next[c] = p.mapping?.[c] || mapping[c] || "";
       setMapping(next);
     }
-    if (p.source) setSource(p.source);
+    // Presets saved before the picker existed hold free text. Anything that is
+    // not in the vocabulary is dropped rather than coerced to "Other" — a
+    // silently mis-stamped batch is worse than being asked the question again.
+    if (p.source) setSource(canonicalSource(p.source));
     if (p.pipelineId) setPipelineId(p.pipelineId);
     if (p.stageId) setStageId(p.stageId);
   };
@@ -288,7 +320,8 @@ export default function ImportWizard({
 
   const canNext = (): boolean => {
     if (step === 0) return !!parsed;
-    if (step === 1) return !!pipelineId && !!stageId;
+    // Source is asked on this step and is not optional: see SOURCE_OPTIONS.
+    if (step === 1) return !!pipelineId && !!stageId && !!source;
     if (step === 2) return mappedCount > 0 && hasIdentity;
     return true;
   };
@@ -406,12 +439,22 @@ export default function ImportWizard({
                 ))}
             </select>
             <label>Source</label>
-            <input
+            <select
               className="isrc"
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              placeholder="e.g. Indeed"
-            />
+            >
+              <option value="">What source are these leads?</option>
+              {SOURCE_OPTIONS.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+            <div className="ihint">
+              Stamped on every record in this file. One source per import — if
+              this file mixes channels, split it and import each separately.
+            </div>
           </div>
         </div>
       )}
@@ -587,7 +630,7 @@ export default function ImportWizard({
             <button
               className="ibtn"
               type="button"
-              disabled={importing || !pipelineId || !stageId}
+              disabled={importing || !pipelineId || !stageId || !source}
               onClick={runImport}
             >
               {importing ? "Importing…" : `Import ${parsed.rows.length} rows`}

@@ -195,6 +195,75 @@ const IconUpload = () => (
     <path d="M17 8l-5-5-5 5M12 3v12" />
   </svg>
 );
+// ---- SOURCE ICON ----
+//
+// Reads the NATIVE opportunity `source` (rec.src — `rec.src = opp.source`), which
+// is already in the list payload and already feeds the "By source" tile. So this
+// is a RENDER change with no new GoHighLevel call.
+//
+// ⚠️ FREE TEXT, matched case-insensitively and trimmed: a workflow writing
+// "facebook" or " Indeed " must still resolve. Matching is on a normalised key.
+//
+// ⚠️ NO PLACEHOLDER for an unknown or empty source. 238 of 252 records are blank
+// today (the Airtable import carried no source, and nothing can backfill it), so
+// a fallback glyph would put a meaningless mark on almost every card and say
+// nothing. This marks the channels that DO set it — not every lead.
+//
+// Monochrome and small; `title` names the source, because a logo nobody can
+// identify is worse than a word.
+const SOURCE_ICONS: { match: (k: string) => boolean; label: string; path: string }[] = [
+  {
+    match: (k) => k.includes("facebook") || k.includes("meta") || k.includes("fb"),
+    label: "Facebook",
+    path: "M13.5 9H15V6.5h-1.8C11 6.5 10.5 8 10.5 9.3V11H9v2.5h1.5V21h2.6v-7.5h2l.4-2.5h-2.4V9.6c0-.4.2-.6.8-.6z",
+  },
+  {
+    match: (k) => k.includes("google") || k.includes("adwords") || k.includes("gads"),
+    label: "Google Ads",
+    path: "M9.6 3.4 3.1 14.7a3.2 3.2 0 0 0 2.8 4.8h.3l6.4-11.1zM14.4 3.4l6.5 11.3a3.2 3.2 0 0 1-2.8 4.8h-.3L11.4 8.4zM12 14.2a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4z",
+  },
+  {
+    match: (k) => k.includes("indeed"),
+    label: "Indeed",
+    path: "M13.2 8.9v9.4c0 .9-.6 1.6-1.5 1.6s-1.5-.7-1.5-1.6V9.2c.5.1 1 .2 1.5.2s1-.2 1.5-.5zM11.7 4.3a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8zM16.9 3.2c-3.6-.9-7.6.8-9.6 3.9-.3.5-.8 1.5-.4 1.7.3.2.6-.3.9-.7 2.2-3 6-3.9 8.9-2.6.4.2.7 0 .5-.4-.1-.2-.2-.3-.3-.4z",
+  },
+  {
+    match: (k) => k.includes("website") || k.includes("web") || k.includes("site") || k.includes("organic"),
+    label: "Website",
+    path: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2c1.2 0 2.6 1.9 3.1 5H8.9C9.4 6.9 10.8 5 12 5zM5.1 11h2.7c-.1 1.3-.1 2.7 0 4H5.1a7 7 0 0 1 0-4zm0 6h2.9c.4 1.6 1 2.9 1.7 3.7A7 7 0 0 1 5.1 17zm4.9 0h4c-.5 2.8-1.8 4.5-2 4.5s-1.5-1.7-2-4.5zm-.2-2a24 24 0 0 1 0-4h4.4a24 24 0 0 1 0 4zm6.2 2h2.9a7 7 0 0 1-4.6 3.7c.7-.8 1.3-2.1 1.7-3.7zm.3-2c.1-1.3.1-2.7 0-4h2.7a7 7 0 0 1 0 4zm1.6-6h-2.4c-.3-1.2-.8-2.3-1.3-3.1A7 7 0 0 1 17.9 9zM9.5 5.9C9 6.7 8.5 7.8 8.2 9H5.8a7 7 0 0 1 3.7-3.1z",
+  },
+];
+
+// `source` is FREE TEXT in GHL — whatever a form, a workflow or an import put
+// there. "Facebook", "facebook" and " Facebook " are one channel, so every
+// comparison (icon match, tile tally, filter) goes through this one key.
+function srcKey(src: string): string {
+  return (src || "").trim().toLowerCase();
+}
+
+function sourceIcon(src: string): { label: string; path: string } | null {
+  const k = srcKey(src);
+  if (!k) return null;
+  return SOURCE_ICONS.find((x) => x.match(k)) || null;
+}
+
+/** The source mark, or nothing. `title` carries the RAW source text. */
+const SourceMark = ({ src }: { src: string }) => {
+  const hit = sourceIcon(src);
+  if (!hit) return null;
+  return (
+    <span
+      className="srcmark"
+      title={`Source: ${src.trim()}`}
+      aria-label={`Source: ${src.trim()}`}
+    >
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d={hit.path} />
+      </svg>
+    </span>
+  );
+};
+
 const fmtSize = (bytes: number): string => {
   if (!bytes) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -666,6 +735,7 @@ function CardBody({
   return (
     <>
       <div className="cn">
+        <SourceMark src={r.src} />
         {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
         {following ? (
           <span
@@ -1223,6 +1293,11 @@ export default function Dashboard() {
 
   const [stage, setStage] = useState<string>("all");
   const [office, setOffice] = useState<string>("all"); // office filter (client req)
+  // ITEM — SOURCE FILTER. The "By source" tile counts records by the NATIVE
+  // opportunity `source`; clicking one narrows the list/board/chips to it.
+  // Held as a normalised key (trimmed, lower-cased) because `source` is free
+  // text in GHL: "Facebook" and "facebook" are one channel, not two.
+  const [srcF, setSrcF] = useState<string>("all");
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -1925,7 +2000,7 @@ export default function Dashboard() {
   // the payload was in it. The count was technically true and completely
   // misleading. Stage is excluded from this set on purpose — including it would
   // collapse the chip row to the single chip you just clicked.
-  const preStage = useMemo(() => {
+  const preSrc = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return data.filter(
       (r) =>
@@ -1952,9 +2027,29 @@ export default function Dashboard() {
     );
   }, [data, office, q, scope, adminPipeline]);
 
+  // The source filter sits BETWEEN preSrc and preStage on purpose. The "By
+  // source" tile has to keep listing every channel while one is selected —
+  // otherwise clicking a source collapses the tile to the one you just clicked
+  // and there is no way back to the others. Same reasoning as `offices`, which
+  // excludes the office filter from its own option list.
+  const preStage = useMemo(
+    () =>
+      srcF === "all"
+        ? preSrc
+        : preSrc.filter((r) => srcKey(r.src) === srcF),
+    [preSrc, srcF],
+  );
+
   const filtered = useMemo(
     () => preStage.filter((r) => stage === "all" || r.stage === stage),
     [preStage, stage],
+  );
+
+  // Everything `filtered` has EXCEPT the source filter — the set the "By
+  // source" tile tallies, so its counts stay complete while one is selected.
+  const srcBase = useMemo(
+    () => preSrc.filter((r) => stage === "all" || r.stage === stage),
+    [preSrc, stage],
   );
 
   // Everything the pipeline/division selection holds, before stage, office and
@@ -2030,6 +2125,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (stage !== "all" && !stages.includes(stage)) setStage("all");
   }, [stages, stage]);
+
+  // Same trap for the source filter: a source picked under one pipeline can
+  // survive into a pipeline that has none of it, leaving an empty list with the
+  // reason hidden in a stat tile. `srcBase` is the tile's own set, so this asks
+  // exactly "is the selected source still on offer?".
+  useEffect(() => {
+    if (srcF !== "all" && !srcBase.some((r) => srcKey(r.src) === srcF))
+      setSrcF("all");
+  }, [srcBase, srcF]);
 
   // The same trap, one level up: `scope` is no longer shown to admins, and a
   // control you cannot see must not still be filtering. A user promoted to admin
@@ -2254,7 +2358,15 @@ export default function Dashboard() {
       >
         <td className="strong">
           <div className="clientcell">
-            <span className="clname">{cgStr(r, "applicant") || "—"}</span>
+            <span className="clname">
+              {/* The caregiver list has no Source COLUMN (five columns, Source
+                  dropped) — so on this side the mark is the only place the
+                  channel shows at all, and applicants are the records most
+                  likely to carry one. Same component as the client row and the
+                  kanban card: one mapping, one place to change it. */}
+              <SourceMark src={r.src} />
+              {cgStr(r, "applicant") || "—"}
+            </span>
           </div>
         </td>
         <td>{r.stage || "—"}</td>
@@ -2274,6 +2386,7 @@ export default function Dashboard() {
       <td className="strong">
         <div className="clientcell">
           <span className="clname">
+            <SourceMark src={r.src} />
             {r.oppName || clientName(r) || "—"}
             {r.pipelineName ? (
               <span className="divbadge" title={r.pipelineName}>
@@ -2399,10 +2512,14 @@ export default function Dashboard() {
         !r.shared &&
         (home.size === 0 || home.has(r.pipelineId)) &&
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+        // The "By source" tile is rendered above the KANBAN as well as the
+        // list, so a source picked there has to narrow the columns too —
+        // otherwise the control looks dead on half the screens it appears on.
+        (srcF === "all" || srcKey(r.src) === srcF) &&
         (needle === "" ||
           `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
     );
-  }, [data, q, homePipelineIds, adminPipeline]);
+  }, [data, q, homePipelineIds, adminPipeline, srcF]);
 
   // ---- ITEM 4: MASTER VIEW ----
   //
@@ -2625,7 +2742,22 @@ export default function Dashboard() {
         .map(([k, n]) => ({ k, n }));
     };
     const officeStats = tally((r) => r.office).slice(0, 4);
-    const sourceStats = tally((r) => r.src).slice(0, 4);
+    // By source reads `srcBase`, not `filtered`: see the comment on srcBase.
+    // Grouped on the normalised key so a channel is counted ONCE — "Indeed"
+    // and "indeed" arriving from two different workflows are one number, not
+    // two half-numbers. The label shown is the first spelling seen.
+    const srcMap = new Map<string, { k: string; n: number }>();
+    for (const r of srcBase) {
+      const key = srcKey(r.src);
+      if (!key) continue;
+      const hit = srcMap.get(key);
+      if (hit) hit.n += 1;
+      else srcMap.set(key, { k: r.src.trim(), n: 1 });
+    }
+    const sourceStats = [...srcMap.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([key, v]) => ({ key, k: v.k, n: v.n }))
+      .slice(0, 4);
     const repStats = tally((r) => (r.rep && r.rep !== "—" ? r.rep : ""));
     const assigned = repStats.reduce((s, x) => s + x.n, 0);
     return {
@@ -2638,7 +2770,7 @@ export default function Dashboard() {
       repCount: repStats.length,
       assigned,
     };
-  }, [filtered]);
+  }, [filtered, srcBase]);
 
   // ITEM 13 — the panel opens over EITHER family. The two lists are kept
   // separate everywhere else, but a record panel is a record panel: looking in
@@ -3948,13 +4080,37 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="stat">
-            <div className="k">By source</div>
+            <div className="k">
+              By source
+              {srcF !== "all" ? (
+                <button
+                  type="button"
+                  className="srcclr"
+                  onClick={() => setSrcF("all")}
+                  title="Clear the source filter"
+                >
+                  clear
+                </button>
+              ) : null}
+            </div>
             <div className="mini" style={{ marginTop: 9 }}>
               {stats.sourceStats.length ? (
                 stats.sourceStats.map((x) => (
-                  <span key={x.k}>
-                    <b>{x.n}</b> {x.k}
-                  </span>
+                  <button
+                    type="button"
+                    key={x.key}
+                    className={`srcpick${srcF === x.key ? " on" : ""}`}
+                    // Click to filter; click the same one again to clear.
+                    onClick={() => setSrcF(srcF === x.key ? "all" : x.key)}
+                    title={
+                      srcF === x.key
+                        ? `Showing ${x.k} only — click to clear`
+                        : `Show ${x.k} only (${x.n})`
+                    }
+                  >
+                    <b>{x.n}</b> <SourceMark src={x.k} />
+                    {x.k}
+                  </button>
                 ))
               ) : (
                 <span className="muted">—</span>
