@@ -41,17 +41,95 @@ interface Parsed {
   method: string;
   code: string; // OPPORTUNITY_NO_DUPLICATE etc.
   traceId: string;
+  /** Stack, or the JSON dump of a non-Error throw. Always shown. */
+  extra: string[];
 }
 
 const SNAKE = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+){1,6})\b/;
 const TRACE = /\b(?:traceId|trace_id)"?\s*[:=]\s*"?([0-9a-f-]{16,})/i;
 
+/**
+ * The fullest technical string available for ANY thrown value.
+ *
+ * 🔴 THIS WAS `String(e)`, WHICH RENDERS A PLAIN OBJECT AS "[object Object]".
+ *
+ * That is not a hypothetical: several call sites store a route's parsed JSON
+ * body directly as the error —
+ *
+ *     const j = await res.json();
+ *     if (!res.ok) { setCErr(j); return; }        // a plain object, not an Error
+ *
+ * — so the disclosure block that promises "the verbatim technical detail" was
+ * printing eight useless characters, and "Copy details" copied them. Two
+ * separate bugs on this project have been slower to find for exactly this.
+ *
+ * Every shape now yields something readable:
+ *   Error       → message, then the stack
+ *   plain object → JSON.stringify, pretty-printed
+ *   anything else → its value AND its typeof, so "undefined" or a stray number
+ *                   is identifiable rather than blank
+ */
+function describe(e: unknown): { raw: string; extra: string[]; status: number } {
+  const extra: string[] = [];
+  if (e instanceof Error) {
+    // A stack is the single most useful line when the throw is ours.
+    if (e.stack && e.stack.trim() !== e.message.trim()) extra.push(e.stack);
+    return { raw: e.message || e.name || "Error", extra, status: 0 };
+  }
+  if (typeof e === "string") return { raw: e, extra, status: 0 };
+  if (e && typeof e === "object") {
+    // Prefer the object's own human sentence when it has one — our routes send
+    // { error, detail } — but ALWAYS keep the whole object in the details.
+    const o = e as Record<string, unknown>;
+    const sentence =
+      typeof o.error === "string"
+        ? o.error
+        : typeof o.message === "string"
+          ? o.message
+          : "";
+    let dump = "";
+    try {
+      dump = JSON.stringify(e, null, 2);
+    } catch {
+      // Circular, or a Proxy that throws on read. Say so rather than nothing.
+      dump = `[unserialisable ${Object.prototype.toString.call(e)}]`;
+    }
+    if (dump && dump !== sentence) extra.push(dump);
+    // 🔴 READ THE STATUS OFF THE OBJECT TOO. Our routes send { error, status },
+    // and a body stored directly as the error therefore carries its own code —
+    // but `status` was only ever read from an ApiError instance, so every one of
+    // these fell through to "Something went wrong" with a 404 sitting in plain
+    // sight inside it.
+    const st = Number(o.status ?? o.statusCode ?? 0);
+    // `raw` can end up as a MESSAGE (the 409 branch prints it), so it must stay
+    // one readable line. The pretty dump is already in `extra` and always shown
+    // in the details block — printing it twice, once as a headline, would put a
+    // wall of JSON where the sentence goes.
+    let oneLine = "";
+    try {
+      oneLine = JSON.stringify(e);
+    } catch {
+      oneLine = Object.prototype.toString.call(e);
+    }
+    if (oneLine.length > 160) oneLine = `${oneLine.slice(0, 157)}…`;
+    return {
+      raw: sentence || oneLine || Object.prototype.toString.call(e),
+      extra,
+      status: Number.isFinite(st) ? st : 0,
+    };
+  }
+  // null, undefined, a number, a symbol — name the type, or the reader cannot
+  // tell an empty message from a thrown `undefined`.
+  return { raw: `${String(e)} (${typeof e})`, extra, status: 0 };
+}
+
 function parse(e: unknown): Parsed {
-  const raw = e instanceof Error ? e.message : String(e ?? "");
+  const d = describe(e);
+  const raw = d.raw;
   const api = e instanceof ApiError ? e : null;
   // ApiError carries the untouched response body; prefer it over the message,
   // which may already have been shortened for display.
-  const hay = `${raw} ${api?.body ?? ""}`;
+  const hay = `${raw} ${d.extra.join(" ")} ${api?.body ?? ""}`;
   let url = api?.url ?? "";
   let method = "";
   // apiFetch's messages embed "METHOD /path"; recover it for the detail block.
@@ -66,8 +144,9 @@ function parse(e: unknown): Parsed {
     /* leave as-is */
   }
   return {
-    status: api?.status ?? 0,
+    status: api?.status ?? d.status ?? 0,
     raw,
+    extra: d.extra,
     hay,
     url,
     method,
@@ -127,6 +206,9 @@ export function explainError(e: unknown): FriendlyError {
   if (p.traceId) details.push(`traceId ${p.traceId}`);
   // The raw string LAST and VERBATIM — it is the searchable part.
   if (raw) details.push(raw);
+  // The stack, or the whole object for a non-Error throw. This is the half that
+  // was missing entirely when the thrown value was not an Error.
+  for (const x of p.extra) if (x && !details.includes(x)) details.push(x);
   // ...and the RESPONSE BODY, which is usually the only place GoHighLevel's own
   // wording appears. `hay` has always included it for MATCHING, but it was never
   // shown — so a disclosure block promising the verbatim technical detail was
