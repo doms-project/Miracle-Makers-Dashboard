@@ -2889,10 +2889,23 @@ export default function Dashboard() {
         ? groupContactFields(
             cFields.defs,
             cgData.some((r) => r.id === selId) ? "caregiver" : "client",
+            // Values are passed so the CLIENT branch can apply its
+            // has-a-value rule. The caregiver branch ignores them and renders
+            // every field — see the comment on that branch, and do not
+            // reconcile the two.
+            cFields.values,
           )
         : [],
     [cFields, cgData, selId],
   );
+
+  // Client contact fields a rep has chosen to reveal from "+ Add a field",
+  // this session. Keyed by field id, cleared when the panel changes record so
+  // one lead's revealed questions never carry onto the next.
+  const [revealedFields, setRevealedFields] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setRevealedFields(new Set());
+  }, [selId]);
 
   // ITEM 3 — load the open record's CONTACT fields. One request per record,
   // keyed off `selected.id`; cleared first so a stale person's answers can never
@@ -5731,7 +5744,11 @@ export default function Dashboard() {
                   above belongs to THIS case, everything below belongs to the
                   PERSON and follows them onto every case they hold. */}
               {cLoading ? (
-                <div className="sechead">Loading the applicant&apos;s details…</div>
+                <div className="sechead">
+                  Loading{" "}
+                  {cgData.some((r) => r.id === selId) ? "the applicant" : "this person"}
+                  &apos;s details…
+                </div>
               ) : cErr ? (
                 <>
                   <div className="sechead">About this person</div>
@@ -5746,11 +5763,20 @@ export default function Dashboard() {
                       : "Changes here follow them onto every record they hold."}
                   </div>
                   {contactGroups.map((g, gi) => {
-                    // First section open, the rest collapsed — Caregiver
+                    // One section open by default, the rest collapsed. On a
+                    // CAREGIVER record that is the first — Caregiver
                     // Application is what a recruiter reads first, and it is
-                    // first in CONTACT_FOLDERS. Derived from position rather
-                    // than named, so the same rule holds for the client panel.
-                    const open = isSectionOpen(g.key, gi === 0);
+                    // first in CONTACT_FOLDERS.
+                    //
+                    // On a CLIENT record the first section is often empty: a
+                    // lead answered one of the three Meta forms, so the other
+                    // folders hold nothing. Opening the first ANSWERED section
+                    // instead means the panel opens on what the person actually
+                    // said rather than on a heading with nothing under it.
+                    const firstAnswered = contactGroups.findIndex((x) => x.fields.length);
+                    const defaultOpen =
+                      gi === (firstAnswered >= 0 ? firstAnswered : 0);
+                    const open = isSectionOpen(g.key, defaultOpen);
                     return (
                     <Fragment key={g.key}>
                       <button
@@ -5763,11 +5789,32 @@ export default function Dashboard() {
                           {open ? "▾" : "▸"}
                         </span>
                         {g.label}
-                        <span className="seccount">{g.fields.length}</span>
+                        {/* The count is what is ANSWERED. A client section with
+                            nothing answered shows no number at all — a heading
+                            followed by a bare "0" reads as broken, and its
+                            "+ Add a field" control already says how many
+                            questions are waiting. */}
+                        {g.fields.length ? (
+                          <span className="seccount">{g.fields.length}</span>
+                        ) : null}
                       </button>
                       {open ? (
+                      <>
                       <div className="grid">
-                        {g.fields.map((def) => (
+                        {[
+                          ...g.fields,
+                          // Revealed empties render in their folder's own
+                          // order, beside the answered ones, not in a
+                          // second list — once it is on screen it is just a
+                          // field.
+                          ...(g.hidden || []).filter((d) => revealedFields.has(d.id)),
+                        ]
+                          // Back into GHL's authored order. Both halves came
+                          // from one sorted list and were split by value, so
+                          // re-sorting on `position` restores the order the
+                          // form asked the questions in.
+                          .sort((a, b) => a.position - b.position)
+                          .map((def) => (
                           <div
                             className={`f${isWideField(def.dataType) ? " wide" : ""}`}
                             key={`c:${def.id}`}
@@ -5793,6 +5840,39 @@ export default function Dashboard() {
                           </div>
                         ))}
                       </div>
+                      {/* CLIENT ONLY — `hidden` is undefined on a caregiver
+                          section, so this control simply is not there. The
+                          empty fields are reachable rather than gone: a rep can
+                          record something a lead said on the phone that the
+                          form never asked. */}
+                      {(g.hidden || []).some((d) => !revealedFields.has(d.id)) ? (
+                        <div className="addfield">
+                          <label htmlFor={`add-${g.key}`}>+ Add a field</label>
+                          <select
+                            id={`add-${g.key}`}
+                            value=""
+                            onChange={(e) => {
+                              const id = e.target.value;
+                              if (!id) return;
+                              setRevealedFields((prev) => new Set(prev).add(id));
+                              e.target.value = "";
+                            }}
+                          >
+                            <option value="">
+                              {(g.hidden || []).filter((d) => !revealedFields.has(d.id)).length}{" "}
+                              not answered…
+                            </option>
+                            {(g.hidden || [])
+                              .filter((d) => !revealedFields.has(d.id))
+                              .map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {fieldLabel(d.name)}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      ) : null}
+                      </>
                       ) : null}
                     </Fragment>
                     );
