@@ -10,13 +10,27 @@ import type {
   ImportPipeline,
   ImportSummary,
 } from "@/lib/types";
+import {
+  buildImportNote,
+  splitFullName,
+  stripLeadingApostrophe,
+} from "@/lib/importNotes";
 
 type Parsed = { columns: string[]; rows: Record<string, unknown>[] };
 
+// "Append to notes" is a TARGET, not a fallback. It is listed first because it
+// is where an unclaimed column goes by default, and a person reading the list
+// should see the thing most of their columns are already pointing at.
+const NOTE_TARGET = "note:";
+
 const NATIVE_TARGETS: { key: string; label: string }[] = [
+  { key: NOTE_TARGET, label: "Append to notes" },
   { key: "native:firstName", label: "Contact · First Name" },
   { key: "native:lastName", label: "Contact · Last Name" },
-  { key: "native:name", label: "Contact · Full Name" },
+  // ONE column, TWO fields. Split on the first space server-side, and shown in
+  // Preview so the split is seen rather than discovered. Indeed sends a single
+  // "name"; GHL wants First and Last separately.
+  { key: "native:name", label: "Contact · Full Name (split into First / Last)" },
   { key: "native:email", label: "Contact · Email" },
   { key: "native:phone", label: "Contact · Phone" },
   { key: "native:oppName", label: "Opportunity · Name" },
@@ -138,6 +152,13 @@ export default function ImportWizard({
     (columns: string[]): { map: Record<string, string>; auto: Set<string> } => {
       const out: Record<string, string> = {};
       const auto = new Set<string>();
+      // A full-name column may only auto-map when the file has NO separate
+      // first/last columns. With all three present, mapping them all writes the
+      // same person twice and the last one silently wins.
+      const hasSplitName = columns.some((c) => {
+        const n = norm(c);
+        return n.includes("firstname") || n.includes("lastname");
+      });
       for (const c of columns) {
         const n = norm(c);
         let target = "";
@@ -146,13 +167,23 @@ export default function ImportWizard({
           target = "native:phone";
         else if (n === "firstname" || n.includes("firstname")) target = "native:firstName";
         else if (n === "lastname" || n.includes("lastname")) target = "native:lastName";
-        else if (n === "name" || n === "fullname") target = "native:name";
+        else if ((n === "name" || n === "fullname") && !hasSplitName)
+          target = "native:name";
         else {
+          // EXACT normalised name only. Deliberately not fuzzy: "job location"
+          // would happily match "CG - Work State" under loose matching and
+          // nobody would ever notice. A wrong mapping that looks right is the
+          // failure mode this project has hit most often; unmapped is at least
+          // visible, and now recoverable.
           const def = (meta?.fieldDefs || []).find((d) => norm(d.name) === n);
           if (def) target = `cf:${def.id}`;
         }
-        out[c] = target;
         if (target) auto.add(c);
+        // 🔴 THE FAILURE MODE FLIPS HERE. An unclaimed column used to be "" —
+        // dropped, silently, with the import still reporting success. It now
+        // defaults to the note, where it is recoverable. Dropping is still one
+        // click away; it is just no longer the thing that happens by default.
+        out[c] = target || NOTE_TARGET;
       }
       return { map: out, auto };
     },
@@ -191,6 +222,16 @@ export default function ImportWizard({
         throw new Error("Unsupported file type — upload a .xlsx or .csv.");
       }
       columns = columns.filter(Boolean);
+      // 🔴 The Excel apostrophe comes off HERE as well as server-side, so
+      // Preview shows the value that will actually be stored rather than one
+      // with a stray quote in front of it. Leading only, once — O'Brien and
+      // D'Angelo are untouched. (The server strips again; it must not trust a
+      // client to have done it.)
+      rows = rows.map((r) => {
+        const o: Record<string, unknown> = {};
+        for (const k of Object.keys(r)) o[k] = stripLeadingApostrophe(r[k]);
+        return o;
+      });
       rows = rows.filter((r) => Object.values(r).some((v) => v != null && v !== ""));
       if (!columns.length) throw new Error("No columns found in the file.");
       if (!rows.length) throw new Error("No data rows found in the file.");
@@ -217,7 +258,10 @@ export default function ImportWizard({
     setImporting(true);
     setImportErr(null);
     setProgress(0);
-    const agg: ImportSummary = { created: 0, skipped: 0, failed: 0, errors: [] };
+    const agg: ImportSummary = {
+      created: 0, skipped: 0, failed: 0, noted: 0, notesSkipped: 0,
+      errors: [], flagged: [],
+    };
     try {
       for (let off = 0; off < parsed.rows.length; off += CHUNK) {
         const chunk = parsed.rows.slice(off, off + CHUNK);
@@ -232,6 +276,12 @@ export default function ImportWizard({
             mapping,
             rows: chunk,
             rowOffset: off,
+            // The whole file, for the note's "N records in this batch" line —
+            // the chunk would say 25 on a 47-row import.
+            totalRows: parsed.rows.length,
+            // FILE order, so the note's Q&A pairing still sees the answer
+            // column immediately after its question.
+            columns: parsed.columns,
           }),
         });
         const j = await res.json().catch(() => ({}));
@@ -239,7 +289,10 @@ export default function ImportWizard({
         agg.created += j.created || 0;
         agg.skipped += j.skipped || 0;
         agg.failed += j.failed || 0;
+        agg.noted += j.noted || 0;
+        agg.notesSkipped += j.notesSkipped || 0;
         if (Array.isArray(j.errors)) agg.errors.push(...j.errors);
+        if (Array.isArray(j.flagged)) agg.flagged.push(...j.flagged);
         setProgress(Math.min(off + chunk.length, parsed.rows.length));
         setSummary({ ...agg });
       }
@@ -300,9 +353,39 @@ export default function ImportWizard({
     if (p.stageId) setStageId(p.stageId);
   };
 
-  const mappedCount = parsed
-    ? parsed.columns.filter((c) => mapping[c]).length
-    : 0;
+  // Three groups, counted separately, because "mapped" stopped meaning one
+  // thing the moment notes became a target: a column going to notes is neither
+  // a field nor a silent loss.
+  const fieldCols = parsed
+    ? parsed.columns.filter((c) => mapping[c] && mapping[c] !== NOTE_TARGET)
+    : [];
+  const noteCols = parsed
+    ? parsed.columns.filter((c) => mapping[c] === NOTE_TARGET)
+    : [];
+  const droppedCols = parsed ? parsed.columns.filter((c) => !mapping[c]) : [];
+  const mappedCount = fieldCols.length + noteCols.length;
+
+  // The column mapped to Full Name, if any — Preview shows what the split does
+  // to it. At most one can be mapped there, so the first is the one.
+  const nameCol = parsed
+    ? parsed.columns.find((c) => mapping[c] === "native:name") || ""
+    : "";
+
+  // The note the FIRST row would get, built by the same function the server
+  // uses. Not a mock-up of it — the same code, so what is previewed is what
+  // lands.
+  const notePreview = useMemo(() => {
+    if (!parsed || !parsed.rows.length || !noteCols.length) return "";
+    const r = parsed.rows[0];
+    return buildImportNote({
+      source,
+      when: new Date(),
+      userName: "",
+      batchSize: parsed.rows.length,
+      columns: noteCols.map((h) => ({ header: h, value: String(r[h] ?? "") })),
+    });
+    // noteCols is derived from `parsed` and `mapping`; both are listed.
+  }, [parsed, mapping, source, noteCols]);
 
   // A row can only become a GHL contact if at least one column maps to a contact
   // identity (name/email/phone). Without this, every row fails server-side with
@@ -515,8 +598,9 @@ export default function ImportWizard({
             </span>
           </div>
           <div className="imeta" style={{ marginBottom: 10 }}>
-            {mappedCount} of {parsed.columns.length} columns mapped · unmapped
-            columns are skipped
+            <b>{fieldCols.length}</b> to fields · <b>{noteCols.length}</b> to
+            notes · <b>{droppedCols.length}</b> not imported, of{" "}
+            {parsed.columns.length} columns
           </div>
           {!hasIdentity ? (
             <div className="savemsg err" style={{ marginBottom: 10 }}>
@@ -537,7 +621,10 @@ export default function ImportWizard({
                   <span className="icol">
                     {c}
                     {isAuto ? <span className="iauto">auto</span> : null}
-                    {unmapped ? <span className="iskip">skip</span> : null}
+                    {mapping[c] === NOTE_TARGET ? (
+                      <span className="inote">note</span>
+                    ) : null}
+                    {unmapped ? <span className="iskip">dropped</span> : null}
                   </span>
                   <span className="iarrow">→</span>
                   <select
@@ -546,7 +633,12 @@ export default function ImportWizard({
                       setMapping((m) => ({ ...m, [c]: e.target.value }))
                     }
                   >
-                    <option value="">— skip —</option>
+                    {/* "Don't import" still MEANS dropped. Notes is the
+                        default, not a catch-all — choosing this throws the
+                        column away, which is often the right call for 45 empty
+                        Qualification columns. It is now a click, not an
+                        oversight. */}
+                    <option value="">— Don&apos;t import —</option>
                     {targets.map((t) => (
                       <option key={t.key} value={t.key}>
                         {t.label}
@@ -568,6 +660,49 @@ export default function ImportWizard({
             {parsed.rows.length} rows into <b>{pipelineName}</b> / <b>{stageName}</b>,
             deduped by email/phone.
           </div>
+
+          {/* NAMED, not counted. "6 columns will not be imported" is abstract;
+              seeing "education · job location" makes it a decision. Not an
+              error — dropping is often right, and the 45 empty Qualification
+              columns usually should be. */}
+          {droppedCols.length ? (
+            <div className="idrops">
+              <b>
+                {droppedCols.length} column
+                {droppedCols.length === 1 ? "" : "s"} will not be imported:
+              </b>{" "}
+              {droppedCols.join(" · ")}
+            </div>
+          ) : null}
+
+          {/* The split, SHOWN rather than discovered. Split on the first space,
+              so a multi-word surname stays whole. */}
+          {nameCol ? (
+            <div className="isplit">
+              <b>{nameCol}</b> becomes First / Last —
+              {parsed.rows.slice(0, 3).map((r, i) => {
+                const { first, last } = splitFullName(r[nameCol] as string);
+                return (
+                  <span key={i} className="isplitex">
+                    {String(r[nameCol] ?? "") || "—"} → <b>{first || "—"}</b> |{" "}
+                    <b>{last || <i>empty</i>}</b>
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {/* One note per record, not one per column. Shown for the first row
+              so nobody discovers the layout after 47 records already have it. */}
+          {noteCols.length && parsed.rows.length ? (
+            <details className="inotepv">
+              <summary>
+                {noteCols.length} column{noteCols.length === 1 ? "" : "s"} go to
+                a note on each record — preview the first
+              </summary>
+              <pre>{notePreview}</pre>
+            </details>
+          ) : null}
           <div className="ipreview">
             <table>
               <thead>
@@ -623,6 +758,21 @@ export default function ImportWizard({
               Ready to import <b>{parsed.rows.length}</b> rows into{" "}
               <b>{pipelineName}</b> / <b>{stageName}</b>. Existing contacts
               (matched by email/phone) are skipped.
+              {noteCols.length ? (
+                <>
+                  {" "}
+                  Each new record gets one note holding{" "}
+                  <b>{noteCols.length}</b> column
+                  {noteCols.length === 1 ? "" : "s"}.
+                </>
+              ) : null}
+              {droppedCols.length ? (
+                <>
+                  {" "}
+                  <b>{droppedCols.length}</b> column
+                  {droppedCols.length === 1 ? "" : "s"} will not be imported.
+                </>
+              ) : null}
             </div>
           )}
 
@@ -643,8 +793,37 @@ export default function ImportWizard({
               <div className="iresult-nums">
                 <span className="ok">✓ {summary.created} created</span>
                 <span>· {summary.skipped} skipped (existing)</span>
+                <span>· {summary.noted} notes</span>
+                {summary.notesSkipped ? (
+                  <span>· {summary.notesSkipped} notes already present</span>
+                ) : null}
                 <span className="bad">· {summary.failed} failed</span>
               </div>
+              {/* NOT errors. The value went in exactly as written; this is the
+                  list a person looks at afterwards to decide whether it was
+                  right. An international phone that doesn't fit E.164 may be
+                  perfectly correct — code must not decide that. */}
+              {summary.flagged.length ? (
+                <div className="iflags">
+                  <b>
+                    {summary.flagged.length} value
+                    {summary.flagged.length === 1 ? "" : "s"} imported as
+                    written — worth a look:
+                  </b>
+                  <ul>
+                    {summary.flagged.slice(0, 20).map((f, i) => (
+                      <li key={i}>
+                        Row {f.row} · <b>{f.column}</b>: “{f.value}” — {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                  {summary.flagged.length > 20 ? (
+                    <div className="imeta">
+                      …and {summary.flagged.length - 20} more
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {summary.errors.length ? (
                 <>
                   <button

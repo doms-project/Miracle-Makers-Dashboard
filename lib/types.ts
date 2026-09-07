@@ -220,7 +220,20 @@ export interface ImportSummary {
   created: number;
   skipped: number; // existing contact (deduped)
   failed: number;
+  noted: number; // import notes written
+  notesSkipped: number; // a note with this heading was already on the record
   errors: ImportRowError[];
+  // Values that could not be normalised for their target type. NOT errors —
+  // the value was imported exactly as written; this is the list a person looks
+  // at afterwards to decide whether it was right.
+  flagged: ImportFlag[];
+}
+
+export interface ImportFlag {
+  row: number;
+  column: string;
+  value: string;
+  reason: string;
 }
 
 // Task 4 — a caregiver linked to a client via the caregiver_client association.
