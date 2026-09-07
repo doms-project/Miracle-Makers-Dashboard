@@ -729,11 +729,21 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    neither is the primary action. An <a>, not a button, so it opens in a tab. */
 .msgbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s;}
 .msgbtn:hover{background:var(--plum-soft);border-color:var(--plum);}
-/* Source mark — small, monochrome, inline before the record name. Deliberately
-   low-contrast: it is a hint about provenance, not a status. */
-.srcmark{display:inline-flex;align-items:center;vertical-align:-2px;margin-right:5px;color:var(--ink-3);flex:none;}
-.srcmark svg{width:12px;height:12px;}
-.clname .srcmark{margin-right:6px;}
+/* Source mark — the channel's OWN brand mark, in its own colours, inline AFTER
+   the record name. Full colour on purpose: a logo in the wrong colour reads as
+   a mistake, and instant recognition is the entire point of showing one. */
+/* 20px, and it sits AFTER the name — so the margin is on the LEFT. `color` is
+   only ever used by the Website globe; the three brand marks carry their own
+   fills and must not inherit anything. */
+/* The negative block margins keep a 20px mark from growing the 12.5px line it
+   sits on — without them a card that HAS a source stood 2px taller than one
+   that doesn't, and a kanban column lost its rhythm for no reason. */
+.srcmark{display:inline-flex;align-items:center;vertical-align:-5px;margin:-4px 0 -4px 7px;color:var(--ink-3);flex:none;}
+.srcmark svg{width:20px;height:20px;display:block;}
+/* The stat tile's line is 10.5px — a 20px logo there would dwarf its own
+   count, so the tile (and only the tile) asks for the small one. */
+.srcmark.sm{vertical-align:-3px;margin-left:5px;}
+.srcmark.sm svg{width:14px;height:14px;}
 /* "By source" tile entries are the filter control. They have to keep reading as
    the count line they already were — same size, same colour — so the tile does
    not suddenly look like a button bar; the hover/active states are what say
@@ -741,5 +751,5 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .srcpick{display:inline-flex;align-items:center;gap:4px;border:1px solid transparent;background:none;color:inherit;font:inherit;padding:1px 5px;margin:-1px 0;border-radius:6px;cursor:pointer;line-height:1.5;}
 .srcpick:hover{border-color:var(--plum-line);background:var(--plum-soft);}
 .srcpick.on{border-color:var(--plum);background:var(--plum-soft);color:var(--plum);font-weight:600;}
-.srcpick .srcmark{margin-right:0;color:inherit;}
+.srcpick .srcmark{margin-left:5px;color:inherit;}
 .srcclr{margin-left:6px;border:0;background:none;padding:0;font:inherit;font-size:9.5px;letter-spacing:.05em;color:var(--plum);text-decoration:underline;cursor:pointer;text-transform:uppercase;}
