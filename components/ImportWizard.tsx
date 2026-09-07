@@ -9,6 +9,8 @@ import type {
   ImportMeta,
   ImportPipeline,
   ImportSummary,
+  ImportDuplicate,
+  DuplicateMode,
 } from "@/lib/types";
 import {
   buildImportNote,
@@ -91,6 +93,13 @@ export default function ImportWizard({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
 
+  // ITEM 5 — who already exists, checked on the way into Preview so the choice
+  // is made BEFORE anything runs.
+  const [dupMode, setDupMode] = useState<DuplicateMode>("update");
+  const [dups, setDups] = useState<ImportDuplicate[] | null>(null);
+  const [dupBusy, setDupBusy] = useState(false);
+  const [dupErr, setDupErr] = useState<unknown>(null);
+
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
@@ -140,13 +149,40 @@ export default function ImportWizard({
   const stageName =
     pipeline?.stages.find((s) => s.id === stageId)?.name || "—";
 
-  const targets = useMemo(() => {
-    const cf = (meta?.fieldDefs || []).map((d) => ({
-      key: `cf:${d.id}`,
-      label: `Field · ${d.name}`,
+  // Three groups, rendered as <optgroup> so which model a field belongs to is
+  // obvious at the point of choosing rather than something you have to know.
+  //
+  // 🔴 CONTACT FIELDS MATTER MOST HERE. An applicant's experience,
+  // certifications and availability are contact fields BY DESIGN — they
+  // describe the person and survive a second application — and the wizard
+  // could not reach a single one of them until now.
+  const targetGroups = useMemo(() => {
+    const contact = (meta?.contactFieldDefs || []).map((d) => ({
+      key: `ccf:${d.id}`,
+      label: d.name,
     }));
-    return [...NATIVE_TARGETS, ...cf];
+    const opp = (meta?.fieldDefs || []).map((d) => ({
+      key: `cf:${d.id}`,
+      label: d.name,
+    }));
+    return [
+      { group: "", options: NATIVE_TARGETS },
+      { group: "Contact fields", options: contact },
+      { group: "Opportunity fields", options: opp },
+    ].filter((g) => g.options.length);
   }, [meta]);
+
+  // Flat, for looking a target's label up by key (Preview's column headers).
+  const targets = useMemo(
+    () =>
+      targetGroups.flatMap((g) =>
+        g.options.map((o) => ({
+          key: o.key,
+          label: g.group ? `${g.group.replace(/ fields$/, "")} · ${o.label}` : o.label,
+        })),
+      ),
+    [targetGroups],
+  );
 
   const autoMap = useCallback(
     (columns: string[]): { map: Record<string, string>; auto: Set<string> } => {
@@ -175,8 +211,17 @@ export default function ImportWizard({
           // nobody would ever notice. A wrong mapping that looks right is the
           // failure mode this project has hit most often; unmapped is at least
           // visible, and now recoverable.
-          const def = (meta?.fieldDefs || []).find((d) => norm(d.name) === n);
-          if (def) target = `cf:${def.id}`;
+          //
+          // CONTACT fields are searched FIRST. Where both models happen to hold
+          // a field of the same name, the contact one is the one that describes
+          // the person and survives a second application — which is what an
+          // applicant import is writing.
+          const cDef = (meta?.contactFieldDefs || []).find((d) => norm(d.name) === n);
+          if (cDef) target = `ccf:${cDef.id}`;
+          else {
+            const def = (meta?.fieldDefs || []).find((d) => norm(d.name) === n);
+            if (def) target = `cf:${def.id}`;
+          }
         }
         if (target) auto.add(c);
         // 🔴 THE FAILURE MODE FLIPS HERE. An unclaimed column used to be "" —
@@ -259,7 +304,7 @@ export default function ImportWizard({
     setImportErr(null);
     setProgress(0);
     const agg: ImportSummary = {
-      created: 0, skipped: 0, failed: 0, noted: 0, notesSkipped: 0,
+      created: 0, updated: 0, skipped: 0, failed: 0, noted: 0, notesSkipped: 0,
       errors: [], flagged: [],
     };
     try {
@@ -279,6 +324,7 @@ export default function ImportWizard({
             // The whole file, for the note's "N records in this batch" line —
             // the chunk would say 25 on a 47-row import.
             totalRows: parsed.rows.length,
+            duplicateMode: dupMode,
             // FILE order, so the note's Q&A pairing still sees the answer
             // column immediately after its question.
             columns: parsed.columns,
@@ -287,6 +333,7 @@ export default function ImportWizard({
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw apiError(res, j);
         agg.created += j.created || 0;
+        agg.updated += j.updated || 0;
         agg.skipped += j.skipped || 0;
         agg.failed += j.failed || 0;
         agg.noted += j.noted || 0;
@@ -363,6 +410,9 @@ export default function ImportWizard({
     ? parsed.columns.filter((c) => mapping[c] === NOTE_TARGET)
     : [];
   const droppedCols = parsed ? parsed.columns.filter((c) => !mapping[c]) : [];
+  const contactFieldCols = parsed
+    ? parsed.columns.filter((c) => (mapping[c] || "").startsWith("ccf:"))
+    : [];
   const mappedCount = fieldCols.length + noteCols.length;
 
   // The column mapped to Full Name, if any — Preview shows what the split does
@@ -400,6 +450,52 @@ export default function ImportWizard({
   const hasIdentity = parsed
     ? parsed.columns.some((c) => IDENTITY_TARGETS.has(mapping[c] || ""))
     : false;
+
+  // Resolve each row's identity from the CURRENT mapping — the same columns the
+  // import itself will use, so the check can never be asking about a different
+  // field than the one that will be written.
+  const identityOf = useCallback(
+    (r: Record<string, unknown>) => {
+      let email = "";
+      let phone = "";
+      for (const [col, t] of Object.entries(mapping)) {
+        if (t === "native:email") email = String(r[col] ?? "").trim();
+        else if (t === "native:phone") phone = String(r[col] ?? "").trim();
+      }
+      return { email, phone };
+    },
+    [mapping],
+  );
+
+  const checkDuplicates = useCallback(async () => {
+    if (!parsed) return;
+    setDupBusy(true);
+    setDupErr(null);
+    try {
+      const people = parsed.rows.map((r, i) => ({ row: i + 1, ...identityOf(r) }));
+      const res = await fetch("/api/import/duplicates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...ssoHeader() },
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, people }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw apiError(res, j);
+      setDups(j.duplicates || []);
+      // A lookup that FAILED is not "no duplicate" — say so rather than letting
+      // a network blip read as a clean file.
+      if (Array.isArray(j.errors) && j.errors.length)
+        setDupErr({
+          error: `${j.errors.length} row${j.errors.length === 1 ? "" : "s"} could not be checked.`,
+          detail:
+            "Those rows may or may not already exist. Re-run the check, or import knowing they are unverified.",
+        });
+    } catch (e) {
+      setDupErr(e);
+      setDups(null);
+    } finally {
+      setDupBusy(false);
+    }
+  }, [parsed, identityOf, ssoBlob, ssoHeader]);
 
   const canNext = (): boolean => {
     if (step === 0) return !!parsed;
@@ -639,11 +735,23 @@ export default function ImportWizard({
                         Qualification columns. It is now a click, not an
                         oversight. */}
                     <option value="">— Don&apos;t import —</option>
-                    {targets.map((t) => (
-                      <option key={t.key} value={t.key}>
-                        {t.label}
-                      </option>
-                    ))}
+                    {targetGroups.map((g) =>
+                      g.group ? (
+                        <optgroup key={g.group} label={g.group}>
+                          {g.options.map((t) => (
+                            <option key={t.key} value={t.key}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ) : (
+                        g.options.map((t) => (
+                          <option key={t.key} value={t.key}>
+                            {t.label}
+                          </option>
+                        ))
+                      ),
+                    )}
                   </select>
                 </div>
               );
@@ -660,6 +768,110 @@ export default function ImportWizard({
             {parsed.rows.length} rows into <b>{pipelineName}</b> / <b>{stageName}</b>,
             deduped by email/phone.
           </div>
+
+          {/* ITEM 5 — WHO ALREADY EXISTS, AND WHAT TO DO ABOUT THEM.
+              Asked here, before anything runs, and the people are NAMED: "12
+              already exist" is abstract, seeing Ebony Logan on the list makes
+              the choice real. */}
+          {dupBusy ? (
+            <div className="idups busy">Checking which of these already exist…</div>
+          ) : dups && dups.length ? (
+            <div className="idups">
+              <div className="idups-head">
+                <b>
+                  {dups.length} of {parsed.rows.length} already exist
+                </b>
+                , matched by email or phone:{" "}
+                <span className="idups-who">
+                  {dups.slice(0, 3).map((d) => d.name).join(" · ")}
+                  {dups.length > 3 ? ` · and ${dups.length - 3} more` : ""}
+                </span>
+              </div>
+              <label className={dupMode === "update" ? "on" : ""}>
+                <input
+                  type="radio"
+                  name="dupmode"
+                  checked={dupMode === "update"}
+                  onChange={() => setDupMode("update")}
+                />
+                <span>
+                  <b>Update</b> — fill empty fields, keep existing values, add
+                  the note.
+                </span>
+              </label>
+              <label className={dupMode === "overwrite" ? "on" : ""}>
+                <input
+                  type="radio"
+                  name="dupmode"
+                  checked={dupMode === "overwrite"}
+                  onChange={() => setDupMode("overwrite")}
+                />
+                <span>
+                  <b>Overwrite</b> — replace existing values, add the note.
+                  {dupMode === "overwrite" ? (
+                    // Not just a label. A row from this file has 45 empty
+                    // columns; overwriting with blanks would wipe the answers a
+                    // caregiver gave through the form.
+                    <em className="idups-warn">
+                      This replaces values on {dups.length} record
+                      {dups.length === 1 ? "" : "s"}. A blank cell in the CSV
+                      will clear the existing value.
+                    </em>
+                  ) : null}
+                </span>
+              </label>
+              <label className={dupMode === "skip" ? "on" : ""}>
+                <input
+                  type="radio"
+                  name="dupmode"
+                  checked={dupMode === "skip"}
+                  onChange={() => setDupMode("skip")}
+                />
+                <span>
+                  <b>Skip</b> — leave untouched, import only the{" "}
+                  {parsed.rows.length - dups.length} new.
+                  {dupMode === "skip" ? (
+                    <em className="idups-warn">
+                      Their answers from this file will not be recorded
+                      anywhere.
+                    </em>
+                  ) : null}
+                </span>
+              </label>
+              <details className="idups-all">
+                <summary>All {dups.length} by name</summary>
+                <ul>
+                  {dups.map((d) => (
+                    <li key={d.contactId + d.row}>
+                      Row {d.row}: {d.name}{" "}
+                      <span className="muted">— matched on {d.matchedOn}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          ) : dups ? (
+            <div className="idups clean">
+              None of these {parsed.rows.length} people already exist.
+            </div>
+          ) : null}
+          {dupErr ? <ErrorMessage error={dupErr} className="savemsg err" /> : null}
+
+          {/* ⚠️ SCOPE. A contact field belongs to the PERSON, not to this
+              record — writing one changes what every opportunity that contact
+              holds shows. The record panel already says this; the wizard has to
+              say it too, before the write rather than after. */}
+          {contactFieldCols.length ? (
+            <div className="iscope">
+              <b>
+                {contactFieldCols.length} column
+                {contactFieldCols.length === 1 ? "" : "s"} write CONTACT fields
+              </b>{" "}
+              ({contactFieldCols.join(" · ")}). A contact field belongs to the
+              person — the value shows on every opportunity that contact holds,
+              not only the one this import creates.
+            </div>
+          ) : null}
 
           {/* NAMED, not counted. "6 columns will not be imported" is abstract;
               seeing "education · job location" makes it a decision. Not an
@@ -756,8 +968,21 @@ export default function ImportWizard({
           ) : (
             <div className="imeta" style={{ marginBottom: 12 }}>
               Ready to import <b>{parsed.rows.length}</b> rows into{" "}
-              <b>{pipelineName}</b> / <b>{stageName}</b>. Existing contacts
-              (matched by email/phone) are skipped.
+              <b>{pipelineName}</b> / <b>{stageName}</b>.
+              {dups && dups.length ? (
+                <>
+                  {" "}
+                  <b>{dups.length}</b> already exist and will be{" "}
+                  <b>
+                    {dupMode === "update"
+                      ? "updated"
+                      : dupMode === "overwrite"
+                        ? "overwritten"
+                        : "left untouched"}
+                  </b>
+                  .
+                </>
+              ) : null}
               {noteCols.length ? (
                 <>
                   {" "}
@@ -792,7 +1017,8 @@ export default function ImportWizard({
             <div className="iresult">
               <div className="iresult-nums">
                 <span className="ok">✓ {summary.created} created</span>
-                <span>· {summary.skipped} skipped (existing)</span>
+                <span>· {summary.updated} updated</span>
+                <span>· {summary.skipped} skipped (untouched)</span>
                 <span>· {summary.noted} notes</span>
                 {summary.notesSkipped ? (
                   <span>· {summary.notesSkipped} notes already present</span>
@@ -878,7 +1104,21 @@ export default function ImportWizard({
               type="button"
               className="ibtn"
               disabled={!canNext()}
-              onClick={() => setStep((s) => ((s + 1) as StepIdx))}
+              onClick={() => {
+                // 🔴 THE CHECK MUST NOT LIVE INSIDE THE STATE UPDATER. React
+                // may call an updater more than once (it does, in development),
+                // and a side effect in there fires with it — the first run of
+                // this cost 15 GoHighLevel lookups on a 3-row file instead of
+                // 5, because the whole duplicate check ran twice. On a 47-row
+                // import that is 94 calls against a 100-per-10-seconds budget.
+                // Updaters are pure; the effect goes beside it.
+                const next = Math.min(step + 1, 4) as StepIdx;
+                // Entering Preview: find out who already exists BEFORE anything
+                // runs. Re-run each time, because the mapping may have changed
+                // which column is the email.
+                if (next === 3) void checkDuplicates();
+                setStep(next);
+              }}
             >
               Next →
             </button>

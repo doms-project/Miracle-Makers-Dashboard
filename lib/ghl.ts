@@ -6,6 +6,7 @@ import type {
 import { isFieldEditable } from "./editable";
 import { PIPELINE_FOLDERS } from "./fieldFolders";
 import { divisionLabel } from "./division";
+import { emailKey, phoneKey } from "./phone";
 import { mapLimit } from "./concurrency";
 
 // Account-specific — MUST come from env (re-derive per account with
@@ -2389,6 +2390,78 @@ export async function searchContacts(
     email: String(c.email ?? ""),
     phone: String(c.phone ?? ""),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// ITEM 5 — DOES THIS PERSON ALREADY EXIST?
+//
+// 🔴 This exists because the import route used to DECIDE AFTER IT HAD ALREADY
+// WRITTEN. `upsertContact` ran with the mapped custom fields, and only then was
+// its `isNew` flag read to decide whether to "skip" the row. A skipped
+// duplicate had already had its fields overwritten — silently, on records the
+// importer believed it had left alone. Decide first, write second.
+//
+// ⚠️ SEARCH IS A CANDIDATE GENERATOR, NOT THE ANSWER. /contacts/search takes a
+// free-text query and will happily return near matches; treating a hit as
+// proof of identity would merge two different people. The returned rows are
+// re-checked in code against the exact email (case-insensitive) or the last ten
+// digits of the phone, and only an exact match counts.
+// ---------------------------------------------------------------------------
+export interface ContactMatch {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  /** Which field actually matched — shown to the person choosing what to do. */
+  matchedOn: "email" | "phone";
+}
+
+export async function findContactByEmailOrPhone(args: {
+  email?: string;
+  phone?: string;
+}): Promise<ContactMatch | null> {
+  const { locationId } = requireEnv();
+  const wantEmail = emailKey(args.email);
+  const wantPhone = phoneKey(args.phone);
+  // Email first: it is the stronger identifier and the one an Indeed export
+  // always carries. Phone is the fallback for a row that has no email.
+  const queries: { q: string; on: "email" | "phone" }[] = [];
+  if (wantEmail) queries.push({ q: wantEmail, on: "email" });
+  if (wantPhone) queries.push({ q: wantPhone, on: "phone" });
+  if (!queries.length) return null;
+
+  for (const { q, on } of queries) {
+    let rows: RawContact[] = [];
+    try {
+      const data = await ghlSend<{ contacts?: RawContact[] }>(
+        "POST",
+        "/contacts/search",
+        { locationId, page: 1, pageLimit: 20, query: q },
+      );
+      rows = data.contacts || [];
+    } catch {
+      // A failed lookup must not be read as "no duplicate" — that would create
+      // a second record for someone who exists. Rethrow so the row reports an
+      // error instead of quietly doing the wrong thing.
+      throw new GhlError(
+        "Could not check for an existing contact.",
+        502,
+        `Lookup failed for ${on}.`,
+      );
+    }
+    for (const c of rows) {
+      const id = String(c.id ?? c.contactId ?? "");
+      if (!id) continue;
+      const email = String(c.email ?? "");
+      const phone = String(c.phone ?? "");
+      const hit =
+        (on === "email" && wantEmail && emailKey(email) === wantEmail) ||
+        (on === "phone" && wantPhone && phoneKey(phone) === wantPhone);
+      if (hit)
+        return { id, name: contactDisplay(c), email, phone, matchedOn: on };
+    }
+  }
+  return null;
 }
 
 export async function createOpportunity(o: {

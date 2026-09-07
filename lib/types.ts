@@ -211,14 +211,33 @@ export interface ImportPipeline {
 export interface ImportMeta {
   pipelines: ImportPipeline[];
   fieldDefs: EditableFieldDef[]; // opportunity custom fields (map targets)
+  // ITEM 3 — CONTACT custom fields, the other half of the map targets.
+  //
+  // 🔴 An applicant's experience, certifications and availability are CONTACT
+  // fields BY DESIGN — they describe the person and survive a second
+  // application. The wizard only ever offered opportunity fields, so none of
+  // the 58 applicant fields could be imported into at all.
+  contactFieldDefs: EditableFieldDef[];
 }
+/** Item 5 — a row whose person already exists, found BEFORE anything is written. */
+export interface ImportDuplicate {
+  row: number;
+  name: string;
+  contactId: string;
+  matchedOn: "email" | "phone";
+}
+
+/** What to do with rows whose person already exists. */
+export type DuplicateMode = "update" | "overwrite" | "skip";
+
 export interface ImportRowError {
   row: number; // 1-based row index within the file
   error: string;
 }
 export interface ImportSummary {
   created: number;
-  skipped: number; // existing contact (deduped)
+  updated: number; // existing contact, fields written and note added
+  skipped: number; // existing contact, left untouched
   failed: number;
   noted: number; // import notes written
   notesSkipped: number; // a note with this heading was already on the record

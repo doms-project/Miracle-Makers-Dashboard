@@ -324,3 +324,39 @@ export function fieldLabel(name: string): string {
   // render as a blank row with an editor and no clue what it is.
   return stripped || name;
 }
+
+
+// ---------------------------------------------------------------------------
+// ITEM 8 — RESERVED MEDIA FOLDERS.
+//
+// The Resources tab hides a folder nobody has been granted... except from
+// ADMINS, who see every folder by design:
+//
+//     visible = all.filter((f) => isAdmin || granted.has(f.id) || …)
+//
+// So "granted to nobody" does not hide anything from the people who run
+// imports — the wizard is admin-only, so they are exactly the ones who would
+// find `_imports` sitting in Resources.
+//
+// A RESERVED NAME rather than an env var, deliberately:
+//
+//   - An env var can be unset, mistyped, or differ between preview and
+//     production, and the failure mode is the folder appearing in the tab with
+//     nothing to explain why. A name is in the code, the same everywhere.
+//   - The collision risk an env var protects against is not real here: the
+//     leading underscore is not a character anyone reaches for when naming a
+//     folder by hand ("Onboarding Docs", "Policies"), and if someone did create
+//     one it would be hidden — a folder that does not list, not data loss.
+//   - One rule, one place, and the next reserved folder is one entry.
+//
+// ⚠️ HIDING, NOT SECURING. These folders are simply not listed by the Resources
+// tab. Anyone with GoHighLevel access still sees them there, which is correct:
+// the CSVs are the company's own records, not a secret from the company.
+// ---------------------------------------------------------------------------
+export const RESERVED_MEDIA_FOLDERS = ["_imports"] as const;
+
+/** True when a media folder is one the Resources tab must never list. */
+export function isReservedFolder(name: string): boolean {
+  const n = (name || "").trim().toLowerCase();
+  return RESERVED_MEDIA_FOLDERS.some((r) => r.toLowerCase() === n);
+}
