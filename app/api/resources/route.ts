@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isReservedFolder } from "@/lib/fieldFolders";
 import {
   listResources,
   listMediaFolders,
@@ -30,9 +31,14 @@ export const runtime = "nodejs";
 // would silently change what the whole company can see the moment someone
 // renames a folder in GHL.
 //
-// 🔴 ORGANISATION, NOT SECURITY. GHL media URLs are publicly reachable once
-// known — this decides what people SEE listed, not what they could reach with a
-// URL. Client-specific documents belong on the client's RECORD.
+// 🔴 ORGANISATION, NOT SECURITY. This decides what people SEE listed.
+//
+// CORRECTED: an earlier note here said GHL media URLs were "publicly reachable
+// once known". They are not — they are Google Cloud Storage links, SIGNED and
+// TIME-LIMITED, tested and confirmed to expire. The file persists; only the
+// link does not, and GHL mints a fresh one when it serves the file. The old
+// wording was wrong and had knock-on effects: it is why the per-applicant
+// document upload feature was deferred.
 async function getHandler(request: Request) {
   try {
     let session: { userId: string; role?: string; type?: string } | null = null;
@@ -50,7 +56,7 @@ async function getHandler(request: Request) {
     const isAdmin = !session || isAdminSession(session.role, session.type);
     const publicFolderId = (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim();
 
-    const all = await listMediaFolders();
+    const all = (await listMediaFolders()).filter((f) => !isReservedFolder(f.name));
     const granted = session ? getUserFolders(session.userId) : new Set<string>();
     const visible = all.filter(
       (f) => isAdmin || granted.has(f.id) || (publicFolderId && f.id === publicFolderId),

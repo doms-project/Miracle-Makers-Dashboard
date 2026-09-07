@@ -263,6 +263,23 @@ tbody tr:last-child td{border-bottom:0;}
 .inotepv{margin:0 0 10px;font-size:11.5px;}
 .inotepv summary{cursor:pointer;color:var(--plum);font-weight:600;}
 .inotepv pre{margin:8px 0 0;padding:11px 13px;border:1px solid var(--line);background:var(--canvas);border-radius:9px;font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;}
+/* Item 5 — the duplicate decision. Deliberately the loudest block on Preview:
+   it is the only one where the wrong choice destroys data. */
+.idups{margin:0 0 12px;padding:11px 13px;border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:9px;font-size:12px;color:var(--ink-2);}
+.idups.busy,.idups.clean{color:var(--ink-3);font-size:11.5px;}
+.idups-head{margin-bottom:9px;line-height:1.5;}
+.idups-head b{color:var(--ink);}
+.idups-who{color:var(--plum);font-weight:600;}
+.idups label{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border-radius:7px;cursor:pointer;line-height:1.5;}
+.idups label.on{background:var(--bg);border:1px solid var(--plum-line);}
+.idups label:not(.on){border:1px solid transparent;}
+.idups label input{margin-top:2px;flex:none;}
+.idups-warn{display:block;margin-top:3px;font-style:normal;font-size:11px;color:#8a3d3d;background:#fdf2f2;border:1px solid #f0c9c9;border-radius:6px;padding:5px 8px;}
+.idups-all{margin-top:8px;font-size:11px;}
+.idups-all summary{cursor:pointer;color:var(--plum);font-weight:600;}
+.idups-all ul{margin:6px 0 0;padding-left:18px;line-height:1.6;max-height:200px;overflow:auto;}
+/* Scope — a contact field is the person's, not this record's. */
+.iscope{margin:0 0 10px;padding:9px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;line-height:1.5;color:#7a5227;}
 .iflags{margin-top:10px;padding:9px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;color:#7a5227;}
 .iflags ul{margin:6px 0 0;padding-left:18px;line-height:1.6;}
 .ipresets{display:inline-flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-weight:600;}

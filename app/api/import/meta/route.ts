@@ -7,9 +7,10 @@ import type { ImportMeta, ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Admin-only. Returns ALL pipelines (+ their stages) and the opportunity custom
-// field definitions, so the import wizard's destination + mapping dropdowns are
-// fully dynamic — no pipeline/stage/field is hardcoded.
+// Admin-only. Returns ALL pipelines (+ their stages) and BOTH families of
+// custom field definition — opportunity and contact — so the import wizard's
+// destination + mapping dropdowns are fully dynamic. No pipeline, stage or
+// field is hardcoded.
 export async function GET(request: Request) {
   try {
     if (ssoConfigured()) {
@@ -26,11 +27,15 @@ export async function GET(request: Request) {
           { status: 403 },
         );
     }
-    const [pipelines, fieldDefs] = await Promise.all([
+    // BOTH models. `getEditableFieldDefs()` defaults to "opportunity", and
+    // that default was the whole reason the applicant's 58 CONTACT fields were
+    // unreachable from the wizard: they were never in the list to pick.
+    const [pipelines, fieldDefs, contactFieldDefs] = await Promise.all([
       listPipelines(),
-      getEditableFieldDefs(),
+      getEditableFieldDefs("opportunity"),
+      getEditableFieldDefs("contact"),
     ]);
-    const body: ImportMeta = { pipelines, fieldDefs };
+    const body: ImportMeta = { pipelines, fieldDefs, contactFieldDefs };
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     if (e instanceof SsoError)

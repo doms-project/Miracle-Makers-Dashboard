@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import {
   upsertContact,
   createOpportunity,
+  findContactByEmailOrPhone,
+  updateContactCustomFields,
+  listContactOpportunities,
+  listOpportunityNotes,
   addOpportunityNote,
   composeNoteBody,
   getEditableFieldDefs,
@@ -10,6 +14,7 @@ import {
 } from "@/lib/ghl";
 import {
   buildImportNote,
+  importNoteHeading,
   normaliseCell,
   splitFullName,
   stripLeadingApostrophe,
@@ -17,7 +22,13 @@ import {
 } from "@/lib/importNotes";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
-import type { ImportSummary, ApiError, EditableFieldDef } from "@/lib/types";
+import { e164 } from "@/lib/phone";
+import type {
+  ImportSummary,
+  ApiError,
+  EditableFieldDef,
+  DuplicateMode,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,7 +36,15 @@ export const maxDuration = 60; // allow time for a chunk of rows
 
 // Target keys the mapping can use.
 //   native:firstName | native:lastName | native:name | native:email |
-//   native:phone | native:oppName | cf:<fieldId> | note:
+//   native:phone | native:oppName | cf:<fieldId> | ccf:<fieldId> | note:
+//
+// `cf:` is an OPPORTUNITY custom field, `ccf:` a CONTACT one. They are separate
+// prefixes rather than one id space because the two models can hold the same
+// id-shaped string and, more importantly, because they are written to DIFFERENT
+// OBJECTS. Before this existed, every mapped field id was posted to BOTH the
+// contact and the opportunity ("harmless otherwise") — which meant a contact
+// field could not be imported at all, and an opportunity field id was being
+// sent to the contact endpoint for no reason.
 //
 // `note:` is the recoverable default for a column nothing else claims. Before
 // it existed, an unmapped column was dropped in the loop below with no record
@@ -45,6 +64,10 @@ interface ImportBody {
   // The whole file, not this chunk — the note says "47 records in this batch"
   // and the wizard posts in chunks of 25, so the count has to be passed in.
   totalRows?: number;
+  // ITEM 5 — what to do with rows whose person already exists. Defaults to
+  // "update": the safe middle, where nothing is lost either way and the note
+  // always lands. An older client that sends nothing gets that default.
+  duplicateMode?: DuplicateMode;
   // Column order as the FILE had it. Object key order survives JSON in practice
   // but is not guaranteed by it, and the note's layout depends on the order —
   // a Q&A pair is only a pair because the answer column follows the question.
@@ -78,6 +101,10 @@ function formatValue(def: EditableFieldDef, value: unknown): unknown {
 }
 
 const str = (v: unknown) => (v == null ? "" : String(v).trim());
+
+// A sentinel, not an error: "this record already has this import's note".
+// Thrown so the note block has one exit and the row still counts as imported.
+const SKIP_NOTE = Symbol("note already present");
 
 export async function POST(request: Request) {
   try {
@@ -115,12 +142,18 @@ export async function POST(request: Request) {
     if (rows.length > 50)
       return NextResponse.json({ error: "Chunk too large (max 50 rows/request)." } as ApiError, { status: 400 });
 
-    const defs = await getEditableFieldDefs();
-    const defById = new Map(defs.map((d) => [d.id, d]));
+    const [oppDefs, contactDefs] = await Promise.all([
+      getEditableFieldDefs("opportunity"),
+      getEditableFieldDefs("contact"),
+    ]);
+    const oppById = new Map(oppDefs.map((d) => [d.id, d]));
+    const contactById = new Map(contactDefs.map((d) => [d.id, d]));
+    const dupMode: DuplicateMode = body.duplicateMode || "update";
     const offset = typeof body.rowOffset === "number" ? body.rowOffset : 0;
 
     const summary: ImportSummary = {
       created: 0,
+      updated: 0,
       skipped: 0,
       failed: 0,
       noted: 0,
@@ -142,7 +175,8 @@ export async function POST(request: Request) {
       try {
         // Build contact + opportunity fields from the mapping.
         const contact: Parameters<typeof upsertContact>[0] = { source };
-        const cfEntries: { id: string; value: unknown }[] = [];
+        const oppCf: { id: string; value: unknown }[] = [];
+        const contactCf: { id: string; value: unknown }[] = [];
         const noteCols: NoteColumn[] = [];
         let oppName = "";
 
@@ -167,8 +201,11 @@ export async function POST(request: Request) {
             noteCols.push({ header: col, value: String(val) });
             continue;
           }
-          if (target.startsWith("cf:")) {
-            const def = defById.get(target.slice(3));
+          if (target.startsWith("cf:") || target.startsWith("ccf:")) {
+            const onContact = target.startsWith("ccf:");
+            const def = onContact
+              ? contactById.get(target.slice(4))
+              : oppById.get(target.slice(3));
             if (!def) continue;
             const t = (def.dataType || "").toUpperCase();
             const kind =
@@ -192,7 +229,10 @@ export async function POST(request: Request) {
                     ? `Could not be read as a ${kind} — imported exactly as written.`
                     : `Imported as ${JSON.stringify(norm.value)} — the rest of the cell is not part of a ${kind}.`,
               });
-            cfEntries.push({ id: def.id, value: formatValue(def, norm.value) });
+            const entry = { id: def.id, value: formatValue(def, norm.value) };
+            // 🔴 To the object it belongs to, and ONLY that object.
+            if (onContact) contactCf.push(entry);
+            else oppCf.push(entry);
           } else if (target === "native:firstName") contact.firstName = str(val);
           else if (target === "native:lastName") contact.lastName = str(val);
           else if (target === "native:name") {
@@ -203,7 +243,22 @@ export async function POST(request: Request) {
             if (first) contact.firstName = first;
             if (last) contact.lastName = last;
           } else if (target === "native:email") contact.email = str(val);
-          else if (target === "native:phone") contact.phone = str(val);
+          else if (target === "native:phone") {
+            // ITEM 6 — E.164, the forms' rule, from lib/phone.ts. A number that
+            // does not fit is written EXACTLY as it appears in the file and put
+            // on the flagged list: an international number may be perfectly
+            // correct and a person decides that, not this code.
+            const ph = e164(val);
+            contact.phone = ph.value;
+            if (ph.unnormalised)
+              summary.flagged.push({
+                row: rowNo,
+                column: col,
+                value: String(val).slice(0, 120),
+                reason:
+                  "Not a 10-digit or 1+10-digit US number — imported exactly as written.",
+              });
+          }
           else if (target === "native:oppName") oppName = str(val);
         }
 
@@ -230,30 +285,89 @@ export async function POST(request: Request) {
           continue;
         }
 
-        const { id: contactId, isNew } = await upsertContact({
-          ...contact,
-          customFields: cfEntries, // contact keeps a copy where field ids overlap; harmless otherwise
+        // 🔴 DECIDE FIRST, WRITE SECOND.
+        //
+        // This used to run `upsertContact` and only THEN read its `isNew` flag
+        // to decide whether to "skip" the row. By that point the contact's
+        // custom fields had already been overwritten — so a "skipped" duplicate
+        // had in fact been modified, silently, on records the importer believed
+        // it had left untouched. The existence check now happens BEFORE any
+        // write, and "skip" means what it says.
+        const existing = await findContactByEmailOrPhone({
+          email: contact.email,
+          phone: contact.phone,
         });
-        if (!contactId) {
-          summary.failed++;
-          summary.errors.push({ row: rowNo, error: "Contact upsert returned no id." });
-          continue;
-        }
-        if (!isNew) {
-          // Deduped — existing contact, skip creating a new opportunity.
+
+        if (existing && dupMode === "skip") {
+          // Untouched. Nothing written, and the row is reported so the count
+          // says what actually happened.
           summary.skipped++;
           continue;
         }
 
-        const oppId = await createOpportunity({
-          pipelineId,
-          stageId,
-          contactId,
-          name: oppName,
-          source,
-          customFields: cfEntries,
-        });
-        summary.created++;
+        let contactId = "";
+
+        if (existing) {
+          contactId = existing.id;
+          // UPDATE fills empty fields and keeps existing values; OVERWRITE
+          // replaces them. Both are contact-field writes, so both go through
+          // the contact endpoint — and neither creates a second opportunity in
+          // the destination pipeline (GHL rejects that with
+          // OPPORTUNITY_NO_DUPLICATE, and its message says "create" even on an
+          // update, which reads like a bug in this dashboard rather than a
+          // rule in theirs).
+          if (contactCf.length) {
+            try {
+              await updateContactCustomFields(contactId, contactCf);
+            } catch (e) {
+              summary.errors.push({
+                row: rowNo,
+                error: `Existing record kept, but its fields did not save — ${
+                  e instanceof Error ? e.message : String(e)
+                }`.slice(0, 300),
+              });
+            }
+          }
+          summary.updated++;
+        } else {
+          const up = await upsertContact({
+            ...contact,
+            customFields: contactCf,
+          });
+          contactId = up.id;
+          if (!contactId) {
+            summary.failed++;
+            summary.errors.push({ row: rowNo, error: "Contact upsert returned no id." });
+            continue;
+          }
+        }
+
+        // The opportunity is created only for a genuinely new person. An
+        // existing contact already holds one in this pipeline, and a second is
+        // both rejected by GHL and wrong.
+        let oppId = "";
+        if (!existing) {
+          oppId = await createOpportunity({
+            pipelineId,
+            stageId,
+            contactId,
+            name: oppName,
+            source,
+            customFields: oppCf,
+          });
+          summary.created++;
+        } else {
+          // The note still has to land on the person's existing record — that
+          // is the whole point of Update: "their Indeed answers ARE recorded".
+          // Prefer one in the destination pipeline; otherwise any they hold, so
+          // an applicant who exists in a different pipeline still gets the
+          // note rather than losing it for being filed elsewhere.
+          const held = await listContactOpportunities(contactId);
+          oppId =
+            held.find((o) => o.pipelineId === pipelineId)?.id ||
+            held[0]?.id ||
+            "";
+        }
 
         // ONE note per record per import — not one per column. Written after
         // the opportunity exists, and never allowed to fail the row: the
@@ -261,6 +375,26 @@ export async function POST(request: Request) {
         // a missing note.
         if (noteCols.length && oppId) {
           try {
+            // 🔴 DEDUPE ON RE-IMPORT. Running the same file twice must not
+            // stack two identical notes on one person. The heading is stable
+            // for a given source and day and deliberately excludes the batch
+            // size and the user, either of which can differ between two runs of
+            // the same file.
+            //
+            // Only checked on a record that ALREADY EXISTED — an opportunity
+            // created a moment ago has no notes, and asking would be a wasted
+            // call on every new row.
+            if (existing) {
+              const heading = importNoteHeading(source || "", new Date());
+              const notes = await listOpportunityNotes(contactId, oppId);
+              const already = notes.some((n) =>
+                `${n.system || ""}${n.txt || ""}`.trimStart().startsWith(heading),
+              );
+              if (already) {
+                summary.notesSkipped++;
+                throw SKIP_NOTE;
+              }
+            }
             await addOpportunityNote(
               contactId,
               oppId,
@@ -278,6 +412,7 @@ export async function POST(request: Request) {
             );
             summary.noted++;
           } catch (e) {
+            if (e === SKIP_NOTE) continue;
             summary.errors.push({
               row: rowNo,
               error: `Record imported, but its note did not save — ${
