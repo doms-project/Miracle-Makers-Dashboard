@@ -204,33 +204,82 @@ const IconUpload = () => (
 // ⚠️ FREE TEXT, matched case-insensitively and trimmed: a workflow writing
 // "facebook" or " Indeed " must still resolve. Matching is on a normalised key.
 //
-// ⚠️ NO PLACEHOLDER for an unknown or empty source. 238 of 252 records are blank
+// ⚠️ NO PLACEHOLDER for an unknown or empty source. 243 of 261 records are blank
 // today (the Airtable import carried no source, and nothing can backfill it), so
 // a fallback glyph would put a meaningless mark on almost every card and say
 // nothing. This marks the channels that DO set it — not every lead.
 //
-// Monochrome and small; `title` names the source, because a logo nobody can
-// identify is worse than a word.
-const SOURCE_ICONS: { match: (k: string) => boolean; label: string; path: string }[] = [
+// ⚠️ OFFICIAL BRAND MARKS, IN THEIR OWN COLOURS, AS INLINE SVG.
+// Inline because a card must not make a network request per row and a hosted
+// logo that 404s leaves a broken image on every record; inline also scales with
+// no retina variant. The colours are the brands' own — recolouring or
+// monochroming them reads as a mistake and destroys the recognition that is the
+// whole point. Nothing here is distorted, cropped or restyled: each mark keeps
+// its own proportions inside the 24-unit box and is scaled as a whole.
+// `title` still names the source, because a logo nobody recognises is worse
+// than a word.
+const SOURCE_ICONS: {
+  match: (k: string) => boolean;
+  label: string;
+  art: React.ReactNode;
+}[] = [
   {
     match: (k) => k.includes("facebook") || k.includes("meta") || k.includes("fb"),
     label: "Facebook",
-    path: "M13.5 9H15V6.5h-1.8C11 6.5 10.5 8 10.5 9.3V11H9v2.5h1.5V21h2.6v-7.5h2l.4-2.5h-2.4V9.6c0-.4.2-.6.8-.6z",
+    // The blue "f" roundel. Meta blue #1877F2 with the f knocked out in white.
+    art: (
+      <>
+        <path
+          fill="#1877F2"
+          d="M24 12c0-6.627-5.373-12-12-12S0 5.373 0 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078V12h3.047V9.356c0-3.007 1.792-4.669 4.533-4.669 1.313 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.469h-2.796v8.385C19.612 22.954 24 17.99 24 12z"
+        />
+        <path
+          fill="#fff"
+          d="M16.671 15.469 17.203 12h-3.328V9.749c0-.949.465-1.874 1.956-1.874h1.513V4.922s-1.373-.235-2.686-.235c-2.741 0-4.533 1.662-4.533 4.669V12H7.078v3.469h3.047v8.385a12.14 12.14 0 0 0 3.75 0v-8.385h2.796z"
+        />
+      </>
+    ),
   },
   {
     match: (k) => k.includes("google") || k.includes("adwords") || k.includes("gads"),
     label: "Google Ads",
-    path: "M9.6 3.4 3.1 14.7a3.2 3.2 0 0 0 2.8 4.8h.3l6.4-11.1zM14.4 3.4l6.5 11.3a3.2 3.2 0 0 1-2.8 4.8h-.3L11.4 8.4zM12 14.2a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4z",
+    // The Google Ads mark: two rounded bars meeting at the top with the green
+    // circle at the foot of the left one. Drawn as round-capped strokes so the
+    // capsule ends stay true at any size.
+    art: (
+      <g strokeWidth="6.1" strokeLinecap="round" fill="none">
+        <path stroke="#FBBC04" d="M12 4.4 5.6 15.5" />
+        <path stroke="#4285F4" d="M12 4.4l6.4 11.1" />
+        <circle cx="5.6" cy="17.6" r="3.4" fill="#34A853" stroke="none" />
+      </g>
+    ),
   },
   {
     match: (k) => k.includes("indeed"),
     label: "Indeed",
-    path: "M13.2 8.9v9.4c0 .9-.6 1.6-1.5 1.6s-1.5-.7-1.5-1.6V9.2c.5.1 1 .2 1.5.2s1-.2 1.5-.5zM11.7 4.3a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8zM16.9 3.2c-3.6-.9-7.6.8-9.6 3.9-.3.5-.8 1.5-.4 1.7.3.2.6-.3.9-.7 2.2-3 6-3.9 8.9-2.6.4.2.7 0 .5-.4-.1-.2-.2-.3-.3-.4z",
+    // Indeed blue #2164F3 with the white "i" — the square-icon form of the
+    // mark. The wordmark is unreadable at this size; the "i" and its dot are
+    // the part people recognise.
+    art: (
+      <>
+        <rect width="24" height="24" rx="5" fill="#2164F3" />
+        <circle cx="12" cy="6.9" r="2.3" fill="#fff" />
+        <rect x="9.7" y="10.4" width="4.6" height="9.2" rx="2.3" fill="#fff" />
+      </>
+    ),
   },
   {
-    match: (k) => k.includes("website") || k.includes("web") || k.includes("site") || k.includes("organic"),
+    match: (k) =>
+      k.includes("website") || k.includes("web") || k.includes("site") || k.includes("organic"),
     label: "Website",
-    path: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2c1.2 0 2.6 1.9 3.1 5H8.9C9.4 6.9 10.8 5 12 5zM5.1 11h2.7c-.1 1.3-.1 2.7 0 4H5.1a7 7 0 0 1 0-4zm0 6h2.9c.4 1.6 1 2.9 1.7 3.7A7 7 0 0 1 5.1 17zm4.9 0h4c-.5 2.8-1.8 4.5-2 4.5s-1.5-1.7-2-4.5zm-.2-2a24 24 0 0 1 0-4h4.4a24 24 0 0 1 0 4zm6.2 2h2.9a7 7 0 0 1-4.6 3.7c.7-.8 1.3-2.1 1.7-3.7zm.3-2c.1-1.3.1-2.7 0-4h2.7a7 7 0 0 1 0 4zm1.6-6h-2.4c-.3-1.2-.8-2.3-1.3-3.1A7 7 0 0 1 17.9 9zM9.5 5.9C9 6.7 8.5 7.8 8.2 9H5.8a7 7 0 0 1 3.7-3.1z",
+    // Not a brand — a neutral globe in the UI's own ink, so it never competes
+    // with the three real logos beside it.
+    art: (
+      <path
+        fill="currentColor"
+        d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2c1.2 0 2.6 1.9 3.1 5H8.9C9.4 6.9 10.8 5 12 5zM5.1 11h2.7c-.1 1.3-.1 2.7 0 4H5.1a7 7 0 0 1 0-4zm0 6h2.9c.4 1.6 1 2.9 1.7 3.7A7 7 0 0 1 5.1 17zm4.9 0h4c-.5 2.8-1.8 4.5-2 4.5s-1.5-1.7-2-4.5zm-.2-2a24 24 0 0 1 0-4h4.4a24 24 0 0 1 0 4zm6.2 2h2.9a7 7 0 0 1-4.6 3.7c.7-.8 1.3-2.1 1.7-3.7zm.3-2c.1-1.3.1-2.7 0-4h2.7a7 7 0 0 1 0 4zm1.6-6h-2.4c-.3-1.2-.8-2.3-1.3-3.1A7 7 0 0 1 17.9 9zM9.5 5.9C9 6.7 8.5 7.8 8.2 9H5.8a7 7 0 0 1 3.7-3.1z"
+      />
+    ),
   },
 ];
 
@@ -241,24 +290,30 @@ function srcKey(src: string): string {
   return (src || "").trim().toLowerCase();
 }
 
-function sourceIcon(src: string): { label: string; path: string } | null {
+function sourceIcon(src: string): { label: string; art: React.ReactNode } | null {
   const k = srcKey(src);
   if (!k) return null;
   return SOURCE_ICONS.find((x) => x.match(k)) || null;
 }
 
-/** The source mark, or nothing. `title` carries the RAW source text. */
-const SourceMark = ({ src }: { src: string }) => {
+/**
+ * The source mark, or nothing. `title` carries the RAW source text.
+ *
+ * `small` is for the "By source" stat tile only, whose line is 10.5px — a 20px
+ * logo there would dwarf its own count. Everywhere a record is named (kanban
+ * card, list row) it renders at the full 20px.
+ */
+const SourceMark = ({ src, small }: { src: string; small?: boolean }) => {
   const hit = sourceIcon(src);
   if (!hit) return null;
   return (
     <span
-      className="srcmark"
+      className={small ? "srcmark sm" : "srcmark"}
       title={`Source: ${src.trim()}`}
       aria-label={`Source: ${src.trim()}`}
     >
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d={hit.path} />
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {hit.art}
       </svg>
     </span>
   );
@@ -735,7 +790,6 @@ function CardBody({
   return (
     <>
       <div className="cn">
-        <SourceMark src={r.src} />
         {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
         {following ? (
           <span
@@ -745,6 +799,9 @@ function CardBody({
             Following
           </span>
         ) : null}
+        {/* END of the line, not the start: the name has to begin at the left
+            edge so a column of cards can be scanned by name alone. */}
+        <SourceMark src={r.src} />
       </div>
       {r.oppName && `${r.first} ${r.last}`.trim() &&
       `${r.first} ${r.last}`.trim() !== r.oppName ? (
@@ -2364,8 +2421,8 @@ export default function Dashboard() {
                   channel shows at all, and applicants are the records most
                   likely to carry one. Same component as the client row and the
                   kanban card: one mapping, one place to change it. */}
-              <SourceMark src={r.src} />
               {cgStr(r, "applicant") || "—"}
+              <SourceMark src={r.src} />
             </span>
           </div>
         </td>
@@ -2386,13 +2443,14 @@ export default function Dashboard() {
       <td className="strong">
         <div className="clientcell">
           <span className="clname">
-            <SourceMark src={r.src} />
             {r.oppName || clientName(r) || "—"}
             {r.pipelineName ? (
               <span className="divbadge" title={r.pipelineName}>
                 {r.pipelineName}
               </span>
             ) : null}
+            {/* End of the line — see CardBody. */}
+            <SourceMark src={r.src} />
           </span>
           {/* Why is this row visible to me? Unassigned is called out
               separately so "Following" can never stand in for "nobody owns
@@ -4108,8 +4166,8 @@ export default function Dashboard() {
                         : `Show ${x.k} only (${x.n})`
                     }
                   >
-                    <b>{x.n}</b> <SourceMark src={x.k} />
-                    {x.k}
+                    <b>{x.n}</b> {x.k}
+                    <SourceMark src={x.k} small />
                   </button>
                 ))
               ) : (
