@@ -2903,9 +2903,37 @@ export default function Dashboard() {
   // this session. Keyed by field id, cleared when the panel changes record so
   // one lead's revealed questions never carry onto the next.
   const [revealedFields, setRevealedFields] = useState<Set<string>>(new Set());
+  // Which section's "+ Add a field" list is open ("" = none). One at a time:
+  // two open lists in a narrow panel overlap each other. Named `addFieldOpen`
+  // rather than `addOpen` — that one is the Add Lead modal.
+  const [addFieldOpen, setAddFieldOpen] = useState<string>("");
   useEffect(() => {
     setRevealedFields(new Set());
+    setAddFieldOpen("");
   }, [selId]);
+
+  // Closing without choosing changes nothing — that is the whole contract of
+  // this control, so both ways out (click away, Escape) are wired.
+  useEffect(() => {
+    if (!addFieldOpen) return;
+    const away = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.(".addfield")) setAddFieldOpen("");
+    };
+    const esc = (e: KeyboardEvent) => {
+      // Stop it reaching the panel's own Escape handler, or dismissing the
+      // list would close the whole record behind it.
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setAddFieldOpen("");
+      }
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc, true);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc, true);
+    };
+  }, [addFieldOpen]);
 
   // ITEM 3 — load the open record's CONTACT fields. One request per record,
   // keyed off `selected.id`; cleared first so a stale person's answers can never
@@ -5727,22 +5755,32 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Folder-driven field sections (Task 4) — rendered from the
-                  folders mapped to this record's pipeline, in configured order. */}
-              {fieldGroups.sections.map((g) => (
-                <Fragment key={g.key}>
-                  <div className="sechead">{g.label}</div>
-                  <div className="grid">
-                    {g.fields.map((def) => renderField(selected, def))}
-                  </div>
-                </Fragment>
-              ))}
+              {/* ══ TWO LABELLED BLOCKS, CONTACT FIRST ══════════════════
+                  Several field NAMES exist on BOTH models — "Care Needed" is
+                  one — so a rep looking at a value had no way to tell which
+                  model it belonged to. A scope line between them was not
+                  enough; each block now says what it is.
 
-              {/* ITEM 3 — CONTACT FIELDS. Separated from the opportunity
-                  sections above by a standing scope line, because the two behave
-                  differently and the panel must not let that blur: everything
-                  above belongs to THIS case, everything below belongs to the
-                  PERSON and follows them onto every case they hold. */}
+                  ⚠️ CONTACT COMES FIRST: it is what the person told you, and
+                  the opportunity fields are what the team has done since. Read
+                  the lead before the case.
+
+                  ⚠️ Status & Workflow and Assignment stay ABOVE both headers,
+                  deliberately. They are not fields in the folder sense — they
+                  are the record's spine, and Stage and Owner are the two things
+                  a rep touches most. Putting them under an OPPORTUNITY header
+                  would push the panel's most-used controls below every contact
+                  section and make the commonest action a scroll.
+
+                  ⚠️ The headers are STRUCTURAL, not collapsible. The folder
+                  sections inside them already collapse.
+
+                  ⚠️ SAME ON THE CAREGIVER PANEL. This is one panel branching on
+                  kind, so a caregiver record gets the same two headers in the
+                  same order for free — which is the point: two panels with
+                  opposite structure would be worse than either choice alone. */}
+
+              {/* ── CONTACT ─────────────────────────────────────────────── */}
               {cLoading ? (
                 <div className="sechead">
                   Loading{" "}
@@ -5756,6 +5794,9 @@ export default function Dashboard() {
                 </>
               ) : contactGroups.length ? (
                 <>
+                  <div className="blockhead">Contact</div>
+                  {/* The scope line explains THIS block, so it sits inside it,
+                      under the header rather than floating between the two. */}
                   <div className="contactscope">
                     <b>About this person, not this case.</b>{" "}
                     {cFields && cFields.opportunityCount > 1
@@ -5847,29 +5888,42 @@ export default function Dashboard() {
                           form never asked. */}
                       {(g.hidden || []).some((d) => !revealedFields.has(d.id)) ? (
                         <div className="addfield">
-                          <label htmlFor={`add-${g.key}`}>+ Add a field</label>
-                          <select
-                            id={`add-${g.key}`}
-                            value=""
-                            onChange={(e) => {
-                              const id = e.target.value;
-                              if (!id) return;
-                              setRevealedFields((prev) => new Set(prev).add(id));
-                              e.target.value = "";
-                            }}
+                          <button
+                            type="button"
+                            className={`addfield-btn${addFieldOpen === g.key ? " on" : ""}`}
+                            aria-expanded={addFieldOpen === g.key}
+                            onClick={() =>
+                              setAddFieldOpen((k) => (k === g.key ? "" : g.key))
+                            }
                           >
-                            <option value="">
-                              {(g.hidden || []).filter((d) => !revealedFields.has(d.id)).length}{" "}
-                              not answered…
-                            </option>
-                            {(g.hidden || [])
-                              .filter((d) => !revealedFields.has(d.id))
-                              .map((d) => (
-                                <option key={d.id} value={d.id}>
-                                  {fieldLabel(d.name)}
-                                </option>
-                              ))}
-                          </select>
+                            + Add a field{" "}
+                            <span className="addfield-n">
+                              ({(g.hidden || []).filter((d) => !revealedFields.has(d.id)).length})
+                            </span>
+                          </button>
+                          {addFieldOpen === g.key ? (
+                            <div className="addfield-pop" role="listbox">
+                              {(g.hidden || [])
+                                .filter((d) => !revealedFields.has(d.id))
+                                .map((d) => (
+                                  <button
+                                    key={d.id}
+                                    type="button"
+                                    role="option"
+                                    aria-selected="false"
+                                    title={d.name}
+                                    onClick={() => {
+                                      setRevealedFields((prev) =>
+                                        new Set(prev).add(d.id),
+                                      );
+                                      setAddFieldOpen("");
+                                    }}
+                                  >
+                                    {fieldLabel(d.name)}
+                                  </button>
+                                ))}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                       </>
@@ -5877,6 +5931,28 @@ export default function Dashboard() {
                     </Fragment>
                     );
                   })}
+                </>
+              ) : null}
+
+              {/* ── OPPORTUNITY ─────────────────────────────────────────────
+                  Folder-driven field sections (Task 4), from the folders mapped
+                  to this record's pipeline, in configured order.
+
+                  ⚠️ NO has-a-value rule here. Pipeline scoping already keeps a
+                  Private Pay card from carrying ODP milestones, and a rep FILLS
+                  these as the case moves — hiding the empty ones would stop
+                  them. See the branch comment in groupContactFields. */}
+              {fieldGroups.sections.length ? (
+                <>
+                  <div className="blockhead">Opportunity</div>
+                  {fieldGroups.sections.map((g) => (
+                    <Fragment key={g.key}>
+                      <div className="sechead">{g.label}</div>
+                      <div className="grid">
+                        {g.fields.map((def) => renderField(selected, def))}
+                      </div>
+                    </Fragment>
+                  ))}
                 </>
               ) : null}
 

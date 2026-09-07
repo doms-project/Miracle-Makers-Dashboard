@@ -279,12 +279,29 @@ tbody tr:last-child td{border-bottom:0;}
 .idups-all summary{cursor:pointer;color:var(--plum);font-weight:600;}
 .idups-all ul{margin:6px 0 0;padding-left:18px;line-height:1.6;max-height:200px;overflow:auto;}
 /* Scope — a contact field is the person's, not this record's. */
-/* "+ Add a field" — a client contact section's empty questions. Sits under the
-   grid, quiet: it is a way back to something, not an action anyone needs. */
-.addfield{display:flex;align-items:center;gap:9px;margin:9px 0 2px;font-size:11.5px;}
-.addfield label{color:var(--plum);font-weight:600;cursor:pointer;white-space:nowrap;}
-.addfield select{flex:1;min-width:0;max-width:280px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font:inherit;font-size:11.5px;background:var(--bg);color:var(--ink-2);cursor:pointer;}
-.addfield select:hover{border-color:var(--plum);}
+/* CONTACT / OPPORTUNITY — the two block headers. STRUCTURAL, not collapsible:
+   the folder sections inside them already collapse. Uses --plum, the existing
+   token; no new colour. */
+.blockhead{display:flex;align-items:center;gap:10px;margin:20px 0 11px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:8px;padding:8px 12px;}
+.blockhead::after{content:"";flex:1;height:1px;background:var(--plum-line);}
+/* The first header sits directly under Assignment, so it needs less air above
+   than the second one, which follows a field grid. */
+.pbody > .blockhead:first-of-type{margin-top:16px;}
+
+/* "+ Add a field" — a client contact section's empty questions.
+   A QUIET TEXT BUTTON, not a filled one, sitting below the answered fields:
+   this is a panel reps read far more often than they edit, and the control must
+   not compete with the answers above it. Renders only when a section actually
+   has empty fields. */
+.addfield{position:relative;margin:9px 0 2px;font-size:11.5px;}
+.addfield-btn{border:0;background:none;padding:2px 0;font:inherit;font-size:11.5px;font-weight:600;color:var(--plum);cursor:pointer;border-radius:5px;}
+.addfield-btn:hover,.addfield-btn.on{text-decoration:underline;}
+.addfield-n{font-weight:600;color:var(--ink-3);}
+/* ONE PER LINE. The list is the whole point of replacing the <select>: a rep
+   reads the questions and picks one, rather than hunting a flattened row. */
+.addfield-pop{position:absolute;z-index:40;top:100%;left:0;margin-top:5px;min-width:240px;max-width:340px;max-height:260px;overflow:auto;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--plum-line);border-radius:9px;box-shadow:var(--shadow-md,0 8px 24px rgba(0,0,0,.12));padding:5px;}
+.addfield-pop button{text-align:left;border:0;background:none;font:inherit;font-size:12px;color:var(--ink);padding:7px 9px;border-radius:6px;cursor:pointer;white-space:normal;line-height:1.4;}
+.addfield-pop button:hover{background:var(--plum-soft);color:var(--plum);}
 .iscope{margin:0 0 10px;padding:9px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;line-height:1.5;color:#7a5227;}
 .iflags{margin-top:10px;padding:9px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;color:#7a5227;}
 .iflags ul{margin:6px 0 0;padding-left:18px;line-height:1.6;}

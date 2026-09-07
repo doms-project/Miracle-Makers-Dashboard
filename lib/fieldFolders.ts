@@ -310,10 +310,32 @@ export function groupContactFields(
   const byFolder = new Map<string, EditableFieldDef[]>();
   for (const def of defs) {
     if (HIDDEN_SET.has(norm(def.name))) continue;
+    // 🔴 ID FIRST, NAME SECOND. This was the other way round.
+    //
+    // Two reasons, and the second is the one that matters:
+    //
+    // 1. The name path is DEAD. GoHighLevel returns `parentName` EMPTY on every
+    //    contact field — verified live — so the id branch is what has actually
+    //    been doing the work all along. Trying a field that is never populated
+    //    first is misleading to read.
+    //
+    // 2. It could match the WRONG FOLDER if GHL ever starts sending it.
+    //    "FB Private Pay Form" exists TWICE on this account: as a contact
+    //    folder (5QrSWnBaHJlWsDifTlnu) and as an opportunity folder
+    //    (CVwUcXV27zGPUvRDOfBh), same name, four same-named questions each. A
+    //    name-first match would have no way to tell them apart. An id can only
+    //    ever mean one folder.
+    //
+    // The name is KEPT as a fallback, not deleted: if a folder is recreated in
+    // GHL its id changes and its name does not, and a fallback that only fires
+    // when the id misses is the one that survives that without being able to
+    // cause the collision above.
     const folderName = (def.parentName || "").trim();
-    const match = folders.find((f) =>
-      folderName ? norm(f.name) === norm(folderName) : f.id === def.parentId,
-    );
+    const match =
+      folders.find((f) => f.id && f.id === def.parentId) ||
+      (folderName
+        ? folders.find((f) => norm(f.name) === norm(folderName))
+        : undefined);
     if (!match) continue;
     const arr = byFolder.get(match.name) || [];
     arr.push(def);
