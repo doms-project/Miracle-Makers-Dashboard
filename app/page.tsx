@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "@/components/ErrorMessage";
 import { apiFetch, apiError } from "@/lib/apiFetch";
 import type { ReactNode } from "react";
@@ -867,6 +867,11 @@ function BoardCard({
   return (
     <div
       ref={setNodeRef}
+      // The badge counts are fetched for the rows a person can actually SEE.
+      // This attribute is what the IntersectionObserver keys on — see
+      // `onScreenIds`. It is the only hook needed; nothing else about the card
+      // changes.
+      data-cid={r.contactId || undefined}
       className={`card${canDrag ? " draggable" : " nodrag"}${
         isDragging ? " ghost" : ""
       }`}
@@ -1397,6 +1402,9 @@ export default function Dashboard() {
   const [cgLoading, setCgLoading] = useState(false);
   const [cgErr, setCgErr] = useState<ApiError | null>(null);
   const [cgLoaded, setCgLoaded] = useState(false);
+  // "We have already tried once." Cleared by the Refresh button, which is the
+  // one place a retry is a person's decision rather than a loop.
+  const cgTried = useRef(false);
   const [cgPipeline, setCgPipeline] = useState<string>("all");
   const [cgQuery, setCgQuery] = useState("");
   // ITEM A2/A3 — the caregiver section gets the same controls the client
@@ -1499,6 +1507,11 @@ export default function Dashboard() {
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteErr, setNoteErr] = useState<unknown>(null);
 
+  // The live session, readable from a stable callback. Written on every render
+  // so nothing captures a stale one.
+  const ssoRef = useRef(sso);
+  ssoRef.current = sso;
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -1507,12 +1520,13 @@ export default function Dashboard() {
       // SERVER re-derives identity and filters. The browser never sends a
       // userId/role of its own. When not embedded, fall back to GET (the server
       // serves the open view only if SSO isn't configured, else 401).
+      const s = ssoRef.current;
       const res =
-        sso.status === "ready"
+        s.status === "ready"
           ? await fetch("/api/opportunities", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ssoKey: sso.blob }),
+              body: JSON.stringify({ ssoKey: s.blob }),
               cache: "no-store",
             })
           : await fetch("/api/opportunities", { cache: "no-store" });
@@ -1546,10 +1560,22 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [sso]);
+    // ⚠️ `ssoRef`, not `sso`, so this callback's IDENTITY never changes.
+    //
+    // It read `sso` from the closure and therefore listed it as a dependency —
+    // which meant every new `sso` OBJECT rebuilt `load`, and the effect below
+    // depends on `load`, so a full 261-record list fetch re-fired on an
+    // identity change even when `status` was unchanged. The status check in the
+    // body cannot prevent that: the dependency has already fired.
+    //
+    // The ref is written on every render (below), so `load` always reads the
+    // CURRENT session — nothing is captured stale — while staying one stable
+    // function for the lifetime of the component.
+  }, []);
 
   // Fetch once the SSO handshake has settled (ready or none), so the blob is
-  // available to send. Re-runs if the session changes.
+  // available to send. Re-runs when the STATUS changes — a real session
+  // transition — and not merely when the object is replaced.
   useEffect(() => {
     if (sso.status === "loading") return;
     load();
@@ -1615,11 +1641,20 @@ export default function Dashboard() {
       setCgData([]);
     } finally {
       setCgLoading(false);
+      // 🔴 ATTEMPTED, not SUCCEEDED. `cgLoaded` is only set on success — it
+      // means "we have data" and several places read it that way — so a FAILED
+      // load left this effect armed, and any dependency change re-fired it.
+      // That is the repeated ?scope=caregiver call in the measured loads: not a
+      // retry anyone asked for, just an effect that never stopped being ready.
+      //
+      // A ref rather than state: it must not itself cause a render, and the
+      // effect below reads it at fire time, not as a dependency.
+      cgTried.current = true;
     }
   }, [sso]);
 
   useEffect(() => {
-    if (view === "caregivers" && !cgLoaded && sso.status !== "loading")
+    if (view === "caregivers" && !cgLoaded && !cgTried.current && sso.status !== "loading")
       loadCaregivers();
   }, [view, cgLoaded, sso.status, loadCaregivers]);
 
@@ -2305,6 +2340,82 @@ export default function Dashboard() {
     return [...filtered].sort((a, b) => dir * cmpBy(a, b, sortKey));
   }, [filtered, sortKey, sortDir, cmpBy]);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // WHICH CONTACTS ARE ACTUALLY ON SCREEN.
+  //
+  // 🔴 THIS IS THE WHOLE FIX, AND IT CHANGES ONLY THE QUESTION.
+  //
+  // The counts effect below used to ask about `visible` — the entire filtered
+  // list. 209 records is 209 upstream GoHighLevel calls (relations are exposed
+  // per record; there is no bulk query), issued in waves of six with each wave
+  // awaited, so the wall clock is ceil(209/6) x per-call latency. Measured:
+  // 15.5s on a good day, 43.4s on a bad one, for badges.
+  //
+  // Parallelising cannot fix that. 209 calls against a 100-per-10-seconds
+  // budget is 21 seconds MINIMUM however they are arranged, and at six
+  // concurrent it was already issuing ~273 per 10s — which is very likely why
+  // the per-call latency was high in the first place.
+  //
+  // A screen holds about twenty rows. Asking about twenty instead of 209 is one
+  // pass, inside budget, in about two seconds. Scrolling brings the next rows
+  // in and they are fetched the same way.
+  //
+  // ⚠️ EVERYTHING ELSE IS UNCHANGED: the wave batching, the `relCounts`
+  // pagination (still in the dependency array, still deliberate), the recorded
+  // zero so a contact with no links is never re-requested, standing down while
+  // a panel is open, and never surfacing a failure.
+  //
+  // rootMargin pre-loads a screen's worth above and below, so a slow scroll
+  // does not chase the badges down the page.
+  // ═══════════════════════════════════════════════════════════════════════
+  const [onScreenIds, setOnScreenIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      // No observer (very old browser, or a test environment): fall back to the
+      // old behaviour rather than showing no badges at all. Slow beats blank.
+      setOnScreenIds(
+        [...new Set(visible.map((r) => r.contactId).filter(Boolean))],
+      );
+      return;
+    }
+    const seen = new Set<string>();
+    let raf = 0;
+    const io = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const id = (e.target as HTMLElement).dataset.cid;
+          // ⚠️ ADD ONLY, never remove. A row scrolled back off screen has
+          // already been counted; forgetting it would re-request it the next
+          // time it scrolls past, which is the opposite of the point.
+          if (id && !seen.has(id)) {
+            seen.add(id);
+            changed = true;
+          }
+        }
+        if (!changed) return;
+        // Coalesce a burst of intersections into ONE state write. Without this
+        // a fast scroll sets state once per row and re-runs the counts effect
+        // for each — a different way of making the same mistake.
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => setOnScreenIds([...seen]));
+      },
+      { rootMargin: "300px 0px" },
+    );
+    for (const el of document.querySelectorAll<HTMLElement>("[data-cid]"))
+      io.observe(el);
+    return () => {
+      cancelAnimationFrame(raf);
+      io.disconnect();
+    };
+    // Re-attached when the rendered set changes — a filter, a sort, a reload
+    // all replace the elements this is watching. `view` is included because the
+    // list and the board are different elements for the same data, and `data`
+    // because the board's own set is derived further down the file and cannot
+    // be referenced here.
+  }, [visible, data, view]);
+
   // Fetch link counts for the contacts currently on screen. Skips any already
   // known, so paging or filtering only ever asks for the new ones.
   useEffect(() => {
@@ -2319,12 +2430,11 @@ export default function Dashboard() {
     // spent its budget, and aborting would waste it and re-request the same ids
     // on close. It simply does not START a new one until the panel closes.
     if (selId) return;
+    // 🔴 THE ONE LINE THAT CHANGED: `onScreenIds`, not `visible`. Everything
+    // below — the batch, the pagination through relCounts, the recorded zero —
+    // is exactly as it was.
     const ids = [
-      ...new Set(
-        visible
-          .map((r) => r.contactId)
-          .filter((id) => id && !(id in relCounts)),
-      ),
+      ...new Set(onScreenIds.filter((id) => id && !(id in relCounts))),
     ].slice(0, 60);
     if (!ids.length) return;
     let cancelled = false;
@@ -2355,7 +2465,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [visible, sso, relCounts, selId]);
+  }, [onScreenIds, sso, relCounts, selId]);
 
   // The badge text for one record: "1 caregiver" / "2 clients", or "" when the
   // contact has no links (or its counts haven't arrived yet).
@@ -2437,6 +2547,7 @@ export default function Dashboard() {
   const renderRow = (r: OpportunityRecord) => (
     <tr
       key={r.id}
+      data-cid={r.contactId || undefined}
       className={r.id === selId ? "sel" : ""}
       onClick={() => setSelId(r.id)}
     >
@@ -4023,7 +4134,9 @@ export default function Dashboard() {
             type="button"
             className="refreshbtn"
             onClick={() =>
-              railWhere === "caregivers" ? loadCaregivers() : load()
+              railWhere === "caregivers"
+                ? ((cgTried.current = false), loadCaregivers())
+                : load()
             }
             disabled={railWhere === "caregivers" ? cgLoading : loading}
             title={
