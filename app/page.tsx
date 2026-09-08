@@ -2132,9 +2132,29 @@ export default function Dashboard() {
     [preSrc, srcF],
   );
 
+  // ⚠️ THE STAGE FILTER IS A LIST CONTROL, AND ONLY THE LIST'S.
+  //
+  // The kanban already draws one column per stage, so filtering it to one stage
+  // would leave a single column and six empty ones — a worse view than the
+  // unfiltered board. The chips are therefore HIDDEN on the kanban (see the
+  // chip row's render condition).
+  //
+  // 🔴 AND THE SELECTION MUST STOP APPLYING WHILE THEY ARE HIDDEN. `filtered`
+  // feeds the STAT TILES, which render above the kanban too — so a stage
+  // chosen on the list used to leave the board showing all 209 cards under a
+  // tile reading 53. A control you cannot see must not still be filtering: the
+  // same rule already written into the `scope` guard below.
+  //
+  // The selection SURVIVES the trip. Switching back to the list restores it
+  // with the chip visibly active — losing a filter on a view toggle would be
+  // its own small betrayal.
+  const stageActive = view !== "board";
   const filtered = useMemo(
-    () => preStage.filter((r) => stage === "all" || r.stage === stage),
-    [preStage, stage],
+    () =>
+      preStage.filter(
+        (r) => !stageActive || stage === "all" || r.stage === stage,
+      ),
+    [preStage, stage, stageActive],
   );
 
   // Everything `filtered` has EXCEPT the source filter — the set the "By
@@ -2681,6 +2701,15 @@ export default function Dashboard() {
         !r.shared &&
         (home.size === 0 || home.has(r.pipelineId)) &&
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+        // 🔴 OFFICE WAS MISSING HERE. The Office select renders above the
+        // kanban and did nothing to it: 209 cards before, 209 after, while the
+        // stat tiles above them dropped to 18. A control that visibly changes
+        // the numbers and not the records is worse than one that does nothing.
+        //
+        // Office belongs on the board in a way STAGE does not: the columns
+        // already ARE the stages, but nothing on the board expresses which
+        // office a record belongs to.
+        (office === "all" || r.office === office) &&
         // The "By source" tile is rendered above the KANBAN as well as the
         // list, so a source picked there has to narrow the columns too —
         // otherwise the control looks dead on half the screens it appears on.
@@ -2688,7 +2717,7 @@ export default function Dashboard() {
         (needle === "" ||
           `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
     );
-  }, [data, q, homePipelineIds, adminPipeline, srcF]);
+  }, [data, q, homePipelineIds, adminPipeline, office, srcF]);
 
   // ---- ITEM 4: MASTER VIEW ----
   //
@@ -4531,6 +4560,14 @@ export default function Dashboard() {
           </span>
         </div>
 
+        {/* 🔴 LIST ONLY. On the kanban these did nothing — the columns ARE the
+            stages — but they were still rendered, still looked clickable, and
+            clicking one silently changed the stat tiles above the board while
+            leaving all 209 cards in place.
+            Hidden rather than disabled: a greyed-out row of seven chips is
+            clutter explaining a control that has no job here. The columns
+            already carry the counts the chips would have shown. */}
+        {view === "list" ? (
         <div className="stages">
           <button
             className={`chip ${stage === "all" ? "on" : ""}`}
@@ -4555,6 +4592,7 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+        ) : null}
         </>
         )}
 
