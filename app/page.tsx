@@ -4737,15 +4737,18 @@ export default function Dashboard() {
                   </button>
                 ))}
               </div>
-              {/* ⬜ Said on screen, not just in a report: the caregiver custom
-                  fields don't exist yet, so opening a record shows the native
-                  fields and little else. Better to say so than to let someone
-                  conclude the panel is broken. */}
-              <div className="mnote">
-                Applicant records are <b>thin for now</b> — the caregiver fields
-                haven&apos;t been created in GoHighLevel yet, so a record shows
-                its stage, owner and notes only.
-              </div>
+              {/* 🔴 REMOVED — IT HAD BECOME THE OPPOSITE OF THE TRUTH.
+                  This said "the caregiver fields haven't been created in
+                  GoHighLevel yet, so a record shows its stage, owner and notes
+                  only". They HAVE been created — 58 fields across Caregiver
+                  Application, Compliance and Availability — and the panel has
+                  rendered them since the contact-fields work. A standing note
+                  that tells a recruiter the panel is empty, while the panel is
+                  full, is worse than no note: it teaches them not to open it.
+
+                  Nothing replaces it. The panel now speaks for itself, and a
+                  caption that has to be maintained in step with the account is
+                  a caption that goes stale again. */}
               {cgView === "list" ? (
                 <div className="scroll">
                   <table>
