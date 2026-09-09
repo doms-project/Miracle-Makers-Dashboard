@@ -12,6 +12,7 @@ import type {
   ImportDuplicate,
   DuplicateMode,
 } from "@/lib/types";
+import { checkBatchTag } from "@/lib/batchTag";
 import {
   buildImportNote,
   splitFullName,
@@ -201,6 +202,10 @@ export default function ImportWizard({
   // channel on an import of some other channel whenever nobody looks at this
   // step — the exact miscount the fixed vocabulary exists to prevent.
   const [source, setSource] = useState("");
+  // OPTIONAL. Free text, as typed — normalised only for display and for the
+  // write, never in the box, so the person is not fighting the field as they
+  // type. Blank means no tag is applied.
+  const [batchTag, setBatchTag] = useState("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
 
@@ -392,6 +397,11 @@ export default function ImportWizard({
     }
   };
 
+  // The SAME check the route runs (lib/batchTag.ts). Shown as you type so
+  // "Batch — Google Ads Aug 2026" becoming "batch-google-ads-aug-2026" is
+  // visible BEFORE submitting rather than discovered afterwards.
+  const tagCheck = useMemo(() => checkBatchTag(batchTag), [batchTag]);
+
   const parseFile = async (file: File) => {
     setParseErr(null);
     setSummary(null);
@@ -455,7 +465,7 @@ export default function ImportWizard({
     setProgress(0);
     const agg: ImportSummary = {
       created: 0, updated: 0, skipped: 0, failed: 0, noted: 0, notesSkipped: 0,
-      errors: [], flagged: [],
+      tagged: 0, errors: [], flagged: [],
     };
     try {
       for (let off = 0; off < parsed.rows.length; off += CHUNK) {
@@ -475,6 +485,9 @@ export default function ImportWizard({
             // the chunk would say 25 on a 47-row import.
             totalRows: parsed.rows.length,
             duplicateMode: dupMode,
+            // Sent raw; the route normalises and re-checks it. Blank is valid
+            // and means no tag.
+            batchTag,
             // FILE order, so the note's Q&A pairing still sees the answer
             // column immediately after its question.
             columns: parsed.columns,
@@ -650,7 +663,10 @@ export default function ImportWizard({
   const canNext = (): boolean => {
     if (step === 0) return !!parsed;
     // Source is asked on this step and is not optional: see SOURCE_OPTIONS.
-    if (step === 1) return !!pipelineId && !!stageId && !!source;
+    // A blocked tag stops the step. Blank does not — the tag is optional and an
+    // empty box must never hold an import up.
+    if (step === 1)
+      return !!pipelineId && !!stageId && !!source && !tagCheck.error;
     if (step === 2) return mappedCount > 0 && hasIdentity;
     return true;
   };
@@ -845,6 +861,48 @@ export default function ImportWizard({
               Stamped on every record in this file. One source per import — if
               this file mixes channels, split it and import each separately.
             </div>
+
+            {/* ⚠️ OPTIONAL, AND NOT THE SOURCE. Source is a field on both the
+                contact and the opportunity and drives the logo, the tile and
+                the filter. This tag exists only to find one import's records
+                again afterwards — which nothing else does today. */}
+            <label>Batch tag <span className="iopt">optional</span></label>
+            <input
+              className="itag"
+              value={batchTag}
+              list="batchtags"
+              placeholder="Name this batch, however is useful to you"
+              onChange={(e) => setBatchTag(e.target.value)}
+              aria-invalid={!!tagCheck.error}
+            />
+            {/* SUGGEST, NEVER RESTRICT — so nobody types "google ads" next to
+                an existing "google-ads". A brand-new tag stays one keystroke
+                away, and an empty list just leaves a plain text box. */}
+            <datalist id="batchtags">
+              {(meta?.tags ?? []).map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+
+            {tagCheck.error ? (
+              <div className="itagerr">🔴 {tagCheck.error}</div>
+            ) : tagCheck.tag ? (
+              <div className="ihint">
+                Applied to every contact this import writes, as{" "}
+                <code>{tagCheck.tag}</code>
+                {tagCheck.tag !== batchTag.trim() ? (
+                  <> — GHL tags are lowercase and hyphenated.</>
+                ) : null}
+                <br />
+                Tags live on the contact, not the opportunity. Skipped
+                duplicates are not tagged — skip means untouched.
+              </div>
+            ) : (
+              <div className="ihint">
+                Leave blank for no tag. This is not the source — it is a label
+                for finding this one import again.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1252,6 +1310,13 @@ export default function ImportWizard({
                 <span>· {summary.noted} notes</span>
                 {summary.notesSkipped ? (
                   <span>· {summary.notesSkipped} notes already present</span>
+                ) : null}
+                {/* Only when a tag was asked for. A zero here on an untagged
+                    import would read like something failed. */}
+                {tagCheck.tag ? (
+                  <span>
+                    · {summary.tagged} tagged <code>{tagCheck.tag}</code>
+                  </span>
                 ) : null}
                 <span className="bad">· {summary.failed} failed</span>
               </div>

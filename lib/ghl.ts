@@ -23,6 +23,8 @@ export const RESOURCES_FOLDER_ID = (
 // read from process.env here and used only in server-side fetches.
 // ---------------------------------------------------------------------------
 
+import { normalizeTag } from "./batchTag";
+
 const BASE_URL = "https://services.leadconnectorhq.com";
 
 export class GhlError extends Error {
@@ -3687,13 +3689,10 @@ export async function createCaregiverRelation(
 // here too — otherwise the same tag looks like two different strings in our own
 // logs and comparisons.
 // ---------------------------------------------------------------------------
-export function normalizeTag(s: string): string {
-  return (s || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+// ONE implementation, in lib/batchTag.ts — the import wizard has to normalise
+// on the client to show what it will actually write, and this module is
+// server-only. Re-exported so every existing caller here is unchanged.
+export { normalizeTag };
 
 export async function addContactTags(
   contactId: string,
@@ -3707,6 +3706,27 @@ export async function addContactTags(
     { tags: clean },
   );
   return res.tags ?? clean;
+}
+
+/**
+ * Every tag defined on the location, for the import wizard's suggestions.
+ *
+ * ⚠️ SUGGEST, NEVER RESTRICT. This exists so nobody types "google ads" beside an
+ * existing "google-ads" — it is not a vocabulary. A brand-new tag is the normal
+ * case and must stay one keystroke away.
+ *
+ * ⚠️ It says nothing about which tags fire workflows. The API does not expose
+ * that; the deny-list in lib/batchTag.ts does that job.
+ */
+export async function getLocationTags(): Promise<string[]> {
+  const { locationId } = requireEnv();
+  const data = await ghlGet<{ tags?: { name?: unknown }[] }>(
+    `/locations/${encodeURIComponent(locationId)}/tags`,
+  );
+  const names = (data.tags ?? [])
+    .map((t) => (typeof t?.name === "string" ? t.name : ""))
+    .filter(Boolean);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
 // Fetch a contact's display name + email (for email recipients).
