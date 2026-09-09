@@ -214,7 +214,18 @@ tbody tr:last-child td{border-bottom:0;}
 .note{border:1px solid var(--line);border-radius:9px;padding:12px 13px;margin-bottom:10px;background:var(--canvas);}
 .note .nh{font-size:11px;color:var(--ink-3);margin-bottom:5px;}
 .note .nh b{color:var(--plum);font-weight:700;}
-.note p{margin:0;font-size:12.5px;line-height:1.55;}
+/* 🔴 NEWLINES ARE STORED — THEY WERE BEING COLLAPSED HERE.
+   An import note is 25 lines of "Header: value" and Q&A pairs; a Move note is a
+   system sentence plus the rep's reason. Both arrived from GoHighLevel with
+   their newlines intact and were rendered into an element with default
+   whitespace handling, so the whole body ran together on one line.
+
+   pre-wrap, NOT pre: long values must still wrap. "Campaign: PP | Search |
+   Main Line ZIPs | Aug 2026" would otherwise push the panel wide.
+
+   ⚠️ This repairs every EXISTING note. Nothing needs rewriting — the data was
+   always right. */
+.note p{margin:0;font-size:12.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}
 .addnote{display:flex;gap:8px;margin-top:4px;}
 .addnote input{flex:1;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;font-size:12.5px;outline:none;transition:border-color .12s;}
 .addnote input:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
@@ -256,6 +267,25 @@ tbody tr:last-child td{border-bottom:0;}
    warning: it is where most columns legitimately end up. "dropped" is the one
    that used to be silent and is now the loud one. */
 .imaprow .inote{margin-left:7px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 6px;}
+/* ⚠️ AMBER, NOT RED. Skipping a report title is the right outcome, not an
+   error — but it is a silent change to someone's file, so it has to be seen. */
+.ihead{margin-top:10px;padding:10px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;line-height:1.55;color:#7a5227;}
+.ihead.raw{border-color:var(--line);background:var(--canvas);color:var(--ink-2);}
+.ihead b{color:#5c3d1c;}
+.ihead.raw b{color:var(--ink);}
+.ihead ul{margin:7px 0 0;padding:0;list-style:none;}
+.ihead li{display:flex;gap:8px;align-items:baseline;padding:3px 0;}
+.iheadn{flex:0 0 auto;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;opacity:.75;}
+/* The quoted row can be long. Wrap it; never let it push the panel wide. */
+.iheadv{flex:1 1 auto;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;overflow-wrap:anywhere;}
+.iheadact{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.iheadact button{padding:6px 11px;border:1px solid #e0c9ae;background:#fff;color:#7a5227;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;}
+.iheadact button:hover{background:#fbf2e8;}
+.ihead.raw .iheadact button{border-color:var(--line);color:var(--ink-2);}
+.ihead.raw .iheadact button:hover{background:var(--canvas);}
+.iheadact .iheadok{border-color:var(--plum);background:var(--plum);color:#fff;}
+.iheadact .iheadok:hover{background:#4a2170;}
+.iheadact .iheadok:disabled{opacity:.5;cursor:default;}
 .idrops{margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);background:var(--canvas);border-radius:9px;font-size:11.5px;line-height:1.5;color:var(--ink-2);}
 .idrops b{color:var(--ink);}
 .isplit{margin:0 0 10px;padding:9px 12px;border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:9px;font-size:11.5px;color:var(--ink-2);}
@@ -575,7 +605,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    framing an absence. One muted line, in the timeline position the note held,
    carrying who removed it and when. Kept rather than dropped because a hard
    delete leaves no sign anything was ever there. */
-.notegone{display:block;font-size:11px;color:var(--ink-3);font-style:italic;padding:4px 0;}
+.notegone{display:block;font-size:11px;color:var(--ink-3);font-style:italic;padding:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;}
 
 /* GHL DATE fields cannot store a time — flagged where a field NAME promises one. */
 .datewarn{font-size:10.5px;color:var(--blk);background:var(--blk-soft);border-radius:6px;padding:4px 8px;margin-top:4px;}
@@ -600,7 +630,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
       Never struck through, never editable: it is how the receiving rep learns
       how the case reached them. Only the author's reason follows it. ── */
 .notesys{color:var(--ink-3);}
-.notesysro{font-size:12px;color:var(--ink-3);background:var(--line-soft);border-radius:7px;padding:7px 10px;line-height:1.45;}
+/* The system half shown beside the edit box — same reason, same fix. */
+.notesysro{font-size:12px;color:var(--ink-3);background:var(--line-soft);border-radius:7px;padding:7px 10px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;}
 
 /* A viewer with no pipeline grants. Not an error: fail-closed access is working
    as intended and the reader has done nothing wrong — so this reads as a state,

@@ -69,6 +69,103 @@ function canonicalSource(v: string): string {
   return SOURCE_OPTIONS.find((o) => o.toLowerCase() === k) || "";
 }
 
+// ---------------------------------------------------------------------------
+// THE HEADER ROW IS NOT ALWAYS ROW 1.
+//
+// A Google Ads export opens with the report's TITLE in row 1 — one populated
+// cell, everything else blank — and Indeed does the same. Read as the header,
+// that single cell becomes the file's only column and every real column
+// disappears. The wizard then offers one mapping target and looks broken.
+//
+// The rule is a SHAPE rule, not a vendor rule: a row carrying ONE populated
+// cell above rows carrying many is a title, whatever wrote it. Nothing here
+// knows the word "Google" or "Indeed".
+// ---------------------------------------------------------------------------
+const HEADER_SCAN_LIMIT = 10; // never eat more than the top of a file
+
+const populated = (row: unknown[]): number =>
+  row.filter((c) => String(c ?? "").trim() !== "").length;
+
+/**
+ * The index of the row that is really the header, plus the rows skipped to
+ * reach it (returned so they can be NAMED on screen rather than vanishing).
+ *
+ * ⚠️ A genuinely single-column file must survive. If no row in the scan window
+ * carries two or more populated cells, nothing is skipped and row 0 stands.
+ */
+function findHeaderRow(grid: unknown[][]): { idx: number; skipped: string[] } {
+  const limit = Math.min(grid.length, HEADER_SCAN_LIMIT);
+  let best = -1;
+  for (let i = 0; i < limit; i++) {
+    if (populated(grid[i] || []) >= 2) {
+      best = i;
+      break;
+    }
+  }
+  if (best <= 0) return { idx: 0, skipped: [] };
+  const skipped = grid
+    .slice(0, best)
+    .map((r) => (r || []).map((c) => String(c ?? "").trim()).filter(Boolean).join(" · "))
+    .filter(Boolean);
+  return { idx: best, skipped };
+}
+
+/**
+ * A trailing TOTALS row, by the same shape reasoning: the last row of a report
+ * export is often a summary with one or two populated cells, or one whose first
+ * cell says "Total". It is not a person and must not become a contact.
+ */
+/**
+ * Grid + header index -> the wizard's { columns, rows }.
+ *
+ * ⚠️ The Excel apostrophe comes off HERE as well as server-side, so Preview
+ * shows the value that will actually be stored rather than one with a stray
+ * quote in front of it. Leading only, once — O'Brien and D'Angelo are
+ * untouched. (The server strips again; it must not trust a client to have done
+ * it.)
+ */
+function gridToParsed(
+  grid: unknown[][],
+  headerIdx: number,
+  dropTotals: boolean,
+): { columns: string[]; rows: Record<string, unknown>[]; dropped: string | null } {
+  const header = (grid[headerIdx] || []).map((c) => String(c ?? "").trim());
+  const columns = header.filter(Boolean);
+  const totalsIdx = dropTotals ? trailingTotalsRow(grid, headerIdx) : null;
+  const dropped =
+    totalsIdx == null
+      ? null
+      : (grid[totalsIdx] || [])
+          .map((c) => String(c ?? "").trim())
+          .filter(Boolean)
+          .join(" · ") || "(blank row)";
+  const body = grid.slice(headerIdx + 1, totalsIdx == null ? undefined : totalsIdx);
+  const rows = body
+    .map((r) => {
+      const o: Record<string, unknown> = {};
+      header.forEach((c, i) => {
+        if (c) o[c] = stripLeadingApostrophe(r?.[i]);
+      });
+      return o;
+    })
+    .filter((r) => Object.values(r).some((v) => v != null && v !== ""));
+  return { columns, rows, dropped };
+}
+
+function trailingTotalsRow(grid: unknown[][], headerIdx: number): number | null {
+  if (grid.length - headerIdx < 3) return null; // header + at least two rows
+  const last = grid[grid.length - 1] || [];
+  const first = String(last[0] ?? "").trim();
+  const headerCells = populated(grid[headerIdx] || []);
+  const isSummary =
+    /^(total|totals|grand total|sum)\b/i.test(first) ||
+    (populated(last) <= 1 && headerCells >= 2) ||
+    // Far fewer cells than the header promises, AND the first cell is blank —
+    // the shape a spreadsheet totals line usually has.
+    (!first && populated(last) > 0 && populated(last) < headerCells / 2);
+  return isSummary ? grid.length - 1 : null;
+}
+
 export default function ImportWizard({
   ssoBlob,
 }: {
@@ -80,6 +177,20 @@ export default function ImportWizard({
   const [step, setStep] = useState<StepIdx>(0);
 
   const [fileName, setFileName] = useState("");
+  // The file as read, kept so the header row can be re-chosen without asking
+  // for the file again.
+  const [rawGrid, setRawGrid] = useState<unknown[][] | null>(null);
+  // What was skipped to find the header, and any trailing totals row. Held so
+  // it can be SAID on screen: a row silently discarded is how someone ends up
+  // importing 46 of 47 people and never knowing.
+  const [skipNotice, setSkipNotice] = useState<{
+    top: string[];
+    bottom: string | null;
+    headerIdx: number;
+    // The person overrode the detection and asked for the file exactly as
+    // written. Kept so the notice can flip its wording and offer the way back.
+    overridden: boolean;
+  } | null>(null);
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [parseErr, setParseErr] = useState<unknown>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -235,56 +346,95 @@ export default function ImportWizard({
     [meta],
   );
 
+  /**
+   * Grid -> everything the wizard holds. ONE path, used by the first parse and
+   * by the override button, so what the notice claims and what the wizard is
+   * actually working from cannot drift apart.
+   *
+   * `overridden` means the person asked for the file exactly as written: row 0
+   * is the header and nothing comes off the bottom.
+   */
+  const applyGrid = (
+    grid: unknown[][],
+    headerIdx: number,
+    overridden: boolean,
+  ): string | null => {
+    const { columns, rows, dropped } = gridToParsed(grid, headerIdx, !overridden);
+    if (!columns.length) throw new Error("No columns found in the file.");
+    if (!rows.length) throw new Error("No data rows found in the file.");
+    const { map, auto } = autoMap(columns);
+    setParsed({ columns, rows });
+    setMapping(map);
+    setAutoMapped(auto);
+    return dropped;
+  };
+
+  // The escape hatches on the Upload step. Neither re-reads the file — the grid
+  // is already in hand, so flipping back and forth costs nothing.
+  const useFileAsWritten = () => {
+    if (!rawGrid || !skipNotice) return;
+    try {
+      applyGrid(rawGrid, 0, true);
+      setSkipNotice({ ...skipNotice, overridden: true });
+      setParseErr(null);
+    } catch (e) {
+      setParseErr(e);
+    }
+  };
+  const useDetectedHeader = () => {
+    if (!rawGrid || !skipNotice) return;
+    try {
+      applyGrid(rawGrid, skipNotice.headerIdx, false);
+      setSkipNotice({ ...skipNotice, overridden: false });
+      setParseErr(null);
+    } catch (e) {
+      setParseErr(e);
+    }
+  };
+
   const parseFile = async (file: File) => {
     setParseErr(null);
     setSummary(null);
     setImportErr(null);
     setFileName(file.name);
+    // A new file must not inherit the last one's notice or grid.
+    setRawGrid(null);
+    setSkipNotice(null);
     try {
-      let columns: string[] = [];
-      let rows: Record<string, unknown>[] = [];
+      // 🔴 BOTH formats become a GRID first, so the header-row detection is one
+      // rule applied once. CSV used to parse with `header: true`, which hands
+      // row 1 to Papa as the header before anything can look at it — a report
+      // title then IS the header and there is no way back.
+      let grid: unknown[][];
       if (/\.csv$/i.test(file.name)) {
-        const res = await new Promise<Papa.ParseResult<Record<string, unknown>>>(
+        const res = await new Promise<Papa.ParseResult<string[]>>(
           (resolve, reject) =>
-            Papa.parse<Record<string, unknown>>(file, {
-              header: true,
+            Papa.parse<string[]>(file, {
+              header: false,
               skipEmptyLines: true,
               complete: resolve,
               error: reject,
             }),
         );
-        columns = (res.meta.fields || []).filter(Boolean);
-        rows = res.data;
+        grid = res.data;
       } else if (/\.xlsx$/i.test(file.name)) {
-        const grid = (await readXlsxFile(file)) as unknown[][];
-        columns = (grid[0] || []).map((c) => String(c ?? "").trim());
-        rows = grid.slice(1).map((r) => {
-          const o: Record<string, unknown> = {};
-          columns.forEach((c, idx) => (o[c] = r[idx]));
-          return o;
-        });
+        grid = (await readXlsxFile(file)) as unknown[][];
       } else {
         throw new Error("Unsupported file type — upload a .xlsx or .csv.");
       }
-      columns = columns.filter(Boolean);
-      // 🔴 The Excel apostrophe comes off HERE as well as server-side, so
-      // Preview shows the value that will actually be stored rather than one
-      // with a stray quote in front of it. Leading only, once — O'Brien and
-      // D'Angelo are untouched. (The server strips again; it must not trust a
-      // client to have done it.)
-      rows = rows.map((r) => {
-        const o: Record<string, unknown> = {};
-        for (const k of Object.keys(r)) o[k] = stripLeadingApostrophe(r[k]);
-        return o;
-      });
-      rows = rows.filter((r) => Object.values(r).some((v) => v != null && v !== ""));
-      if (!columns.length) throw new Error("No columns found in the file.");
-      if (!rows.length) throw new Error("No data rows found in the file.");
-      const { map, auto } = autoMap(columns);
-      setParsed({ columns, rows });
-      setMapping(map);
-      setAutoMapped(auto);
-      setStep(1);
+      setRawGrid(grid);
+      const found = findHeaderRow(grid);
+      const dropped = applyGrid(grid, found.idx, false);
+      const notice =
+        found.skipped.length || dropped
+          ? { top: found.skipped, bottom: dropped, headerIdx: found.idx, overridden: false }
+          : null;
+      setSkipNotice(notice);
+      // 🔴 DO NOT SKIP PAST THE NOTICE. A clean file still jumps straight to
+      // Destination; a file where rows were dropped holds on Upload until the
+      // person has seen WHICH rows and agreed. Advancing here is how a silent
+      // discard stays silent.
+      if (!notice) setStep(1);
     } catch (e) {
       setParseErr(e);
       setParsed(null);
@@ -574,6 +724,67 @@ export default function ImportWizard({
           {parsed ? (
             <div className="imeta">
               ✓ {parsed.rows.length} rows · {parsed.columns.length} columns parsed
+            </div>
+          ) : null}
+
+          {/* ⚠️ WHAT WAS DROPPED, NAMED. The rows are quoted back verbatim so
+              the person can see it really was a report title and not somebody's
+              record. Both directions are one click and no re-read of the
+              file. */}
+          {skipNotice ? (
+            <div className={`ihead ${skipNotice.overridden ? "raw" : ""}`}>
+              {skipNotice.overridden ? (
+                <>
+                  <b>Using the file exactly as written.</b> Row 1 is the header
+                  and nothing has been dropped from the bottom.
+                </>
+              ) : (
+                <>
+                  <b>
+                    Row {skipNotice.headerIdx + 1} looks like the real header —
+                    the rows above it were skipped.
+                  </b>
+                  {skipNotice.top.length ? (
+                    <ul>
+                      {skipNotice.top.map((t, i) => (
+                        <li key={i}>
+                          <span className="iheadn">Row {i + 1}</span>
+                          <span className="iheadv">{t}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {skipNotice.bottom ? (
+                    <ul>
+                      <li>
+                        <span className="iheadn">
+                          Row {rawGrid ? rawGrid.length : "—"} · totals
+                        </span>
+                        <span className="iheadv">{skipNotice.bottom}</span>
+                      </li>
+                    </ul>
+                  ) : null}
+                </>
+              )}
+              <div className="iheadact">
+                {skipNotice.overridden ? (
+                  <button type="button" onClick={useDetectedHeader}>
+                    Skip them after all
+                  </button>
+                ) : (
+                  <button type="button" onClick={useFileAsWritten}>
+                    No — use the file exactly as written
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="iheadok"
+                  onClick={() => setStep(1)}
+                  disabled={!parsed}
+                >
+                  Looks right, continue
+                </button>
+              </div>
             </div>
           ) : null}
         </div>
@@ -870,6 +1081,25 @@ export default function ImportWizard({
               ({contactFieldCols.join(" · ")}). A contact field belongs to the
               person — the value shows on every opportunity that contact holds,
               not only the one this import creates.
+            </div>
+          ) : null}
+
+          {/* The same rule for ROWS as for columns: say it here too, because
+              Preview is where the count gets checked against the file. Someone
+              expecting 47 and seeing 45 needs the two missing rows named on the
+              screen that shows the number, not three steps back. */}
+          {skipNotice && !skipNotice.overridden ? (
+            <div className="idrops">
+              <b>
+                {skipNotice.top.length + (skipNotice.bottom ? 1 : 0)} row
+                {skipNotice.top.length + (skipNotice.bottom ? 1 : 0) === 1
+                  ? ""
+                  : "s"}{" "}
+                skipped as report furniture:
+              </b>{" "}
+              {[...skipNotice.top, skipNotice.bottom]
+                .filter(Boolean)
+                .join(" · ")}
             </div>
           ) : null}
 
