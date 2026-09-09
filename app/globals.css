@@ -258,6 +258,17 @@ tbody tr:last-child td{border-bottom:0;}
 .irow label{font-size:11px;font-weight:700;color:var(--ink-2);}
 .irow select,.irow input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;min-width:150px;transition:border-color .12s;}
 .irow select:focus,.irow input:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+/* The batch tag box. Deliberately NOT styled like the source picker — one is a
+   fixed vocabulary, the other is free text, and they must not read alike. */
+/* Base styling comes from `.irow input` — only the differences live here:
+   it GROWS (free text needs room where a fixed picker does not), and it says
+   so when the tag is blocked. */
+.itag{flex:1 1 260px;}
+.itag[aria-invalid="true"]{border-color:#c0392b;}
+.itag[aria-invalid="true"]:focus{box-shadow:0 0 0 3px #fdeeec;}
+.iopt{margin-left:6px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 6px;}
+.irow .ihint code{background:rgba(0,0,0,.06);border-radius:4px;padding:1px 5px;font-size:11px;}
+.itagerr{flex-basis:100%;margin-top:2px;font-size:11.5px;line-height:1.5;color:#8c2f22;background:#fdeeec;border:1px solid #f3d2cd;border-radius:8px;padding:7px 10px;}
 .irow .isrc{min-width:190px;}
 /* The source hint sits on its own line under the Destination row — .irow is a
    wrapping flex row, so it needs a full-width basis or it lands beside the

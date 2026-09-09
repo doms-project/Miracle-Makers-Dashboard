@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listPipelines, getEditableFieldDefs, GhlError } from "@/lib/ghl";
+import { listPipelines, getEditableFieldDefs, getLocationTags, GhlError } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import type { ImportMeta, ApiError } from "@/lib/types";
@@ -30,12 +30,16 @@ export async function GET(request: Request) {
     // BOTH models. `getEditableFieldDefs()` defaults to "opportunity", and
     // that default was the whole reason the applicant's 58 CONTACT fields were
     // unreachable from the wizard: they were never in the list to pick.
-    const [pipelines, fieldDefs, contactFieldDefs] = await Promise.all([
+    const [pipelines, fieldDefs, contactFieldDefs, tags] = await Promise.all([
       listPipelines(),
       getEditableFieldDefs("opportunity"),
       getEditableFieldDefs("contact"),
+      // ⚠️ NEVER FATAL. The tag list is a convenience for the batch-tag box.
+      // If GHL will not give it up, the box becomes a plain text field and the
+      // import still runs — losing suggestions must not lose the wizard.
+      getLocationTags().catch(() => [] as string[]),
     ]);
-    const body: ImportMeta = { pipelines, fieldDefs, contactFieldDefs };
+    const body: ImportMeta = { pipelines, fieldDefs, contactFieldDefs, tags };
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     if (e instanceof SsoError)

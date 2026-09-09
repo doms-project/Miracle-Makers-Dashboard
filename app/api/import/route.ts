@@ -7,6 +7,7 @@ import {
   listContactOpportunities,
   listOpportunityNotes,
   addOpportunityNote,
+  addContactTags,
   composeNoteBody,
   getEditableFieldDefs,
   toGhlDate,
@@ -29,6 +30,7 @@ import type {
   EditableFieldDef,
   DuplicateMode,
 } from "@/lib/types";
+import { checkBatchTag } from "@/lib/batchTag";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -68,6 +70,9 @@ interface ImportBody {
   // "update": the safe middle, where nothing is lost either way and the note
   // always lands. An older client that sends nothing gets that default.
   duplicateMode?: DuplicateMode;
+  // OPTIONAL free-text tag applied to every contact this import writes.
+  // Identifies one batch afterwards; it is NOT the source. Blank = no tag.
+  batchTag?: string;
   // Column order as the FILE had it. Object key order survives JSON in practice
   // but is not guaranteed by it, and the note's layout depends on the order —
   // a Q&A pair is only a pair because the answer column follows the question.
@@ -142,6 +147,23 @@ export async function POST(request: Request) {
     if (rows.length > 50)
       return NextResponse.json({ error: "Chunk too large (max 50 rows/request)." } as ApiError, { status: 400 });
 
+    // 🔴 VALIDATED AGAIN HERE. The wizard checks as you type, but a client
+    // check is a courtesy, not a gate — the same call from a script, or a stale
+    // tab holding an older deny-list, must not be able to fire a workflow on
+    // 200 people. Same module, same list, both sides.
+    //
+    // ⚠️ Placed with the other cheap rejections, BEFORE any GHL call — a
+    // blocked tag must cost nothing.
+    const { tag: batchTag, error: tagError } = checkBatchTag(
+      typeof body.batchTag === "string" ? body.batchTag : "",
+    );
+    if (tagError)
+      return NextResponse.json(
+        { error: tagError, status: 400 } as ApiError,
+        { status: 400 },
+      );
+
+
     const [oppDefs, contactDefs] = await Promise.all([
       getEditableFieldDefs("opportunity"),
       getEditableFieldDefs("contact"),
@@ -158,6 +180,7 @@ export async function POST(request: Request) {
       failed: 0,
       noted: 0,
       notesSkipped: 0,
+      tagged: 0,
       errors: [],
       flagged: [],
     };
@@ -339,6 +362,37 @@ export async function POST(request: Request) {
             summary.failed++;
             summary.errors.push({ row: rowNo, error: "Contact upsert returned no id." });
             continue;
+          }
+        }
+
+        // ── THE BATCH TAG ──────────────────────────────────────────────
+        // 🔴 ADDITIVE ENDPOINT, DELIBERATELY. POST /contacts/{id}/tags ADDS;
+        // it does not replace. The tag is NOT put on /contacts/upsert, which
+        // would have cost nothing extra but replaces array fields (the same
+        // behaviour this file's neighbour documents for custom-field options:
+        // "GHL replaces the array, so it must be sent complete or existing
+        // options are destroyed"). On a 200-row import that would strip every
+        // existing tag off every matched contact — "chc" included, the exact
+        // automation tag the deny-list exists to protect. Unrecoverable.
+        //
+        // ⚠️ AFTER the contact write, and its failure is NOT the row's. A tag
+        // that does not land is worth an error line; it is not worth failing a
+        // person who imported correctly.
+        //
+        // ⚠️ SKIPPED ROWS ARE NOT TAGGED. "Skip" means untouched, and that
+        // rule is load-bearing here — this branch is never reached for them.
+        // So the tag marks what this import WROTE, not what the file held.
+        if (batchTag && contactId) {
+          try {
+            await addContactTags(contactId, [batchTag]);
+            summary.tagged++;
+          } catch (e) {
+            summary.errors.push({
+              row: rowNo,
+              error: `Record imported, but the batch tag "${batchTag}" did not save — ${
+                e instanceof Error ? e.message : String(e)
+              }`.slice(0, 300),
+            });
           }
         }
 

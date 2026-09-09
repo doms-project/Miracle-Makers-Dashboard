@@ -218,6 +218,10 @@ export interface ImportMeta {
   // application. The wizard only ever offered opportunity fields, so none of
   // the 58 applicant fields could be imported into at all.
   contactFieldDefs: EditableFieldDef[];
+  // Existing tags on the location, for the batch-tag suggestions. SUGGEST, not
+  // restrict — a new tag is the normal case. Empty if the read failed; the
+  // wizard degrades to a plain text box rather than blocking the import.
+  tags: string[];
 }
 /** Item 5 — a row whose person already exists, found BEFORE anything is written. */
 export interface ImportDuplicate {
@@ -241,6 +245,9 @@ export interface ImportSummary {
   failed: number;
   noted: number; // import notes written
   notesSkipped: number; // a note with this heading was already on the record
+  // Contacts the batch tag was applied to. Counted separately from `created` +
+  // `updated` because a tag write can fail on its own without costing the row.
+  tagged: number;
   errors: ImportRowError[];
   // Values that could not be normalised for their target type. NOT errors —
   // the value was imported exactly as written; this is the list a person looks
