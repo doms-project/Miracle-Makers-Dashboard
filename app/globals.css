@@ -415,15 +415,20 @@ tbody tr:last-child td{border-bottom:0;}
 .pfadmin .pfprimary{padding:11px 22px;font-size:13px;}
 
 /* "+ Add a section" on the record panel. */
-.addsec{margin-top:10px;position:relative;}
-.addsec-btn{border:1px dashed var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;}
-.addsec-btn:hover,.addsec-btn.on{border-style:solid;background:#efe6fb;}
-.addsec-n{font-weight:500;opacity:.8;}
-.addsec-pop{position:absolute;z-index:20;margin-top:6px;min-width:260px;max-width:340px;background:var(--bg);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 28px rgba(31,23,41,.14);padding:5px;}
-.addsec-pop > button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:7px;font-size:12.5px;color:var(--ink);text-align:left;cursor:pointer;}
-.addsec-pop > button:hover{background:var(--plum-soft);color:var(--plum);}
-.addsec-pop > button span{font-size:10.5px;color:var(--ink-3);}
-.addsec-note{padding:7px 10px 4px;font-size:10.5px;line-height:1.5;color:var(--ink-3);border-top:1px solid var(--line-soft);margin-top:4px;}
+/* ⚠️ RENAMED FROM .addsec — THAT NAME WAS ALREADY TAKEN. AddClientDialog has
+   used .addsec for its "Lead" / "Case" headings since round 33 (globals.css:751,
+   below this and therefore winning on every shared property). Round 94 added a
+   second .addsec here for the record panel's "+ Add a section", so each was
+   quietly restyling the other. Prior claim wins; this one moves. */
+.pullsec{margin-top:10px;position:relative;}
+.pullsec-btn{border:1px dashed var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;}
+.pullsec-btn:hover,.pullsec-btn.on{border-style:solid;background:#efe6fb;}
+.pullsec-n{font-weight:500;opacity:.8;}
+.pullsec-pop{position:absolute;z-index:20;margin-top:6px;min-width:260px;max-width:340px;background:var(--bg);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 28px rgba(31,23,41,.14);padding:5px;}
+.pullsec-pop > button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:7px;font-size:12.5px;color:var(--ink);text-align:left;cursor:pointer;}
+.pullsec-pop > button:hover{background:var(--plum-soft);color:var(--plum);}
+.pullsec-pop > button span{font-size:10.5px;color:var(--ink-3);}
+.pullsec-note{padding:7px 10px 4px;font-size:10.5px;line-height:1.5;color:var(--ink-3);border-top:1px solid var(--line-soft);margin-top:4px;}
 
 .pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:6px 8px;margin-top:3px;overflow-wrap:anywhere;}
 
@@ -663,6 +668,21 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .movebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s;}
 .movebtn:hover{background:var(--plum-soft);border-color:var(--plum);}
 .movebox{background:var(--bg);border-radius:14px;width:min(520px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
+/* The applicant dialog's routing readout — what the division decided, shown
+   before it is committed. */
+.cgadd .movebody{gap:10px;}
+.cgroute{font-size:12px;line-height:1.55;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:9px 12px;}
+.cgroute b{color:var(--plum-deep);}
+.cgroute select{margin-top:7px;width:100%;border:1px solid var(--plum-line);border-radius:8px;padding:7px 9px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
+.cgroute.contactonly{background:var(--canvas);border-color:var(--line);}
+.cgroute.contactonly b{color:var(--ink);}
+/* 🔴 No pipeline exists. Amber — a thing to be fixed, not a thing to ignore. */
+.cgroute.none{background:#fdf8f2;border-color:#f0dcc9;color:#7a5227;}
+.cgroute.none b{color:#5c3d1c;}
+.cgroute-alt{margin-top:6px;font-size:11px;opacity:.9;}
+.cgsave{border:1px solid var(--plum);background:var(--plum);color:#fff;border-radius:9px;padding:11px 20px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
+.cgsave:hover:not(:disabled){background:#4a2170;}
+.cgsave:disabled{opacity:.45;cursor:default;}
 .movebody{padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
 .movebody .irow{gap:4px;}
 .movebody .irow label{margin-top:6px;}
