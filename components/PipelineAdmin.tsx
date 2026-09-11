@@ -1,0 +1,493 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import ErrorMessage from "./ErrorMessage";
+import { apiError } from "@/lib/apiFetch";
+import { checkFieldName, suggestPrefix, composeFieldName, type KnownField } from "@/lib/fieldNaming";
+import { divisionLabel } from "@/lib/division";
+import type { StoredPipelineConfig, StoredPipelineEntry } from "@/lib/pipelineConfig";
+
+interface Section {
+  key: string;
+  id: string;
+  label: string;
+  fields: { id: string; name: string }[];
+}
+interface PipelineRow {
+  id: string;
+  name: string;
+  stages: { id: string; name: string }[];
+  division: string;
+  configured: boolean;
+}
+interface Payload {
+  pipelines: PipelineRow[];
+  config: StoredPipelineConfig;
+  stale: string[];
+  sections: Section[];
+  known: KnownField[];
+  sharedKey: string;
+}
+
+// ⚠️ SUGGEST TWO, DO NOT IMPOSE. Every pipeline on this account starts with an
+// intake stage and ends in a terminal one, but OLTL Enrollment has 13 stages and
+// PP Caregiver Applicants has 7. There is no standard shape, so the form opens
+// with two rows and an Add button rather than a template.
+const SUGGESTED_STAGES = ["NEW LEAD", "LOST"];
+
+const DATA_TYPES = [
+  { key: "TEXT", label: "Text" },
+  { key: "LARGE_TEXT", label: "Long text" },
+  { key: "NUMERICAL", label: "Number" },
+  { key: "MONETORY", label: "Money" },
+  { key: "DATE", label: "Date" },
+  { key: "SINGLE_OPTIONS", label: "Choose one" },
+  { key: "MULTIPLE_OPTIONS", label: "Choose several" },
+  { key: "CHECKBOX", label: "Tickboxes" },
+];
+
+export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
+  const [data, setData] = useState<Payload | null>(null);
+  const [loadErr, setLoadErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<unknown>(null);
+  const [saved, setSaved] = useState("");
+
+  const ssoHeader = useCallback(
+    (): Record<string, string> => (ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {}),
+    [ssoBlob],
+  );
+
+  const load = useCallback(async () => {
+    setLoadErr(null);
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        headers: ssoHeader(),
+        cache: "no-store",
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw apiError(res, j);
+      setData(j as Payload);
+    } catch (e) {
+      setLoadErr(e);
+    }
+  }, [ssoHeader]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const post = async (payload: Record<string, unknown>) => {
+    setBusy(true);
+    setSaveErr(null);
+    setSaved("");
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...ssoHeader() },
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, ...payload }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw apiError(res, j);
+      return j;
+    } catch (e) {
+      setSaveErr(e);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ── CREATE FORM STATE ──────────────────────────────────────────────────
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<"client" | "caregiver" | "">("");
+  const [stages, setStages] = useState<string[]>([...SUGGESTED_STAGES]);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Seed the tick list with Shared once the payload arrives — the one folder
+  // every pipeline on this account uses.
+  useEffect(() => {
+    if (data?.sharedKey && !picked.size) setPicked(new Set([data.sharedKey]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.sharedKey]);
+
+  // ⚠️ THE DERIVED DIVISION, LIVE. divisionLabel() strips a trailing
+  // Enrollment/Transfer/Clients/Applicants, so "Events Clients" and "Events"
+  // both become "Events" and silently merge into one division. Showing the
+  // result before the pipeline exists is the only way that is visible.
+  const division = useMemo(() => divisionLabel(name.trim()), [name]);
+  const divisionClash = useMemo(() => {
+    if (!division || !data) return null;
+    const other = data.pipelines.find(
+      (p) => p.division.toLowerCase() === division.toLowerCase(),
+    );
+    return other ? other.name : null;
+  }, [division, data]);
+
+  const toggle = (key: string) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
+
+  const createPipeline = async () => {
+    const j = await post({
+      action: "create-pipeline",
+      name: name.trim(),
+      scope,
+      stages: stages.map((s) => s.trim()).filter(Boolean),
+      folders: [...picked],
+    });
+    if (!j) return;
+    setSaved(`Created “${j.pipeline.name}” with ${j.pipeline.stages.length} stage(s).`);
+    setName("");
+    setStages([...SUGGESTED_STAGES]);
+    await load();
+  };
+
+  const canCreate =
+    !!name.trim() && !!scope && stages.some((s) => s.trim()) && picked.size > 0 && !busy;
+
+  // ── PER-PIPELINE FOLDER EDITING ────────────────────────────────────────
+  const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
+    if (!data) return;
+    const next: StoredPipelineConfig = {
+      seeded: true,
+      pipelines: { ...data.config.pipelines, [pipelineId]: entry },
+    };
+    const j = await post({ action: "save-config", config: next });
+    if (j) {
+      setSaved("Saved.");
+      setData({ ...data, config: j.config });
+    }
+  };
+  const removeEntry = async (pipelineId: string) => {
+    if (!data) return;
+    const rest = { ...data.config.pipelines };
+    delete rest[pipelineId];
+    const j = await post({ action: "save-config", config: { seeded: true, pipelines: rest } });
+    if (j) {
+      setSaved("Removed.");
+      setData({ ...data, config: j.config, stale: data.stale.filter((s) => s !== pipelineId) });
+    }
+  };
+
+  // ── NEW FIELD ──────────────────────────────────────────────────────────
+  const [fieldOpen, setFieldOpen] = useState(false);
+  const [fPrefixOn, setFPrefixOn] = useState(true);
+  const [fPrefix, setFPrefix] = useState("");
+  const [fName, setFName] = useState("");
+  const [fType, setFType] = useState("TEXT");
+  const [fParent, setFParent] = useState("");
+  const [fOptions, setFOptions] = useState("");
+
+  useEffect(() => {
+    // ⚠️ FROM THE DIVISION, NOT THE FOLDER NAME — "More Details - Office" is
+    // meaningless, while "CG - " and "APP - " are instantly identifiable.
+    if (division) setFPrefix(suggestPrefix(division));
+  }, [division]);
+
+  const fOptionList = useMemo(
+    () => fOptions.split("\n").map((o) => o.trim()).filter(Boolean),
+    [fOptions],
+  );
+  const fFull = composeFieldName(fPrefixOn ? fPrefix : "", fName);
+  const verdict = useMemo(
+    () => (data ? checkFieldName(fFull, data.known, fOptionList) : { kind: "ok" as const }),
+    [fFull, data, fOptionList],
+  );
+
+  const createField = async () => {
+    const j = await post({
+      action: "create-field",
+      name: fFull,
+      dataType: fType,
+      parentId: fParent,
+      options: /OPTIONS|CHECKBOX/.test(fType) ? fOptionList : undefined,
+    });
+    if (!j) return;
+    setSaved(
+      j.field.parentIdHonoured
+        ? `Created “${j.field.name}”.`
+        : `Created “${j.field.name}” — but GoHighLevel did not put it in the section you chose. Move it there in GHL.`,
+    );
+    setFName("");
+    setFOptions("");
+    await load();
+  };
+
+  if (loadErr)
+    return (
+      <div className="isec">
+        <ErrorMessage error={loadErr} className="savemsg err" />
+      </div>
+    );
+  if (!data) return <div className="isec"><div className="imeta">Loading…</div></div>;
+
+  const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
+    <div className="pfsec" key={s.key}>
+      <label className="pfseclab">
+        <input type="checkbox" checked={checked} onChange={onToggle} />
+        <span className="pfsecname">{s.label}</span>
+        <span className="pfseccount">
+          {s.fields.length} field{s.fields.length === 1 ? "" : "s"}
+        </span>
+      </label>
+      <button
+        type="button"
+        className="pfsectoggle"
+        aria-expanded={expanded.has(s.key)}
+        onClick={() =>
+          setExpanded((e) => {
+            const n = new Set(e);
+            if (n.has(s.key)) n.delete(s.key);
+            else n.add(s.key);
+            return n;
+          })
+        }
+      >
+        {expanded.has(s.key) ? "▴" : "▾"}
+      </button>
+      {/* ⚠️ EXPANDING LISTS THE FIELDS. Ticking a name alone is a guess —
+          "More Details" and "Client Details" mean nothing until you see
+          inside. The defs are already cached, so this costs no call. */}
+      {expanded.has(s.key) ? (
+        <div className="pfsecfields">{s.fields.map((f) => f.name).join(" · ")}</div>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div className="isec pfadmin">
+      <div className="istep">Create a pipeline</div>
+
+      <div className="irow">
+        <label>Name</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Events" />
+        {name.trim() ? (
+          <div className="ihint">
+            Records here will belong to the <b>{division}</b> division — that is what
+            transfer tags and the division filter use.
+            {divisionClash ? (
+              <>
+                {" "}
+                ⚠️ <b>{divisionClash}</b> already resolves to the same division. If these
+                are not two halves of one workflow, they will be treated as one.
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="irow">
+        <label>This pipeline holds</label>
+        <select value={scope} onChange={(e) => setScope(e.target.value as "client" | "caregiver" | "")}>
+          <option value="">Choose…</option>
+          <option value="client">Clients</option>
+          <option value="caregiver">Caregiver / DSP applicants</option>
+        </select>
+        {/* 🔴 REQUIRED, NEVER GUESSED. The two lists being separate is what
+            stops an applicant reaching a client caller. */}
+        <div className="ihint">
+          Caregiver pipelines never appear on the client board, the client kanban or the
+          master view. This cannot be changed afterwards from here.
+        </div>
+      </div>
+
+      <div className="irow pfstages">
+        <label>Stages</label>
+        <div className="pfstagelist">
+          {stages.map((s, i) => (
+            <div className="pfstage" key={i}>
+              <span className="pfstagepos">{i + 1}</span>
+              <input
+                value={s}
+                onChange={(e) =>
+                  setStages((arr) => arr.map((x, j) => (j === i ? e.target.value : x)))
+                }
+              />
+              {/* Position comes from LIST ORDER, never typed. */}
+              <button type="button" disabled={i === 0} onClick={() =>
+                setStages((a) => { const n=[...a]; [n[i-1],n[i]]=[n[i],n[i-1]]; return n; })}>↑</button>
+              <button type="button" disabled={i === stages.length - 1} onClick={() =>
+                setStages((a) => { const n=[...a]; [n[i+1],n[i]]=[n[i],n[i+1]]; return n; })}>↓</button>
+              <button type="button" disabled={stages.length <= 1} onClick={() =>
+                setStages((a) => a.filter((_, j) => j !== i))}>×</button>
+            </div>
+          ))}
+          <button type="button" className="ighost" onClick={() => setStages((a) => [...a, ""])}>
+            + Add a stage
+          </button>
+          <div className="ihint">
+            At least one is required. Stages can be renamed in GoHighLevel afterwards —
+            deleting one is not offered here, because the opportunities in it have to go
+            somewhere and a recreated stage changes id, which makes its records vanish
+            from the board.
+          </div>
+        </div>
+      </div>
+
+      <div className="irow pffolders">
+        <label>Field sections this pipeline shows</label>
+        <div className="pfseclist">
+          {data.sections.map((s) => sectionRow(s, picked.has(s.key), () => toggle(s.key)))}
+        </div>
+      </div>
+
+      <div className="irow">
+        <button type="button" className="ighost" onClick={() => setFieldOpen((v) => !v)}>
+          {fieldOpen ? "− Close" : "+ Create a new field"}
+        </button>
+      </div>
+
+      {fieldOpen ? (
+        <div className="pfnew">
+          <div className="irow">
+            <label>
+              Prefix{" "}
+              <input
+                type="checkbox"
+                checked={fPrefixOn}
+                onChange={(e) => setFPrefixOn(e.target.checked)}
+              />
+            </label>
+            <input
+              value={fPrefix}
+              disabled={!fPrefixOn}
+              onChange={(e) => setFPrefix(e.target.value)}
+              style={{ maxWidth: 110 }}
+            />
+            <label>Name</label>
+            <input value={fName} onChange={(e) => setFName(e.target.value)} placeholder="Cost" />
+          </div>
+          {fFull ? <div className="ihint">Will be created as: <code>{fFull}</code></div> : null}
+
+          <div className="irow">
+            <label>Type</label>
+            <select value={fType} onChange={(e) => setFType(e.target.value)}>
+              {DATA_TYPES.map((t) => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
+            <label>Section</label>
+            <select value={fParent} onChange={(e) => setFParent(e.target.value)}>
+              <option value="">Choose a section…</option>
+              {data.sections.map((s) => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/OPTIONS|CHECKBOX/.test(fType) ? (
+            <div className="irow">
+              <label>Choices</label>
+              <textarea
+                rows={3}
+                value={fOptions}
+                onChange={(e) => setFOptions(e.target.value)}
+                placeholder={"One per line"}
+              />
+            </div>
+          ) : null}
+
+          {/* 🔴 BLOCK a normalised clash. ⚠️ WARN, never block, on a similar
+              name or an identical picklist — a false positive that stops
+              someone working is worse than a duplicate they can merge. */}
+          {verdict.kind !== "ok" ? (
+            <div className={verdict.kind === "blocked" ? "pfblock" : "pfwarn"}>
+              <b>{verdict.kind === "blocked" ? "🔴" : "⚠️"} {verdict.message}</b>
+              <div className="pfwhere">
+                {verdict.existing.name} · {verdict.existing.folderLabel} ·{" "}
+                {verdict.existing.folderFieldCount} fields
+              </div>
+              {verdict.kind === "warn" ? (
+                <div className="pfwarnacts">
+                  <button type="button" onClick={() => { setFName(verdict.existing.name); setFPrefixOn(false); }}>
+                    Use “{verdict.existing.name}”
+                  </button>
+                  <button type="button" onClick={createField} disabled={busy || !fParent}>
+                    Create anyway
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {verdict.kind !== "warn" ? (
+            <button
+              type="button"
+              onClick={createField}
+              disabled={busy || !fFull || !fParent || verdict.kind === "blocked"}
+            >
+              Create field
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="irow">
+        <button type="button" onClick={createPipeline} disabled={!canCreate}>
+          {busy ? "Creating…" : "Create pipeline"}
+        </button>
+      </div>
+
+      {saveErr ? <ErrorMessage error={saveErr} className="savemsg err" /> : null}
+      {saved ? <div className="savemsg ok">{saved}</div> : null}
+
+      {/* ── EXISTING PIPELINES ─────────────────────────────────────────── */}
+      <div className="istep" style={{ marginTop: 20 }}>Configured pipelines</div>
+      <div className="pflist">
+        {data.pipelines.map((p) => {
+          const entry = data.config.pipelines[p.id];
+          return (
+            <details className="pfrow" key={p.id}>
+              <summary>
+                <b>{p.name}</b>
+                <span className="pfscope">{entry ? entry.scope : "not configured"}</span>
+                <span className="pfcount">
+                  {entry ? `${entry.folders.length} section(s)` : "Shared only"}
+                </span>
+              </summary>
+              <div className="pfseclist">
+                {data.sections.map((s) =>
+                  sectionRow(s, !!entry?.folders.includes(s.key), () => {
+                    const cur = new Set(entry?.folders ?? []);
+                    if (cur.has(s.key)) cur.delete(s.key);
+                    else cur.add(s.key);
+                    void saveEntry(p.id, {
+                      scope: entry?.scope ?? "client",
+                      folders: [...cur],
+                    });
+                  }),
+                )}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+
+      {/* ⚠️ RECONCILE, NEVER AUTO-DELETE. */}
+      {data.stale.length ? (
+        <div className="pfstale">
+          <b>No longer in GoHighLevel</b>
+          <div className="ihint">
+            These are still configured here but the pipeline is gone. Nothing breaks —
+            the mapping is simply never read. Remove it when you are sure it is not
+            coming back.
+          </div>
+          {data.stale.map((id) => (
+            <div className="pfstalerow" key={id}>
+              <code>{id}</code>
+              <button type="button" onClick={() => removeEntry(id)} disabled={busy}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}

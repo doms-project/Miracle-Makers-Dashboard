@@ -4,7 +4,7 @@ import type {
   ResourceFile,
 } from "./types";
 import { isFieldEditable } from "./editable";
-import { PIPELINE_FOLDERS } from "./fieldFolders";
+import { PIPELINE_FOLDERS, FOLDERS, folderKeyById } from "./fieldFolders";
 import { divisionLabel } from "./division";
 import { emailKey, phoneKey } from "./phone";
 import { mapLimit } from "./concurrency";
@@ -24,6 +24,15 @@ export const RESOURCES_FOLDER_ID = (
 // ---------------------------------------------------------------------------
 
 import { normalizeTag } from "./batchTag";
+import {
+  PIPELINE_CONFIG_CUSTOM_VALUE_NAME,
+  parsePipelineConfig,
+  serialisePipelineConfig,
+  emptyPipelineConfig,
+  idsInScope,
+  type StoredPipelineConfig,
+  type PipelineScope as StoredScope,
+} from "./pipelineConfig";
 
 const BASE_URL = "https://services.leadconnectorhq.com";
 
@@ -590,8 +599,15 @@ export function idsForScope(scope: PipelineScope): string[] {
 
 // Loud config check (memoized) — surfaces the two silent failure modes:
 //   1. running on baked-in DEFAULT_PIPELINE_IDS because PIPELINE_IDS is unset;
-//   2. a selected pipeline with no PIPELINE_FOLDERS mapping (its fields would
-//      silently dump into "Other fields", which reads as working).
+//   2. a selected pipeline with no folder mapping.
+//
+// 🔴 THIS COMMENT WAS WRONG until round 90 and it mattered: it said such a
+// pipeline's fields "silently dump into Other fields". They do not. Read
+// groupFieldsForPipeline — an unmapped pipeline took `Object.values(FOLDERS)`,
+// so `allowedKeys` held ALL TWELVE and no field was ever skipped. The symptom
+// was the opposite of what this claimed: every folder rendered at once, 68
+// fields on one card (see the incident at fieldFolders.ts:68). Anyone debugging
+// from this sentence would have looked in the wrong place.
 let _configChecked = false;
 function checkPipelineConfig(): void {
   if (_configChecked) return;
@@ -617,18 +633,35 @@ export async function getSelectedPipelines(
   scope: PipelineScope = "client",
 ): Promise<Pipeline[]> {
   if (scope === "client") checkPipelineConfig();
+  // 🔴 THE STORED VALUE IS THE SOURCE OF TRUTH. `idsForScope()` (the env vars)
+  // is read exactly once, by the seed inside getPipelineConfig(), and never
+  // again — which is what lets an admin ADD a pipeline without a deploy and,
+  // just as importantly, REMOVE one. A union with the env would keep putting a
+  // removed pipeline back with nothing on screen to explain why.
+  //
+  // ⚠️ If the config read fails, fall back to the env list rather than
+  // returning nothing. A GHL blip must not empty every board.
+  let ids: string[];
+  try {
+    ids = await configuredIds(scope);
+    if (!ids.length) ids = idsForScope(scope);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[config] pipeline config unreadable, falling back to env:", e);
+    ids = idsForScope(scope);
+  }
   const pipelines = await getPipelines();
   const byId = new Map(pipelines.map((p) => [p.id, p]));
   const selected: Pipeline[] = [];
-  for (const id of idsForScope(scope)) {
+  for (const id of ids) {
     const p = byId.get(id);
     if (p) selected.push(p);
   }
   if (!selected.length) {
     throw new GhlError(
-      "None of the configured PIPELINE_IDS matched this account's pipelines.",
+      "None of the configured pipelines matched this account's pipelines.",
       404,
-      `Configured: ${idsForScope(scope).join(", ")}. Available: ${pipelines
+      `Configured: ${ids.join(", ")}. Available: ${pipelines
         .map((p) => `${p.name} (${p.id})`)
         .join(", ")}`,
     );
@@ -2237,6 +2270,265 @@ export async function savePipelineAccessGrants(
   grants: AccessGrants,
 ): Promise<{ id: string }> {
   return saveAccessGrantsV2({ pipelines: grants });
+}
+
+/**
+ * 🔴 THE FIELD-DEF CACHES HAVE NO TTL, exactly like the pipeline cache. A field
+ * or section created here is invisible to this process until the lambda
+ * recycles unless all three slots are dropped — and an admin who cannot see
+ * what they just made will make it again.
+ */
+function bustFieldCaches(): void {
+  cache.fieldDefs = undefined;
+  cache.contactFieldDefs = undefined;
+  cache.fieldMap = undefined;
+}
+
+/**
+ * Create a custom-field FOLDER (a "section" on the record panel).
+ *
+ * ⚠️ documentType=folder is what distinguishes this from creating a field on
+ * the same endpoint.
+ */
+export async function createFieldFolder(args: {
+  name: string;
+  model?: "opportunity" | "contact";
+}): Promise<{ id: string; name: string }> {
+  const { locationId } = requireEnv();
+  const name = args.name.trim();
+  if (!name) throw new GhlError("A section needs a name.", 400);
+  const res = await ghlSend<{ customField?: { id?: string; name?: string }; id?: string }>(
+    "POST",
+    "/custom-fields/",
+    {
+      locationId,
+      name,
+      documentType: "folder",
+      model: args.model || "opportunity",
+    },
+  );
+  const id = String(res.customField?.id ?? res.id ?? "");
+  if (!id) throw new GhlError("GoHighLevel created the section but returned no id.", 502);
+  bustFieldCaches();
+  return { id, name: String(res.customField?.name ?? name) };
+}
+
+/**
+ * Create a custom FIELD inside a folder.
+ *
+ * ⚠️ parentId IS honoured on opportunity field create — earlier rounds in this
+ * project assumed it was not. It is read back below and compared, because an
+ * assumption is what put that belief in the codebase in the first place.
+ */
+export async function createCustomField(args: {
+  name: string;
+  dataType: string;
+  parentId: string;
+  options?: string[];
+  model?: "opportunity" | "contact";
+}): Promise<{ id: string; name: string; parentId: string; parentIdHonoured: boolean }> {
+  const { locationId } = requireEnv();
+  const name = args.name.trim();
+  if (!name) throw new GhlError("A field needs a name.", 400);
+  const body: Record<string, unknown> = {
+    locationId,
+    name,
+    dataType: args.dataType,
+    model: args.model || "opportunity",
+    documentType: "field",
+  };
+  if (args.parentId) body.parentId = args.parentId;
+  if (args.options?.length)
+    body.options = args.options.map((o) => String(o).trim()).filter(Boolean);
+
+  const res = await ghlSend<{ customField?: Record<string, unknown>; id?: string }>(
+    "POST",
+    "/custom-fields/",
+    body,
+  );
+  const cf = res.customField || {};
+  const id = String(cf.id ?? res.id ?? "");
+  if (!id) throw new GhlError("GoHighLevel created the field but returned no id.", 502);
+  const storedParent = String(cf.parentId ?? "");
+  bustFieldCaches();
+  return {
+    id,
+    name: String(cf.name ?? name),
+    parentId: storedParent,
+    // Reported rather than thrown: the field exists either way, and the admin
+    // needs to know it landed in the wrong section, not lose it.
+    parentIdHonoured: !args.parentId || storedParent === args.parentId,
+  };
+}
+
+/**
+ * Create a pipeline WITH its stages, in one call.
+ *
+ * 🔴 BUSTS THE PIPELINE CACHE. `getPipelines()` is module-cached with NO TTL,
+ * so without this the new pipeline does not exist as far as this process is
+ * concerned until the lambda recycles: the admin presses Create, nothing
+ * appears, they press again, and now there are two.
+ *
+ * ⚠️ CREATE ONLY. Renaming a stage is safe but DELETING one is not — the
+ * opportunities in it have to go somewhere, and report 86 recorded what an id
+ * change does: a stage recreated in GHL kept its NAME, changed its ID, and
+ * every record in it vanished from the board until this very cache recycled.
+ * Stage editing stays in GoHighLevel until that is answered.
+ *
+ * ⚠️ `stageWinProbability` is left at GHL's default of 50. Nothing in this app
+ * reads it, so there is no control for it.
+ */
+export async function createPipeline(args: {
+  name: string;
+  stages: string[];
+}): Promise<{ id: string; name: string; stages: { id: string; name: string }[] }> {
+  const { locationId } = requireEnv();
+  const name = args.name.trim();
+  if (!name) throw new GhlError("A pipeline needs a name.", 400);
+  const stageNames = args.stages.map((x) => x.trim()).filter(Boolean);
+  // GHL accepted a single-stage pipeline in the probe, but one with none is
+  // unusable — nothing can be created in it.
+  if (!stageNames.length) throw new GhlError("A pipeline needs at least one stage.", 400);
+
+  const res = await ghlSend<{ pipeline?: Pipeline; id?: string }>(
+    "POST",
+    "/opportunities/pipelines",
+    {
+      locationId,
+      name,
+      // Position comes from LIST ORDER, never typed — a typed position is a
+      // second source of truth for the same thing.
+      stages: stageNames.map((n, i) => ({ name: n, position: i })),
+    },
+  );
+  cache.pipelines = undefined; // 🔴 see above
+  const p = res.pipeline;
+  return {
+    id: String(p?.id ?? res.id ?? ""),
+    name: String(p?.name ?? name),
+    stages: (p?.stages || []).map((st) => ({ id: String(st.id), name: String(st.name) })),
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINE CONFIGURATION — the stored value, and the ONE-TIME SEED.
+//
+// See lib/pipelineConfig.ts for why this is the sole source of truth rather
+// than a union with the env vars.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function findPipelineConfigValue(): Promise<{ id: string; value: string } | null> {
+  const { locationId } = requireEnv();
+  const data = await ghlGet<{ customValues?: RawCustomValue[] }>(
+    `/locations/${encodeURIComponent(locationId)}/customValues`,
+  );
+  const hit = (data.customValues || []).find(
+    (c) =>
+      String(c.name ?? "").trim().toLowerCase() ===
+      PIPELINE_CONFIG_CUSTOM_VALUE_NAME.toLowerCase(),
+  );
+  if (!hit) return null;
+  return {
+    id: String(hit.id ?? hit._id ?? ""),
+    value: typeof hit.value === "string" ? hit.value : JSON.stringify(hit.value ?? ""),
+  };
+}
+
+/**
+ * Write the config, then READ IT BACK AND RE-PARSE IT.
+ *
+ * ⚠️ The cap probe found no truncation at 100,000 characters, so this is
+ * insurance rather than necessity — but the consequence it insures against is
+ * total: invalid JSON in this value means parsePipelineConfig returns null,
+ * and null is indistinguishable from "never configured" to anything that does
+ * not check `seeded`. A save that half-worked must report itself as failed.
+ */
+export async function savePipelineConfig(
+  next: StoredPipelineConfig,
+): Promise<StoredPipelineConfig> {
+  const { locationId } = requireEnv();
+  const body = serialisePipelineConfig(next);
+  const existing = await findPipelineConfigValue();
+  if (existing?.id) {
+    await ghlSend(
+      "PUT",
+      `/locations/${encodeURIComponent(locationId)}/customValues/${encodeURIComponent(existing.id)}`,
+      { name: PIPELINE_CONFIG_CUSTOM_VALUE_NAME, value: body },
+    );
+  } else {
+    await ghlSend("POST", `/locations/${encodeURIComponent(locationId)}/customValues`, {
+      name: PIPELINE_CONFIG_CUSTOM_VALUE_NAME,
+      value: body,
+    });
+  }
+  const after = await findPipelineConfigValue();
+  const parsed = after ? parsePipelineConfig(after.value) : null;
+  if (!parsed)
+    throw new GhlError(
+      "Pipeline configuration was written but could not be read back. Nothing has been changed on screen — check the \"MM Pipeline Folders\" custom value in GoHighLevel before trying again.",
+      502,
+    );
+  if (serialisePipelineConfig(parsed) !== body)
+    throw new GhlError(
+      "Pipeline configuration did not store exactly as sent — it may have been truncated. Treat this save as failed.",
+      502,
+    );
+  return parsed;
+}
+
+/**
+ * The config, seeding it once from the env vars + the code map if it has never
+ * been configured.
+ *
+ * 🔴 SEEDING IS DRIVEN BY THE `seeded` FLAG, NEVER BY EMPTINESS. If a save
+ * failed and left this value empty, "empty means seed" would silently
+ * overwrite an admin's configuration with the env defaults and look like it
+ * had worked. An UNPARSEABLE value is treated the same as a lost one: it does
+ * NOT re-seed, because the flag it would need is the thing that failed to
+ * parse.
+ */
+export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
+  const found = await findPipelineConfigValue();
+  const parsed = found ? parsePipelineConfig(found.value) : null;
+  if (parsed?.seeded) return parsed;
+  if (found && !parsed) {
+    // Present but unreadable. Do not seed over it.
+    throw new GhlError(
+      `The "${PIPELINE_CONFIG_CUSTOM_VALUE_NAME}" custom value exists but is not readable JSON. It is not being overwritten — repair or clear it in GoHighLevel.`,
+      502,
+    );
+  }
+  return seedPipelineConfig();
+}
+
+/**
+ * THE ONE-TIME SEED. Reads PIPELINE_IDS, CAREGIVER_PIPELINE_IDS and
+ * PIPELINE_FOLDERS — the only place any of the three is consulted from now on —
+ * and writes them in as folder KEYS.
+ */
+export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
+  const next = emptyPipelineConfig();
+  const add = (ids: string[], scope: StoredScope) => {
+    for (const id of ids) {
+      const mapped = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, id)
+        ? PIPELINE_FOLDERS[id]
+        : [FOLDERS.shared]; // never the all-twelve fall-through, even in the seed
+      next.pipelines[id] = {
+        scope,
+        // ids -> keys, so the stored value is readable in GHL's own screen
+        folders: mapped.map((fid) => folderKeyById(fid) || fid),
+      };
+    }
+  };
+  add(pipelineIds(), "client");
+  add(caregiverPipelineIds(), "caregiver");
+  next.seeded = true;
+  return savePipelineConfig(next);
+}
+
+/** The configured ids for a scope, from the stored value alone. */
+export async function configuredIds(scope: StoredScope): Promise<string[]> {
+  return idsInScope(await getPipelineConfig(), scope);
 }
 
 // Upsert dedupes by email/phone at GHL; `isNew` distinguishes created vs matched.

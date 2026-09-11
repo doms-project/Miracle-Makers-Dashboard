@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { getOltlOpportunities, GhlError, type PipelineScope } from "@/lib/ghl";
+import {
+  getOltlOpportunities,
+  getPipelineConfig,
+  GhlError,
+  type PipelineScope,
+} from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import {
@@ -49,10 +54,29 @@ async function buildResponse(
     // need no string matching at all.
     pipelineIds: [...getUserHomePipelines(u.id)],
   }));
+  // 🔴 THE STORED FOLDER MAP SHIPS WITH THE FIELD DEFS — same route, same
+  // cache. groupFieldsForPipeline is SYNCHRONOUS (it runs inside a useMemo in
+  // app/page.tsx), so it cannot fetch this itself: it has to arrive already
+  // loaded, beside the defs it groups.
+  //
+  // ⚠️ NEVER FATAL. If the config read fails the panel falls back to the code
+  // map rather than rendering nothing — an unreadable custom value must not
+  // take the record panel down with it.
+  let pipelineFolders: Record<string, string[]> | undefined;
+  try {
+    const cfg = await getPipelineConfig();
+    pipelineFolders = Object.fromEntries(
+      Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
+    );
+  } catch {
+    pipelineFolders = undefined;
+  }
+
   const meta = {
     stages,
     users: labelledUsers,
     fieldDefs,
+    pipelineFolders,
     pipelines,
     stagesByPipeline,
   };
