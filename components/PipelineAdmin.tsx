@@ -43,9 +43,11 @@ const DATA_TYPES = [
   { key: "NUMERICAL", label: "Number" },
   { key: "MONETORY", label: "Money" },
   { key: "DATE", label: "Date" },
-  { key: "SINGLE_OPTIONS", label: "Choose one" },
-  { key: "MULTIPLE_OPTIONS", label: "Choose several" },
-  { key: "CHECKBOX", label: "Tickboxes" },
+  // ⚠️ NAME THE CONTROL, NOT THE ABSTRACTION. "Choose one" / "Choose several"
+  // describe a rule; they do not tell an admin what will appear on the record.
+  { key: "SINGLE_OPTIONS", label: "Dropdown — pick one" },
+  { key: "MULTIPLE_OPTIONS", label: "Dropdown — pick several" },
+  { key: "CHECKBOX", label: "Tickbox — yes or no" },
 ];
 
 export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
@@ -179,12 +181,30 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
 
   // ── NEW FIELD ──────────────────────────────────────────────────────────
   const [fieldOpen, setFieldOpen] = useState(false);
-  const [fPrefixOn, setFPrefixOn] = useState(true);
+  // 🔴 OFF BY DEFAULT. It was on, prefilled from the pipeline name, and
+  // offered BEFORE the section was chosen — so it suggested "RPM - " before
+  // anything was known about where the field would land, which reads as the
+  // app having decided something it could not have decided. A prefix is a
+  // convention worth offering, not a default worth imposing.
+  const [fPrefixOn, setFPrefixOn] = useState(false);
   const [fPrefix, setFPrefix] = useState("");
   const [fName, setFName] = useState("");
   const [fType, setFType] = useState("TEXT");
   const [fParent, setFParent] = useState("");
   const [fOptions, setFOptions] = useState("");
+  const [sectionOpen, setSectionOpen] = useState(false);
+  const [secName, setSecName] = useState("");
+
+  const createSection = async () => {
+    const j = await post({ action: "create-section", name: secName.trim() });
+    if (!j) return;
+    setSaved(`Created the section “${j.folder.name}”.`);
+    setSecName("");
+    setSectionOpen(false);
+    await load();
+    // Select what was just made, so the field being created lands in it.
+    setFParent(j.folder.id);
+  };
 
   useEffect(() => {
     // ⚠️ FROM THE DIVISION, NOT THE FOLDER NAME — "More Details - Office" is
@@ -375,17 +395,68 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
               container that was itself being clipped. The result was an input
               that could not be reached or typed into. A two-column grid with
               explicit widths cannot collapse that way. */}
+          {/* 🔴 SECTION FIRST. The form asked for the name and a prefix before
+              the section, so the prefix was suggested before anything was known
+              about where the field would land. Choose the destination, then
+              name the thing going into it. */}
           <div className="pffield">
-            <label htmlFor="pf-name">Field name</label>
-            <div className="pffield-name">
-              <input
-                id="pf-name"
+            <label htmlFor="pf-section">Section</label>
+            <div className="pffield-sec">
+              <select
+                id="pf-section"
                 autoFocus
-                value={fName}
-                onChange={(e) => setFName(e.target.value)}
-                placeholder="e.g. Preferred contact time"
-              />
+                value={fParent}
+                onChange={(e) => setFParent(e.target.value)}
+              >
+                <option value="">Choose a section…</option>
+                {data.sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                    {s.named ? "" : "  (no name in GHL)"}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ighost"
+                onClick={() => setSectionOpen((v) => !v)}
+              >
+                {sectionOpen ? "− Cancel" : "+ New section"}
+              </button>
             </div>
+
+            {/* ⚠️ WIRED UP AT LAST. The route has had a `create-section` action
+                since round 90 and nothing on screen ever called it, so
+                "everything for this pipeline stays together" was an intention
+                with no control behind it. */}
+            {sectionOpen ? (
+              <>
+                <label htmlFor="pf-secname">New section name</label>
+                <div className="pffield-sec">
+                  <input
+                    id="pf-secname"
+                    value={secName}
+                    onChange={(e) => setSecName(e.target.value)}
+                    placeholder="e.g. Events Details"
+                  />
+                  <button
+                    type="button"
+                    onClick={createSection}
+                    disabled={busy || !secName.trim()}
+                  >
+                    Create section
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            <label htmlFor="pf-name">Field name</label>
+            <input
+              id="pf-name"
+              value={fName}
+              onChange={(e) => setFName(e.target.value)}
+              placeholder="e.g. Preferred contact time"
+            />
 
             <label htmlFor="pf-prefix">
               Prefix
@@ -401,6 +472,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
               className="pffield-prefix"
               value={fPrefix}
               disabled={!fPrefixOn}
+              placeholder={fPrefixOn ? "" : "off"}
               onChange={(e) => setFPrefix(e.target.value)}
             />
 
@@ -408,21 +480,6 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
             <select id="pf-type" value={fType} onChange={(e) => setFType(e.target.value)}>
               {DATA_TYPES.map((t) => (
                 <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </select>
-
-            <label htmlFor="pf-section">Section</label>
-            <select
-              id="pf-section"
-              value={fParent}
-              onChange={(e) => setFParent(e.target.value)}
-            >
-              <option value="">Choose a section…</option>
-              {data.sections.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                  {s.named ? "" : "  (no name in GHL)"}
-                </option>
               ))}
             </select>
 

@@ -2285,6 +2285,24 @@ function bustFieldCaches(): void {
 }
 
 /**
+ * A display name -> the lower_snake_case half of a `fieldKey`.
+ *
+ * ⚠️ Not a label and never read back as one: `fieldKey` is the stable machine
+ * name GoHighLevel stores alongside the field. Everything in this codebase
+ * still resolves fields by NAME or by id — this exists only to satisfy the
+ * create call.
+ */
+function fieldKeyFromName(name: string): string {
+  return (
+    (name || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || `field_${Date.now()}`
+  );
+}
+
+/**
  * Create a custom-field FOLDER (a "section" on the record panel).
  *
  * ⚠️ documentType=folder is what distinguishes this from creating a field on
@@ -2297,20 +2315,56 @@ export async function createFieldFolder(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A section needs a name.", 400);
-  const res = await ghlSend<{ customField?: { id?: string; name?: string }; id?: string }>(
-    "POST",
-    "/custom-fields/",
-    {
-      locationId,
-      name,
-      documentType: "folder",
-      model: args.model || "opportunity",
-    },
-  );
-  const id = String(res.customField?.id ?? res.id ?? "");
-  if (!id) throw new GhlError("GoHighLevel created the section but returned no id.", 502);
+  const res = await ghlSend<Record<string, unknown>>("POST", "/custom-fields/folder", {
+    locationId,
+    name,
+    objectKey: args.model === "contact" ? "contact" : "opportunity",
+  });
+  // 🔴 READ THE ID FROM WHATEVER SHAPE COMES BACK. This read only
+  // `res.customField.id`, and a folder create does not return `customField` —
+  // so it threw AFTER GoHighLevel had already created the folder, leaving an
+  // orphan section on the account that nothing pointed at and the screen never
+  // mentioned. A create that half-succeeds must not report itself as a clean
+  // failure.
+  const id = pickCreatedId(res);
+  if (!id)
+    throw new GhlError(
+      "GoHighLevel accepted the section but this app could not find an id in the reply — a section may now exist in GoHighLevel. Check before creating it again.",
+      502,
+      `Reply keys: ${Object.keys(res).join(", ") || "(empty)"}`,
+    );
   bustFieldCaches();
-  return { id, name: String(res.customField?.name ?? name) };
+  return { id, name };
+}
+
+/**
+ * Pull a created record's id out of a GoHighLevel reply.
+ *
+ * ⚠️ THE WRAPPER KEY DIFFERS PER ENDPOINT — `customField`, `customFieldFolder`,
+ * `field`, `folder`, or the object bare at the top level. Hard-coding one is
+ * what made a successful folder create look like a failure, so this checks the
+ * shapes rather than assuming.
+ */
+function pickCreatedId(res: Record<string, unknown>): string {
+  const direct = res.id ?? res._id;
+  if (typeof direct === "string" && direct) return direct;
+  for (const k of ["customField", "customFieldFolder", "field", "folder", "data"]) {
+    const w = res[k];
+    if (w && typeof w === "object") {
+      const v = (w as Record<string, unknown>).id ?? (w as Record<string, unknown>)._id;
+      if (typeof v === "string" && v) return v;
+    }
+  }
+  return "";
+}
+
+/** The same, for the created object itself (to read `parentId` back). */
+function pickCreated(res: Record<string, unknown>): Record<string, unknown> {
+  for (const k of ["customField", "customFieldFolder", "field", "folder", "data"]) {
+    const w = res[k];
+    if (w && typeof w === "object") return w as Record<string, unknown>;
+  }
+  return res;
 }
 
 /**
@@ -2330,25 +2384,39 @@ export async function createCustomField(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A field needs a name.", 400);
+  // 🔴 TWO DIFFERENT APIS, AND ROUND 90 MIXED THEM.
+  //
+  // Definitions are READ from /locations/{id}/customFields?model=opportunity —
+  // the location custom-fields API, whose vocabulary is `model` and
+  // `documentType`. Fields are WRITTEN to /custom-fields/, the Custom Fields V2
+  // API, whose vocabulary is `objectKey` and `fieldKey`. Round 90 took the read
+  // API's body shape and posted it to the write API's endpoint, so every create
+  // came back 422 — the screen was fixed twice over while the form it fixed
+  // could not create anything.
+  const objectKey = args.model === "contact" ? "contact" : "opportunity";
   const body: Record<string, unknown> = {
     locationId,
     name,
     dataType: args.dataType,
-    model: args.model || "opportunity",
-    documentType: "field",
+    objectKey,
+    // `fieldKey` is the stable machine name and is REQUIRED. It is derived from
+    // the display name, namespaced by the object, and lower_snake_case — the
+    // shape GoHighLevel's own field keys use.
+    fieldKey: `${objectKey}.${fieldKeyFromName(name)}`,
   };
   if (args.parentId) body.parentId = args.parentId;
   if (args.options?.length)
     body.options = args.options.map((o) => String(o).trim()).filter(Boolean);
 
-  const res = await ghlSend<{ customField?: Record<string, unknown>; id?: string }>(
-    "POST",
-    "/custom-fields/",
-    body,
-  );
-  const cf = res.customField || {};
-  const id = String(cf.id ?? res.id ?? "");
-  if (!id) throw new GhlError("GoHighLevel created the field but returned no id.", 502);
+  const res = await ghlSend<Record<string, unknown>>("POST", "/custom-fields/", body);
+  const cf = pickCreated(res);
+  const id = pickCreatedId(res);
+  if (!id)
+    throw new GhlError(
+      "GoHighLevel accepted the field but this app could not find an id in the reply — a field may now exist in GoHighLevel. Check before creating it again.",
+      502,
+      `Reply keys: ${Object.keys(res).join(", ") || "(empty)"}`,
+    );
   const storedParent = String(cf.parentId ?? "");
   bustFieldCaches();
   return {

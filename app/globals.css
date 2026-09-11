@@ -326,6 +326,22 @@ tbody tr:last-child td{border-bottom:0;}
 .iheadact .iheadok:hover{background:#4a2170;}
 .iheadact .iheadok:disabled{opacity:.5;cursor:default;}
 /* ── ADMIN → PIPELINES ─────────────────────────────────────────────────── */
+/* 🔴 BUTTONS THAT LOOK LIKE BUTTONS. The global reset is
+   `button{border:0;background:none;color:inherit}`, so every control in this
+   screen that did not opt into a class rendered as plain clickable text —
+   "Create field" and "Create pipeline" read as links, which is the one thing a
+   destructive-ish action must not look like. Scoped to this screen so nothing
+   else shifts. */
+.pfadmin button{border:1px solid var(--plum);background:var(--plum);color:#fff;border-radius:8px;padding:8px 14px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s;}
+.pfadmin button:hover:not(:disabled){background:#4a2170;border-color:#4a2170;}
+.pfadmin button:disabled{opacity:.45;cursor:default;}
+/* Secondary actions stay quiet — outlined, not filled. */
+.pfadmin button.ighost,.pfadmin .pfsectoggle,.pfadmin .pfstage button,
+.pfadmin .pfstalerow button,.pfadmin .pfwarnacts button{background:var(--bg);color:var(--ink-2);border-color:var(--line);font-weight:500;}
+.pfadmin button.ighost:hover:not(:disabled),.pfadmin .pfstage button:hover:not(:disabled){background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum);}
+.pfadmin .pfsectoggle{border:0;background:none;padding:2px 6px;}
+.pfadmin .pfsecwrap button,.pfadmin summary button{font-size:11.5px;padding:5px 10px;}
+
 .pfadmin .irow{align-items:flex-start;margin-bottom:14px;}
 .pfadmin .irow > label{padding-top:8px;min-width:150px;}
 
@@ -368,6 +384,10 @@ tbody tr:last-child td{border-bottom:0;}
 .pffield input:disabled{background:var(--line-soft);color:var(--ink-3);}
 .pffield textarea{align-self:start;}
 .pffield-prefix{max-width:140px;}
+/* Section picker + its "new section" button on one line. */
+.pffield-sec{display:flex;gap:8px;align-items:center;min-width:0;}
+.pffield-sec select,.pffield-sec input{flex:1 1 auto;min-width:0;}
+.pffield-sec button{flex:0 0 auto;white-space:nowrap;}
 .pfnew .ihint{margin-top:9px;}
 
 /* 🔴 BLOCK is red and offers no way through. ⚠️ WARN is amber and always
