@@ -39,6 +39,7 @@ import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
 import AddCaregiverDialog from "@/components/AddCaregiverDialog";
+import ReferralsSection from "@/components/ReferralsSection";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -171,6 +172,18 @@ const IconPeople = () => (
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+// Referrals. Two nodes and a link between them — business arriving from
+// somewhere else, which is what a referral partner is. Deliberately not the
+// people icon Caregivers already uses: two rail entries sharing a glyph is how
+// you click the wrong one.
+const IconShare = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
   </svg>
 );
 const IconRefresh = () => (
@@ -1398,7 +1411,13 @@ export default function Dashboard() {
     | "access"
     | "pipelines"
     | "caregivers"
+    | "referrals"
   >("board");
+  // Referrals is its own section with its own payload. The ONE toolbar Refresh
+  // bumps this token; the section watches it and re-reads itself, so the button
+  // keeps one position across every section rather than growing a second copy.
+  const [refReload, setRefReload] = useState(0);
+  const [refBusy, setRefBusy] = useState(false);
   const [selId, setSelId] = useState<string | null>(null);
   const [masterFocus, setMasterFocus] = useState<{
     kind: "pipeline" | "owner" | "source" | "status" | "blocked" | "shared" | "stalled";
@@ -2128,6 +2147,14 @@ export default function Dashboard() {
         return {
           title: "Caregiver applicants",
           sub: "Applicants across the recruiting pipelines",
+        };
+      case "referrals":
+        return {
+          title: "Referrals",
+          // ⚠️ The section carries its OWN heading, and that heading is the
+          // DIVISION SWITCH. This line names the section; the one below it
+          // names what you are looking at inside it.
+          sub: "Referral sources, the cadence they are owed, and the events that produced them",
         };
       default:
         return {
@@ -4257,11 +4284,13 @@ export default function Dashboard() {
   const railWhere:
     | "clients"
     | "caregivers"
+    | "referrals"
     | "master"
     | "import"
     | "access"
     | "pipelines" =
     view === "caregivers" ||
+    view === "referrals" ||
     view === "import" ||
     view === "access" ||
     view === "pipelines" ||
@@ -4300,6 +4329,21 @@ export default function Dashboard() {
         >
           <IconPeople />
           <span>Caregivers</span>
+        </button>
+        {/* 🔴 A RAIL SECTION, NOT A TAB INSIDE CLIENTS. A referral partner is
+            not an enrolment and not an applicant: it is a third kind of record,
+            with its own cadence, its own arithmetic and its own division
+            switch. Filed under Clients it would have inherited the client
+            board's pipeline filter and division header, which describe neither
+            a partner nor an event. */}
+        <button
+          className={railWhere === "referrals" ? "railsec active" : "railsec"}
+          title="Referral partners, the touch cadence they are owed, and events"
+          type="button"
+          onClick={() => setView("referrals")}
+        >
+          <IconShare />
+          <span>Referrals</span>
         </button>
         {/* ITEM 3 — gated on the SAME server-decided grant the tab used
             (`canSeeMaster`, re-derived on every payload), so someone without
@@ -4473,17 +4517,39 @@ export default function Dashboard() {
             onClick={() =>
               railWhere === "caregivers"
                 ? ((cgTried.current = false), loadCaregivers())
-                : load()
+                : // 🔴 SECTION-AWARE, AND REFERRALS IS THE THIRD SECTION TO
+                  // NEED IT. Falling through to load() here would have re-read
+                  // the CLIENT opportunities and left the partner list, the
+                  // touch measurements and the events exactly as stale as they
+                  // were — the same failure the caregiver branch above exists
+                  // to prevent, one section over.
+                  railWhere === "referrals"
+                  ? setRefReload((n) => n + 1)
+                  : load()
             }
-            disabled={railWhere === "caregivers" ? cgLoading : loading}
+            disabled={
+              railWhere === "caregivers"
+                ? cgLoading
+                : railWhere === "referrals"
+                  ? refBusy
+                  : loading
+            }
             title={
               railWhere === "caregivers"
                 ? "Re-read the applicants from GoHighLevel"
-                : "Re-read everything from GoHighLevel"
+                : railWhere === "referrals"
+                  ? "Re-read the partners, and measure their last contact again"
+                  : "Re-read everything from GoHighLevel"
             }
           >
             <IconRefresh />
-            {(railWhere === "caregivers" ? cgLoading : loading)
+            {(
+              railWhere === "caregivers"
+                ? cgLoading
+                : railWhere === "referrals"
+                  ? refBusy
+                  : loading
+            )
               ? "Refreshing…"
               : "Refresh"}
           </button>
@@ -5324,6 +5390,17 @@ export default function Dashboard() {
               )}
             </>
           )
+        ) : view === "referrals" ? (
+          // 🔴 NOT GATED ON isAdminViewer. Referral partners are the work of
+          // whoever owns the relationship, not an admin screen — and the route
+          // re-derives the session server-side either way, exactly as every
+          // other route here does. Hiding it from non-admins would have been a
+          // permission invented in the UI.
+          <ReferralsSection
+            ssoBlob={sso.status === "ready" ? sso.blob : null}
+            reloadToken={refReload}
+            onBusy={setRefBusy}
+          />
         ) : view === "access" ? (
           isAdminViewer ? (
             <div className="scroll adminscroll">

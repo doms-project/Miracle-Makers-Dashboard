@@ -35,7 +35,11 @@ import {
   type PipelineScope as StoredScope,
 } from "./pipelineConfig";
 
-const BASE_URL = "https://services.leadconnectorhq.com";
+// GoHighLevel, unless a harness points it somewhere else. The override exists
+// so a test can reproduce the PRODUCTION SHAPE — a real request, a real reply,
+// a real parse — rather than mocking the module and proving only that the mock
+// works. It is never set in the app; there is no such variable in .env.
+const BASE_URL = process.env.GHL_API_BASE || "https://services.leadconnectorhq.com";
 
 export class GhlError extends Error {
   status: number;
@@ -790,6 +794,13 @@ interface RawOpportunity {
   // is exactly what a version check needs and why nothing had to be invented.
   updatedAt?: string;
   dateUpdated?: string;
+  // WHEN THE OPPORTUNITY WAS CREATED. Read for the referral dashboard, where
+  // "how long ago was this referred" is the whole of `Referrals (90d)`. Same
+  // defensive treatment as lastStageChangeAt: several plausible spellings, and
+  // "" when GoHighLevel sends none — a referral with no date is COUNTED AND
+  // STATED as undated rather than being treated as "referred today".
+  createdAt?: string;
+  dateAdded?: string;
 }
 
 // Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
@@ -963,6 +974,7 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   pipelineName: [],
   shared: [],
   stageChangedAt: [], // native GHL timestamp, not a custom field
+  createdAt: [], // native GHL timestamp, not a custom field
   version: [], // native GHL updatedAt, not a custom field
 };
 
@@ -1056,6 +1068,7 @@ function normalizeOpportunity(
         opp.lastStatusChangeAt ??
         "",
     ),
+    createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
   // Never leak a raw user id to the UI — an unresolvable id reads "Former user"
@@ -1370,6 +1383,78 @@ export async function listOpportunityNotes(
         reason: parsed.reason,
       };
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A CONTACT'S NOTES, UNFILTERED — for a record that has NO opportunity.
+//
+// 🔴 `listOpportunityNotes` ABOVE CANNOT BE REUSED FOR THIS, and calling it with
+// an empty oppId is the trap: `noteBelongsToOpp` tests `r.recordId === oppId`,
+// so every note is filtered out and the caller reads "no notes at all". For the
+// referral Touch queue, "no note at all" means OVERDUE — so that mistake would
+// have marked EVERY partner overdue while looking entirely plausible.
+//
+// A referral partner is a contact with no case, so their touches are plain
+// contact notes. Same proven endpoint, no opportunity filter.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** ISO timestamp of the newest note on a contact, or "" when there are none. */
+export async function latestContactNoteAt(contactId: string): Promise<string> {
+  const data = await ghlGet<{ notes?: RawNote[] }>(
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+  );
+  let newest = "";
+  for (const n of data.notes || []) {
+    const d = String(n.dateAdded || "");
+    if (!d) continue;
+    if (!newest || new Date(d).getTime() > new Date(newest).getTime()) newest = d;
+  }
+  return newest;
+}
+
+/** A contact's notes, newest first, with their text. No opportunity filter. */
+export async function listContactNotes(
+  contactId: string,
+): Promise<{ id: string; when: string; dateAdded: string; who: string; txt: string }[]> {
+  const data = await ghlGet<{ notes?: RawNote[] }>(
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+  );
+  const userMap = await getUserMap();
+  return (data.notes || [])
+    .sort(
+      (a, b) =>
+        new Date(b.dateAdded || 0).getTime() - new Date(a.dateAdded || 0).getTime(),
+    )
+    .map((n) => ({
+      id: n.id || "",
+      when: fmtNoteDate(n.dateAdded),
+      dateAdded: String(n.dateAdded || ""),
+      who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
+      // ⚠️ RAW, NOT parseNoteBody(). That parser strips a leading [DIVISION]
+      // tag that the opportunity note writer adds; a partner touch is written
+      // as plain text by addContactNote, and a note whose text happens to start
+      // with a bracket would silently lose its first word.
+      txt: String(n.body || ""),
+    }));
+}
+
+/** A note on the contact alone — no opportunity relation, because there is none. */
+export async function addContactNote(
+  contactId: string,
+  body: string,
+  userId: string,
+): Promise<{ id: string; dateAdded: string }> {
+  const res = await ghlSend<{ note?: RawNote }>(
+    "POST",
+    `/contacts/${encodeURIComponent(contactId)}/notes`,
+    {
+      body,
+      ...(userId ? { userId } : {}),
+      relations: [{ objectKey: "contact", recordId: contactId }],
+    },
+  );
+  const n = res.note || {};
+  return { id: n.id || "", dateAdded: String(n.dateAdded || "") };
 }
 
 // ITEM 6 — the author's DIVISION AT WRITE TIME.
@@ -2794,6 +2879,202 @@ export async function searchContacts(
     email: String(c.email ?? ""),
     phone: String(c.phone ?? ""),
   }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 LIST CONTACTS BY A CUSTOM FIELD VALUE — THE ONE CALL IN THE REFERRAL
+// FEATURE THAT COULD NOT BE VERIFIED AGAINST A LIVE ACCOUNT.
+//
+// Every other GoHighLevel call this feature makes already runs in production
+// somewhere in this app. This one does not: nothing here has ever asked
+// /contacts/search to FILTER on a custom field, only to match free text
+// (`searchContacts`, `searchCaregiverContacts` — both proven live). There is no
+// credential in the build environment, so the filter body below is written from
+// the documented shape and is UNPROVEN.
+//
+// ⚠️ SO IT IS BUILT TO FAIL LOUDLY, IN BOTH DIRECTIONS:
+//
+//   1. GoHighLevel REJECTS the filter  → the error says which request was sent,
+//      verbatim, so the shape can be corrected in one round.
+//   2. GoHighLevel IGNORES the filter  → far more dangerous, because the reply
+//      is a 200 carrying EVERY contact in the account. Each row is therefore
+//      re-checked in code, and a page of contacts that carries custom fields
+//      but none matching is treated as a FAILURE, not as "no partners".
+//
+// Returning [] for either case would have shown an empty, believable dashboard.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ContactByField {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  assignedTo: string;
+  /** Custom field values by field id. */
+  fields: Record<string, string>;
+}
+
+export interface ContactSearchResult {
+  rows: ContactByField[];
+  /** GoHighLevel's own count for the filter. -1 when it returns none. */
+  total: number;
+  /** The page cap stopped us before the end. STATED in the UI, never silent. */
+  truncated: boolean;
+  /** Extra per-contact GETs spent because search returned no field values. */
+  hydrated: number;
+  /** Contacts whose fields could not be read at all. Stated, never dropped. */
+  unreadable: number;
+}
+
+const CF_PAGE = 100;
+const CF_MAX_PAGES = 10;
+/** Per-contact hydrate ceiling. 100 requests per 10 seconds is the budget. */
+const CF_HYDRATE_CAP = 250;
+
+/** A contact's custom fields as a map, or null when the row carried none. */
+function contactCfMap(c: RawContact): Record<string, string> | null {
+  const raw = (c as Record<string, unknown>).customFields;
+  if (!Array.isArray(raw)) return null;
+  const out: Record<string, string> = {};
+  for (const f of raw as Record<string, unknown>[]) {
+    const id = String(f.id ?? f.customFieldId ?? "");
+    if (!id) continue;
+    // ✅ `value` FIRST — what a CONTACT returns (verified live, see
+    // getContactCustomFields). A multi-select arrives as an array.
+    const v = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
+    out[id] = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
+  }
+  return out;
+}
+
+/** Does this stored value carry `want`? Tolerates a multi-select's list. */
+function cfHasValue(stored: string | undefined, want: string): boolean {
+  const s = (stored ?? "").trim().toLowerCase();
+  const w = want.trim().toLowerCase();
+  if (!s) return false;
+  if (s === w) return true;
+  return s.split(",").some((part) => part.trim() === w);
+}
+
+export async function ghlSearchContacts(
+  fieldId: string,
+  value: string,
+): Promise<ContactSearchResult> {
+  const { locationId } = requireEnv();
+  if (!fieldId || !value)
+    throw new GhlError(
+      "Cannot list contacts without both a field and a value to match.",
+      400,
+      `Asked for field "${fieldId}" = "${value}". A missing field id means the custom field does not exist on this account under the expected name.`,
+    );
+
+  const filters = [
+    { field: `customFields.${fieldId}`, operator: "eq", value },
+  ];
+  const sent: Record<string, unknown> = {
+    locationId,
+    pageLimit: CF_PAGE,
+    filters,
+    // searchAfter paging is only meaningful over a deterministic order.
+    sort: [{ field: "dateAdded", direction: "desc" }],
+  };
+
+  const raw: RawContact[] = [];
+  let total = -1;
+  let truncated = false;
+  let searchAfter: unknown[] | undefined;
+
+  for (let page = 0; page < CF_MAX_PAGES; page++) {
+    let data: { contacts?: RawContact[]; total?: number };
+    try {
+      data = await ghlSend<{ contacts?: RawContact[]; total?: number }>(
+        "POST",
+        "/contacts/search",
+        searchAfter ? { ...sent, searchAfter } : sent,
+      );
+    } catch (e) {
+      if (e instanceof GhlError)
+        throw new GhlError(
+          "GoHighLevel refused the contact search used to list referral partners.",
+          e.status,
+          `${e.detail || e.message} — the request sent was ${JSON.stringify(sent)}. This filter shape is the one call in the referral dashboard that could not be tested against a live account before shipping; it is the only place that needs changing (lib/ghl.ts, ghlSearchContacts).`,
+          { traceId: e.traceId, code: e.code },
+        );
+      throw e;
+    }
+    const batch = data.contacts || [];
+    if (typeof data.total === "number") total = data.total;
+    raw.push(...batch);
+    if (batch.length < CF_PAGE) break; // last page
+    const last = batch[batch.length - 1] as Record<string, unknown>;
+    const after = last.searchAfter;
+    if (!Array.isArray(after) || !after.length) {
+      // A full page and no cursor: there may be more and we cannot ask for it.
+      truncated = total < 0 || total > raw.length;
+      break;
+    }
+    searchAfter = after;
+    if (page === CF_MAX_PAGES - 1) truncated = true;
+  }
+
+  if (!raw.length)
+    return { rows: [], total: total < 0 ? 0 : total, truncated, hydrated: 0, unreadable: 0 };
+
+  const mapped = raw.map((c) => {
+    const cf = contactCfMap(c);
+    const rec = c as Record<string, unknown>;
+    return {
+      carried: cf != null && Object.keys(cf).length > 0,
+      row: {
+        id: String(c.id ?? c.contactId ?? ""),
+        name: contactDisplay(c),
+        email: String(c.email ?? ""),
+        phone: String(rec.phone ?? ""),
+        assignedTo: String(rec.assignedTo ?? rec.assignedUserId ?? ""),
+        fields: cf || {},
+      } as ContactByField,
+    };
+  });
+
+  let rows = mapped.map((m) => m.row);
+  let hydrated = 0;
+  let unreadable = 0;
+
+  if (!mapped.some((m) => m.carried)) {
+    // Search returned contacts but no field values on ANY of them, so the
+    // filter cannot be confirmed and the partner's category, tier and division
+    // are all missing. Fall back to the PROVEN per-contact read — capped,
+    // because this is one request each and the budget is 100 per 10 seconds.
+    const targets = rows.slice(0, CF_HYDRATE_CAP);
+    if (rows.length > CF_HYDRATE_CAP) truncated = true;
+    const got = await mapLimit(targets, 5, (r) => getContactCustomFields(r.id));
+    hydrated = targets.length;
+    const out: ContactByField[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const s = got[i];
+      if (!s || !s.ok) {
+        unreadable++; // ⚠️ counted and reported, never silently dropped
+        continue;
+      }
+      const fields: Record<string, string> = {};
+      for (const [k, v] of Object.entries(s.value.values))
+        fields[k] = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
+      out.push({ ...targets[i], fields });
+    }
+    rows = out;
+  }
+
+  const kept = rows.filter((r) => cfHasValue(r.fields[fieldId], value));
+  if (!kept.length && rows.length) {
+    const seen = Object.keys(rows[0].fields).slice(0, 12).join(", ") || "(none)";
+    throw new GhlError(
+      "GoHighLevel's contact search did not apply the filter, so the referral partners could not be listed.",
+      502,
+      `Asked for ${JSON.stringify(filters)} and got ${rows.length} contact${rows.length === 1 ? "" : "s"} back, not one of which carries that value — which means the reply is every contact in the account rather than the partners. Nothing is shown, because showing it would have looked like a real partner list. The field ids that did come back on the first row were: ${seen}. Fix the filter shape in lib/ghl.ts → ghlSearchContacts; it is the only place it is written.`,
+    );
+  }
+
+  return { rows: kept, total: total < 0 ? kept.length : total, truncated, hydrated, unreadable };
 }
 
 // ---------------------------------------------------------------------------

@@ -61,6 +61,10 @@ export interface OpportunityRecord {
   // NOTHING rather than "0 days", which would be a confident claim about a
   // record whose history we don't actually know.
   stageChangedAt?: string;
+  // When the opportunity was created. "" when GoHighLevel sends no timestamp —
+  // the referral dashboard then shows "—" and counts the referral as UNDATED
+  // rather than as "referred today", which would inflate every 90-day figure.
+  createdAt?: string;
   // ITEM 5 — OPTIMISTIC CONCURRENCY. GoHighLevel's `updatedAt`, carried through
   // to the client and sent back on every write. The server compares it to the
   // stored value and refuses the write if anyone else has touched the record in
