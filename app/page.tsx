@@ -1336,9 +1336,11 @@ export default function Dashboard() {
   const [pipelineFolders, setPipelineFolders] = useState<
     Record<string, string[]> | undefined
   >(undefined);
-  const [pipelineHideEmpty, setPipelineHideEmpty] = useState<
-    Record<string, string[]>
-  >({});
+  const [folderNames, setFolderNames] = useState<Record<string, string>>({});
+  // Sections the rep pulled in with "+ Add a section". Deliberately NOT
+  // persisted — see the note in the control.
+  const [shownSections, setShownSections] = useState<Set<string>>(new Set());
+  const [addSecOpen, setAddSecOpen] = useState(false);
   // ITEM 3 — CONTACT fields for the open record. Held BESIDE the opportunity
   // values, never merged into `rec.cf`: merging would make an opportunity write
   // and a contact write indistinguishable at the call site, and they go to
@@ -1562,7 +1564,7 @@ export default function Dashboard() {
       setData(body.records || []);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.pipelineFolders) setPipelineFolders(body.pipelineFolders);
-      setPipelineHideEmpty(body.pipelineHideEmpty || {});
+      setFolderNames(body.folderNames || {});
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
       if (body.pipelines) setPipelines(body.pipelines);
@@ -3227,18 +3229,31 @@ export default function Dashboard() {
 
 
   // Folder-driven field sections for the open record's pipeline (Task 4).
+  // A section pulled in on one record must not follow you to the next.
+  useEffect(() => {
+    setShownSections(new Set());
+    setAddSecOpen(false);
+  }, [selId]);
+
   const fieldGroups = useMemo(
     () =>
       selected
         ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders, {
-            tokens: pipelineHideEmpty[selected.pipelineId] || [],
             values: selected.cf || {},
+            folderNames,
           })
-        : { sections: [], systemInfo: [], orphans: [], orphanGroups: [], unconfigured: false },
+        : {
+            sections: [],
+            systemInfo: [],
+            orphans: [],
+            orphanGroups: [],
+            available: [],
+            unconfigured: false,
+          },
     // ⚠️ pipelineFolders BELONGS IN THESE DEPS. Without it the panel keeps
     // rendering the map it had at mount — an admin's change would not show
     // until the selected record changed.
-    [selected, fieldDefs, pipelineFolders, pipelineHideEmpty],
+    [selected, fieldDefs, pipelineFolders, folderNames],
   );
 
   const ssoHeader = (): Record<string, string> =>
@@ -6271,10 +6286,13 @@ export default function Dashboard() {
                   .
                 </div>
               ) : null}
-              {fieldGroups.sections.length ? (
+              {fieldGroups.sections.length || shownSections.size ? (
                 <>
                   <div className="blockhead">Opportunity</div>
-                  {fieldGroups.sections.map((g) => (
+                  {[
+                    ...fieldGroups.sections,
+                    ...fieldGroups.available.filter((g) => shownSections.has(g.key)),
+                  ].map((g) => (
                     <Fragment key={g.key}>
                       <div className="sechead">{g.label}</div>
                       <div className="grid">
@@ -6345,6 +6363,51 @@ export default function Dashboard() {
                 </details>
               ) : null}
 
+              {/* ITEM 1 — THE SECTIONS THIS RECORD DID NOT ANSWER.
+                  Pulled in WHOLE, never field by field: a rep filling
+                  Milestones needs all ten in order.
+                  ⚠️ Only folders TICKED for this pipeline are here — this is
+                  about what is DRAWN, not what is ALLOWED. */}
+              {fieldGroups.available.length ? (
+                <div className="addsec">
+                  <button
+                    type="button"
+                    className={`addsec-btn${addSecOpen ? " on" : ""}`}
+                    aria-expanded={addSecOpen}
+                    onClick={() => setAddSecOpen((v) => !v)}
+                  >
+                    + Add a section{" "}
+                    <span className="addsec-n">({fieldGroups.available.length} available)</span>
+                  </button>
+                  {addSecOpen ? (
+                    <div className="addsec-pop" role="listbox">
+                      {fieldGroups.available.map((g) => (
+                        <button
+                          key={g.key}
+                          type="button"
+                          role="option"
+                          aria-selected="false"
+                          onClick={() => {
+                            setShownSections((p2) => new Set([...p2, g.key]));
+                            setAddSecOpen(false);
+                          }}
+                        >
+                          {g.label}
+                          <span>{g.fields.length}</span>
+                        </button>
+                      ))}
+                      {/* ⚠️ SAY WHAT HAPPENS ON RELOAD. Same as the contact
+                          rule: "has a value" is evaluated fresh every load, so
+                          a section added and left empty is gone next time. */}
+                      <div className="addsec-note">
+                        Added sections stay until you reload. Fill something in
+                        and the section keeps itself.
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {/* 🔴 NOT .sysinfo. These are not plumbing and not ours: they are
                   real fields somebody created that the dashboard has not been
                   told about yet. Filing them beside the Airtable Record ID,
@@ -6373,26 +6436,40 @@ export default function Dashboard() {
                     </summary>
                     {/* Same voice, same destination as the pipeline-level
                         notice — these are one failure at two scales. */}
-                    {isAdminViewer ? (
+                    {!isAdminViewer ? (
+                      <div className="pfunconf">
+                        This section is not configured yet, so its fields show
+                        here rather than in their own place. An admin can fix
+                        it.
+                      </div>
+                    ) : (
                       <div className="pfunconf">
                         {g.named ? (
                           <>
-                            <b>{g.label}</b> exists in GoHighLevel but is not
-                            assigned to this pipeline.
+                            <b>{g.label}</b> is a section in GoHighLevel that
+                            this pipeline has not been given.
                           </>
                         ) : (
                           <>
-                            <b>These fields are in no section the dashboard
-                            knows.</b>
+                            {/* 🔴 THEY ARE IN A SECTION. The dashboard has not
+                                been told about it — which is a different thing
+                                and the only one that is true. */}
+                            <b>These fields are in a section the dashboard has
+                            not been told about.</b>
                           </>
                         )}{" "}
-                        Assign it under{" "}
+                        {/* 🔴 A REAL LINK, NOT A DESCRIBED JOURNEY. This said
+                            "Assign it under Admin → Pipelines", which names a
+                            destination instead of offering it — there was no
+                            way to act from where the problem is seen.
+                            ⚠️ ADMIN ONLY. A rep cannot fix this, and a dead
+                            link is worse than none, so they are told what is
+                            wrong and who can fix it instead. */}
                         <button type="button" onClick={() => setView("pipelines")}>
-                          Admin → Pipelines
+                          Fix this in Admin → Pipelines
                         </button>
-                        .
                       </div>
-                    ) : null}
+                    )}
                     <div className="grid">
                       {g.fields.map((def) => renderField(selected, def))}
                     </div>

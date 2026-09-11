@@ -203,19 +203,16 @@ export function groupFieldsForPipeline(
   // warning for one frame on every open.
   storedFolders?: Record<string, string[]>,
   /**
-   * Sections this pipeline hides when the RECORD has no value in any of them,
-   * plus the record's values to judge that by.
+   * The record's values, and the names we hold for folders GoHighLevel will not
+   * name for us.
    *
-   * 🔴 SECTION-LEVEL, AND OPT-IN PER SECTION. Round 54's rule stands for
-   * everything not listed here: "a rep FILLS these as the case moves — hiding
-   * the empty ones would stop them". A blanket hide-empty rule would take
-   * Milestones off every brand-new OLTL record, where every milestone is empty
-   * by definition and the rep needs to fill the first one.
-   *
-   * ⚠️ ONCE ONE FIELD IN THE SECTION IS FILLED, THE WHOLE SECTION APPEARS —
-   * empty fields included — so a rep can complete the set.
+   * 🔴 NO CONFIGURATION. Round 92's `hideWhenEmpty` flag and the three-mode
+   * scheme that followed it are both gone: they invented a mechanism that
+   * already existed one level down. THE PRESENCE OF A VALUE IS THE WHOLE RULE,
+   * ported from groupContactFields (:520) and applied to SECTIONS rather than
+   * fields.
    */
-  hideEmpty?: { tokens: string[]; values: Record<string, unknown> },
+  opts?: { values?: Record<string, unknown>; folderNames?: Record<string, string> },
 ): {
   sections: FieldGroup[];
   systemInfo: EditableFieldDef[];
@@ -230,6 +227,14 @@ export function groupFieldsForPipeline(
    * payload, so this costs nothing.
    */
   orphanGroups: OrphanGroup[];
+  /**
+   * Sections TICKED for this pipeline that hold nothing on this record, so are
+   * not drawn. Offered through "+ Add a section" — the whole folder at once.
+   *
+   * ⚠️ THE WHOLE FOLDER, NEVER ONE FIELD. A rep filling Milestones needs all
+   * ten in order; field-by-field would be worse than drawing everything.
+   */
+  available: FieldGroup[];
   /** True when the map has loaded and has nothing for this pipeline. */
   unconfigured: boolean;
 } {
@@ -334,36 +339,50 @@ export function groupFieldsForPipeline(
 
   // Emit sections in the pipeline's configured folder order, each field list in
   // GHL's authored `position` order.
-  const hideTokens = new Set((hideEmpty?.tokens || []).map(tokenOf));
-  const vals = hideEmpty?.values;
+  const vals = opts?.values;
+  const names = opts?.folderNames || {};
 
+  // 🔴 THE CONTACT RULE, APPLIED TO SECTIONS.
+  //   at least one answered field -> drawn IN FULL, empties included
+  //   nothing answered            -> not drawn, offered under "+ Add a section"
+  //
+  // ✅ This answers round 54 without a flag. A new OLTL record shows no
+  // Milestones; the rep adds the section and fills the first one. Nothing is
+  // unreachable, which was the whole objection.
+  // ✅ And it answers the Facebook lead: four questions nobody asked are not
+  // drawn at all — not quietly, not behind a heading still claiming the form
+  // applies to this person.
+  //
+  // ⚠️ A SECTION ADDED AND LEFT EMPTY DISAPPEARS ON RELOAD. Same as the contact
+  // rule and for the same reason: "has a value" is evaluated fresh on every
+  // load, and there is nowhere to record "this one was deliberately empty"
+  // without inventing state GoHighLevel does not hold. The control says so.
   const sections: FieldGroup[] = [];
+  const available: FieldGroup[] = [];
   for (const entry of allowed) {
     const token = tokenOf(entry);
     const fields = buckets.get(token);
-    // A section marked hide-when-empty is DRAWN ONLY IF SOMETHING IN IT IS
-    // ANSWERED. Nothing is hidden field-by-field — it is the whole section or
-    // none of it.
-    if (
-      fields &&
-      hideTokens.has(token) &&
-      vals &&
-      !fields.some((f) => hasValue(vals[f.id]))
-    )
-      continue;
-    if (fields && fields.length) {
-      sections.push({
-        key: token,
-        // A code folder has a curated label. A GHL-made one is labelled by the
-        // name GHL itself returns on its fields — which is why it can render
-        // as "Website Intent Form" rather than as a generic bucket.
-        label:
-          FOLDER_LABELS[token as FolderKey] ||
-          fields.find((f) => f.parentName)?.parentName ||
-          "Section",
-        fields: [...fields].sort(byPosition),
-      });
-    }
+    if (!fields || !fields.length) continue;
+    const group: FieldGroup = {
+      key: token,
+      // 🔴 NOT parentName — IT IS ALWAYS EMPTY. lib/fieldFolders.ts:491 has
+      // recorded that since round 55, verified live, and round 91 labelled
+      // runtime folders by it anyway. The only sources are the curated map and
+      // the names we stored ourselves when we created the folder.
+      label:
+        FOLDER_LABELS[token as FolderKey] ||
+        names[token] ||
+        names[entry] ||
+        `Unnamed section · ${fields
+          .slice(0, 2)
+          .map((f) => f.name)
+          .join(", ")}${fields.length > 2 ? "…" : ""}`,
+      fields: [...fields].sort(byPosition),
+    };
+    // With no values supplied at all (a caller that does not have the record)
+    // nothing can be judged, so everything is drawn — the old behaviour.
+    const answered = !vals || fields.some((f) => hasValue(vals[f.id]));
+    (answered ? sections : available).push(group);
   }
 
   // ── THE UNFILED BUCKET, IN THREE CASES ──────────────────────────────────
@@ -404,6 +423,7 @@ export function groupFieldsForPipeline(
     systemInfo: [...systemInfo].sort(byPosition),
     orphans: [...orphans].sort(byPosition),
     orphanGroups,
+    available,
     unconfigured,
   };
 }
@@ -515,8 +535,17 @@ export function groupContactFields(
     arr.push(def);
     byFolder.set(match.name, arr);
   }
+  // ITEM 2 — folders holding at least one answer come FIRST, in a STABLE
+  // order within each group so nothing jumps about between loads.
+  //
+  // 🔴 ONE ANSWERED FIELD LIFTS THE WHOLE FOLDER, never the field on its own.
+  // A single value floating out of its section is how the panel stops being
+  // organised, which is the problem this solves.
+  const anyAnswered = (f: { name: string }) =>
+    (byFolder.get(f.name) || []).some((d) => hasValue(values?.[d.id]));
+  const ordered = [...folders.filter(anyAnswered), ...folders.filter((f) => !anyAnswered(f))];
   const out: FieldGroup[] = [];
-  for (const f of folders) {
+  for (const f of ordered) {
     const fields = byFolder.get(f.name);
     if (!fields || !fields.length) continue;
     const sorted = [...fields].sort(byPosition);

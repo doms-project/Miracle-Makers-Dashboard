@@ -22,6 +22,11 @@ interface PipelineRow {
   division: string;
   configured: boolean;
 }
+interface Unconfigured {
+  id: string;
+  key: string;
+  fields: { id: string; name: string }[];
+}
 interface Payload {
   pipelines: PipelineRow[];
   config: StoredPipelineConfig;
@@ -29,6 +34,7 @@ interface Payload {
   sections: Section[];
   known: KnownField[];
   sharedKey: string;
+  unconfiguredFolders: Unconfigured[];
 }
 
 // ⚠️ SUGGEST TWO, DO NOT IMPOSE. Every pipeline on this account starts with an
@@ -109,12 +115,21 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Seed the tick list with Shared once the payload arrives — the one folder
-  // every pipeline on this account uses.
+  // ITEM 3 — 🔴 TICK GENEROUSLY. Every section for the chosen scope is ticked
+  // by default.
+  //
+  // ⚠️ SAFE ONLY BECAUSE OF ITEM 1. An empty section is not drawn, so the
+  // all-twelve problem cannot come back: a record shows what it answered and
+  // nothing else.
+  //
+  // 🔴 AND IT REMOVES THE ACCESS BOTTLENECK. A rep only has to ask an admin
+  // when the admin ticked too few. Ticking everything means they never do —
+  // they pull in what they need with "+ Add a section" themselves.
   useEffect(() => {
-    if (data?.sharedKey && !picked.size) setPicked(new Set([data.sharedKey]));
+    if (!data || !scope) return;
+    setPicked(new Set(data.sections.map((x) => x.key)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.sharedKey]);
+  }, [data?.sections, scope]);
 
   // ⚠️ THE DERIVED DIVISION, LIVE. divisionLabel() strips a trailing
   // Enrollment/Transfer/Clients/Applicants, so "Events Clients" and "Events"
@@ -159,6 +174,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
     if (!data) return;
     const next: StoredPipelineConfig = {
+      ...data.config,
       seeded: true,
       pipelines: { ...data.config.pipelines, [pipelineId]: entry },
     };
@@ -172,7 +188,10 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     if (!data) return;
     const rest = { ...data.config.pipelines };
     delete rest[pipelineId];
-    const j = await post({ action: "save-config", config: { seeded: true, pipelines: rest } });
+    const j = await post({
+      action: "save-config",
+      config: { ...data.config, seeded: true, pipelines: rest },
+    });
     if (j) {
       setSaved("Removed.");
       setData({ ...data, config: j.config, stale: data.stale.filter((s) => s !== pipelineId) });
@@ -194,6 +213,18 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const [fOptions, setFOptions] = useState("");
   const [sectionOpen, setSectionOpen] = useState(false);
   const [secName, setSecName] = useState("");
+  const [unkName, setUnkName] = useState<Record<string, string>>({});
+
+  const nameFolder = async (folderId: string) => {
+    const j = await post({
+      action: "name-folder",
+      folderId,
+      name: (unkName[folderId] || "").trim(),
+    });
+    if (!j) return;
+    setSaved("Named. Tick it on the pipelines that should show it.");
+    await load();
+  };
 
   const createSection = async () => {
     const j = await post({ action: "create-section", name: secName.trim() });
@@ -249,12 +280,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     );
   if (!data) return <div className="isec"><div className="imeta">Loading…</div></div>;
 
-  const sectionRow = (
-    s: Section,
-    checked: boolean,
-    onToggle: () => void,
-    hide?: { on: boolean; toggle: () => void },
-  ) => (
+  const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
     <div className={`pfsec ${s.named ? "" : "unnamed"}`} key={s.key}>
       <label className="pfseclab">
         <input type="checkbox" checked={checked} onChange={onToggle} />
@@ -293,20 +319,66 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
       {expanded.has(s.key) ? (
         <div className="pfsecfields">{s.fields.map((f) => f.name).join(" · ")}</div>
       ) : null}
-      {/* Only offered on a section that is actually shown — hiding-when-empty
-          is meaningless for one that is not drawn at all. */}
-      {hide && checked ? (
-        <label className="pfsechide" title="Only draw this section on records that have an answer in it">
-          <input type="checkbox" checked={hide.on} onChange={hide.toggle} />
-          Hide when the record has no answers here
-        </label>
-      ) : null}
     </div>
   );
 
   return (
     <div className="isec pfadmin">
-      <div className="istep">Create a pipeline</div>
+      {/* ITEM 6 — 🔴 A FOLDER MADE IN GHL, FIXED IN ONE ACTION.
+          We cannot read its name — GoHighLevel returns parentName empty and
+          refuses the folder endpoint — so it cannot be mapped silently. The
+          admin supplies the one thing we cannot obtain, and the ticking happens
+          in the same action. */}
+      {(data.unconfiguredFolders || []).length ? (
+        <div className="pfunknown">
+          <b>
+            {data.unconfiguredFolders.length} section
+            {data.unconfiguredFolders.length === 1 ? " is" : "s are"} not
+            configured
+          </b>
+          <div className="ihint">
+            Made in GoHighLevel. Their fields show as unfiled on records until a
+            pipeline is given them. GoHighLevel will not tell us the name, so it
+            has to be typed once.
+          </div>
+          {data.unconfiguredFolders.map((u) => (
+            <div className="pfunknownrow" key={u.id}>
+              <div className="pfunknownwhat">
+                <b>Unnamed</b> · {u.fields.length} field
+                {u.fields.length === 1 ? "" : "s"} ·{" "}
+                {u.fields.slice(0, 3).map((f) => f.name).join(", ")}
+                {u.fields.length > 3 ? "…" : ""}
+              </div>
+              <input
+                value={unkName[u.id] ?? ""}
+                placeholder="Name this section"
+                onChange={(e) =>
+                  setUnkName((m) => ({ ...m, [u.id]: e.target.value }))
+                }
+              />
+              <button
+                type="button"
+                disabled={busy || !(unkName[u.id] || "").trim()}
+                onClick={() => nameFolder(u.id)}
+              >
+                Name it
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ⚠️ WHY ALL FOUR CONTROLS ARE HERE. */}
+      <div className="pfwhy">
+        GoHighLevel has no way to say &ldquo;this section belongs to that
+        pipeline&rdquo;: a folder made there arrives unmapped and its fields show
+        as unfiled, and a field made there lands in Additional Info with nothing
+        to tell the dashboard. That is why creating a pipeline, ticking its
+        sections, adding a section and adding a field all live on this one
+        screen.
+      </div>
+
+      <div className="istep">1 · Name and scope</div>
 
       <div className="irow">
         <label>Name</label>
@@ -341,6 +413,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
         </div>
       </div>
 
+      <div className="istep">2 · Stages</div>
       <div className="irow pfstages">
         <label>Stages</label>
         <div className="pfstagelist">
@@ -374,6 +447,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
         </div>
       </div>
 
+      <div className="istep">3 · Sections its records can show</div>
       <div className="irow pffolders">
         <label>Field sections this pipeline shows</label>
         <div className="pfseclist">
@@ -437,7 +511,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
                     id="pf-secname"
                     value={secName}
                     onChange={(e) => setSecName(e.target.value)}
-                    placeholder="e.g. Events Details"
+                    placeholder="e.g. Intake Details"
                   />
                   <button
                     type="button"
@@ -538,8 +612,9 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
         </div>
       ) : null}
 
+      <div className="istep">4 · Create</div>
       <div className="irow">
-        <button type="button" onClick={createPipeline} disabled={!canCreate}>
+        <button type="button" className="pfprimary" onClick={createPipeline} disabled={!canCreate}>
           {busy ? "Creating…" : "Create pipeline"}
         </button>
       </div>
@@ -563,39 +638,15 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
               </summary>
               <div className="pfseclist">
                 {data.sections.map((s) =>
-                  sectionRow(
-                    s,
-                    !!entry?.folders.includes(s.key),
-                    () => {
-                      const cur = new Set(entry?.folders ?? []);
-                      if (cur.has(s.key)) cur.delete(s.key);
-                      else cur.add(s.key);
-                      void saveEntry(p.id, {
-                        scope: entry?.scope ?? "client",
-                        folders: [...cur],
-                        hideWhenEmpty: entry?.hideWhenEmpty,
-                      });
-                    },
-                    // 🔴 SOURCE-CAPTURED vs REP-FILLED, and only an admin knows
-                    // which is which. The Website Intent Form is filled once by
-                    // a form or never — so on a Facebook lead its four
-                    // questions are not "unanswered", they were never asked.
-                    // Milestones are the opposite: empty means "not yet", and
-                    // hiding them would stop a rep filling the first one.
-                    {
-                      on: !!entry?.hideWhenEmpty?.includes(s.key),
-                      toggle: () => {
-                        const cur = new Set(entry?.hideWhenEmpty ?? []);
-                        if (cur.has(s.key)) cur.delete(s.key);
-                        else cur.add(s.key);
-                        void saveEntry(p.id, {
-                          scope: entry?.scope ?? "client",
-                          folders: entry?.folders ?? [],
-                          hideWhenEmpty: [...cur],
-                        });
-                      },
-                    },
-                  ),
+                  sectionRow(s, !!entry?.folders.includes(s.key), () => {
+                    const cur = new Set(entry?.folders ?? []);
+                    if (cur.has(s.key)) cur.delete(s.key);
+                    else cur.add(s.key);
+                    void saveEntry(p.id, {
+                      scope: entry?.scope ?? "client",
+                      folders: [...cur],
+                    });
+                  }),
                 )}
               </div>
             </details>

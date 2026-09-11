@@ -7,6 +7,8 @@ import {
   createPipeline,
   createFieldFolder,
   createCustomField,
+  moveFieldToFolder,
+  rememberFolderName,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
@@ -69,7 +71,10 @@ function fail(e: unknown): Promise<NextResponse> | NextResponse {
  * a guess — "More Details" and "Client Details" mean nothing until you can see
  * inside. The defs are already fetched and cached, so this costs no extra call.
  */
-function sectionsFromDefs(defs: EditableFieldDef[]) {
+function sectionsFromDefs(
+  defs: EditableFieldDef[],
+  folderNames: Record<string, string> = {},
+) {
   const byFolder = new Map<string, EditableFieldDef[]>();
   for (const d of defs) {
     if (!d.parentId) continue;
@@ -93,7 +98,11 @@ function sectionsFromDefs(defs: EditableFieldDef[]) {
   for (const [folderId, fields] of byFolder) {
     const key = folderKeyById(folderId);
     const curated = key ? FOLDER_LABELS[key as keyof typeof FOLDER_LABELS] : "";
-    const fromGhl = fields.find((f) => f.parentName)?.parentName || "";
+    // 🔴 NOT parentName. It is EMPTY on every field — round 55 verified that
+    // live and wrote it down (lib/fieldFolders.ts:491); round 91 labelled
+    // runtime folders by it anyway. The stored name is the only other source
+    // there has ever been.
+    const fromGhl = folderNames[folderId] || "";
     const named = !!(curated || fromGhl);
     out.push({
       key: key || folderId, // hybrid: runtime folders have no key, so store the id
@@ -148,7 +157,7 @@ export async function GET(request: Request) {
       getEditableFieldDefs("opportunity"),
       getPipelineConfig(),
     ]);
-    const sections = sectionsFromDefs(defs);
+    const sections = sectionsFromDefs(defs, config.folderNames);
     const live = new Set(pipelines.map((p) => p.id));
     // ⚠️ RECONCILE, DO NOT AUTO-DELETE. A stored key with no live pipeline is
     // surfaced as "no longer in GoHighLevel" with a remove button. Silently
@@ -165,6 +174,16 @@ export async function GET(request: Request) {
         config,
         stale,
         sections,
+        // ITEM 6 — ⚠️ DETECTION IS FREE, as you said: every def already carries
+        // parentId and the defs are already cached, so a folder no pipeline has
+        // been given and no name is held for costs no extra call to find.
+        unconfiguredFolders: sections
+          .filter(
+            (sec) =>
+              !sec.named &&
+              !Object.values(config.pipelines).some((e) => e.folders.includes(sec.key)),
+          )
+          .map((sec) => ({ id: sec.id, key: sec.key, fields: sec.fields })),
         known: knownFields(defs, sections),
         sharedKey: folderKeyById(FOLDERS.shared),
       },
@@ -177,17 +196,24 @@ export async function GET(request: Request) {
 
 interface Body {
   ssoKey?: string;
-  action?: "create-pipeline" | "save-config" | "create-section" | "create-field";
+  action?:
+    | "create-pipeline"
+    | "save-config"
+    | "create-section"
+    | "create-field"
+    | "move-field"
+    | "name-folder";
   // create-pipeline
   name?: string;
   stages?: string[];
   scope?: "client" | "caregiver";
   folders?: string[];
-  hideWhenEmpty?: string[];
   // save-config
   config?: unknown;
   // create-section / create-field
   parentId?: string;
+  fieldId?: string;
+  folderId?: string;
   dataType?: string;
   options?: string[];
 }
@@ -221,11 +247,9 @@ export async function POST(request: Request) {
           folders: Array.isArray(body.folders) && body.folders.length
             ? body.folders.map(String)
             : [folderKeyById(FOLDERS.shared) || FOLDERS.shared],
-          ...(Array.isArray(body.hideWhenEmpty) && body.hideWhenEmpty.length
-            ? { hideWhenEmpty: body.hideWhenEmpty.map(String) }
-            : {}),
         };
         const saved = await savePipelineConfig({
+          ...config,
           seeded: true,
           pipelines: { ...config.pipelines, [created.id]: entry },
         });
@@ -243,7 +267,14 @@ export async function POST(request: Request) {
           );
         // 🔴 ALWAYS seeded:true on a save. Writing false would arm the seed to
         // overwrite this very save on the next read.
-        const saved = await savePipelineConfig({ seeded: true, pipelines: next.pipelines });
+        const current = await getPipelineConfig();
+        const saved = await savePipelineConfig({
+          seeded: true,
+          pipelines: next.pipelines,
+          // ⚠️ MERGED, never replaced. The screen does not send folderNames, so
+          // writing next.folderNames would erase every name we hold.
+          folderNames: { ...current.folderNames, ...next.folderNames },
+        });
         return NextResponse.json({ config: saved });
       }
 
@@ -255,7 +286,8 @@ export async function POST(request: Request) {
       case "create-field": {
         const name = String(body.name || "").trim();
         const defs = await getEditableFieldDefs("opportunity");
-        const sections = sectionsFromDefs(defs);
+        const cfg2 = await getPipelineConfig();
+        const sections = sectionsFromDefs(defs, cfg2.folderNames);
         // Re-checked server-side. The screen checks as you type; that is a
         // courtesy, not a gate.
         const verdict = checkFieldName(name, knownFields(defs, sections), body.options);
@@ -271,6 +303,28 @@ export async function POST(request: Request) {
           options: body.options,
         });
         return NextResponse.json({ field });
+      }
+
+      case "move-field": {
+        const r = await moveFieldToFolder(
+          String(body.fieldId || ""),
+          String(body.parentId || ""),
+        );
+        if (!r.ok)
+          return NextResponse.json(
+            {
+              error:
+                "GoHighLevel accepted the move but the field is still in its old section.",
+              status: 502,
+            } as ApiError,
+            { status: 502 },
+          );
+        return NextResponse.json({ moved: true });
+      }
+
+      case "name-folder": {
+        await rememberFolderName(String(body.folderId || ""), String(body.name || ""));
+        return NextResponse.json({ config: await getPipelineConfig() });
       }
 
       default:

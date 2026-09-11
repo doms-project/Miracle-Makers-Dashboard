@@ -223,6 +223,36 @@ export function explainError(e: unknown): FriendlyError {
     unmapped: false,
   });
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ROUND 94 — THE SECOND HALF.
+  //
+  // Round 80 made errors READABLE ([object Object] → a sentence). It did not
+  // make them USEFUL: a 422 and a 400 still reached the screen as GoHighLevel's
+  // own words about an endpoint nobody using this app has heard of.
+  //
+  // 🔴 WHAT SURVIVED IS THE PART THAT MATTERS. The pipeline WAS created before
+  // the field failed; an error that does not say so leaves an admin guessing
+  // whether to retry — and retrying made a second pipeline. Routes put a
+  // `survived` sentence on the error and it is printed FIRST.
+  // ═══════════════════════════════════════════════════════════════════════
+  const survived =
+    e && typeof e === "object" && typeof (e as { survived?: unknown }).survived === "string"
+      ? String((e as { survived: string }).survived).trim()
+      : "";
+  const withSurvived = (m: string) => (survived ? `${survived} ${m}` : m);
+
+  // 🔴 NEVER A STACK TRACE. `chunks/2fkfwr…js:1:20731` is noise to everyone and
+  // is in the console already. Dropped from the disclosure block, not from the
+  // console.
+  for (let i = details.length - 1; i >= 0; i--)
+    if (/^\s*at\s+\S|chunks\/[\w-]+\.js:\d+:\d+/.test(details[i])) details.splice(i, 1);
+
+  // 🔴 AND STOP DOUBLING THE PREFIX. "GoHighLevel returned 422 for POST
+  // /custom-fields/." appeared TWICE — a route wrapping an error that already
+  // carried the same text.
+  for (let i = details.length - 1; i > 0; i--)
+    if (details.slice(0, i).some((d) => d.includes(details[i]))) details.splice(i, 1);
+
   // ---- known cases, most specific first ----------------------------------
   if (p.code === "OPPORTUNITY_NO_DUPLICATE" || /duplicate opportunity/i.test(hay)) {
     const where = namedThing(raw) || namedThing(hay);
@@ -320,6 +350,31 @@ export function explainError(e: unknown): FriendlyError {
     return hit("Couldn't reach GoHighLevel. Try again in a moment.");
 
   // ---- unmapped: say so, and show everything -----------------------------
+  // ---- GENERIC, BY STATUS. Say what failed and what can be done, in the
+  // user's terms — never the endpoint. Reached only when nothing above matched.
+  if (p.status === 403)
+    return hit(withSurvived("You do not have permission to do that."));
+  if (p.status === 409 || (p.status === 400 && /already exist|duplicate/i.test(hay)))
+    return hit(
+      withSurvived(
+        namedThing(raw) || namedThing(hay)
+          ? `${namedThing(raw) || namedThing(hay)} already exists.`
+          : "Something with that name already exists.",
+      ),
+    );
+  if (p.status === 422 && /option/i.test(hay))
+    return hit(withSurvived("Choose at least one option for a dropdown."));
+  if (p.status === 422 || p.status === 400)
+    return hit(
+      withSurvived(
+        "GoHighLevel rejected this and we could not tell why. Send the details below to your developer.",
+      ),
+    );
+  if (p.status && p.status >= 500)
+    return hit(withSurvived("GoHighLevel is not responding. Nothing was changed."));
+  if (!p.status && /failed to fetch|networkerror|load failed/i.test(hay))
+    return hit(withSurvived("Could not reach GoHighLevel. Nothing was changed."));
+
   return {
     message: "Something went wrong. The details below will help us fix it.",
     details,

@@ -372,6 +372,40 @@ tbody tr:last-child td{border-bottom:0;}
 .pfsectoggle:hover{color:var(--plum);}
 .pfsechide{grid-column:1 / -1;display:flex;align-items:center;gap:7px;margin-top:4px;font-size:10.5px;color:var(--ink-2);cursor:pointer;line-height:1.4;}
 .pfsechide input{flex:0 0 auto;}
+/* ITEM 7b — cards side by side, expanding IN PLACE. The chevron must not push
+   its neighbours out of view or collapse the grid to one column, and the tick
+   target is the checkbox alone so expanding and ticking cannot fight. */
+.pfsec{align-content:start;}
+.pfsec .pfseclab{cursor:default;}
+.pfsec .pfseclab input{cursor:pointer;}
+.pfsec .pfsecname{cursor:pointer;}
+
+/* ITEM 6 — the unconfigured-folder banner. */
+.pfunknown{margin-bottom:16px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:10px;padding:12px 14px;font-size:12px;color:#7a5227;}
+.pfunknown b{color:#5c3d1c;}
+.pfunknownrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:9px;}
+.pfunknownwhat{flex:1 1 260px;min-width:0;font-size:11.5px;overflow-wrap:anywhere;}
+.pfunknownrow input{flex:0 1 220px;min-width:0;border:1px solid #e0c9ae;border-radius:8px;padding:7px 10px;font:inherit;font-size:12.5px;background:#fff;}
+
+/* One line saying why all four controls live on one screen. */
+.pfwhy{margin-bottom:16px;font-size:11.5px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:9px;padding:9px 12px;}
+
+/* ITEM 7c — steps that read in order, one primary action. */
+.pfadmin .istep{margin:20px 0 10px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--plum);}
+.pfadmin .istep:first-of-type{margin-top:0;}
+.pfadmin .pfprimary{padding:11px 22px;font-size:13px;}
+
+/* "+ Add a section" on the record panel. */
+.addsec{margin-top:10px;position:relative;}
+.addsec-btn{border:1px dashed var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;}
+.addsec-btn:hover,.addsec-btn.on{border-style:solid;background:#efe6fb;}
+.addsec-n{font-weight:500;opacity:.8;}
+.addsec-pop{position:absolute;z-index:20;margin-top:6px;min-width:260px;max-width:340px;background:var(--bg);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 28px rgba(31,23,41,.14);padding:5px;}
+.addsec-pop > button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:7px;font-size:12.5px;color:var(--ink);text-align:left;cursor:pointer;}
+.addsec-pop > button:hover{background:var(--plum-soft);color:var(--plum);}
+.addsec-pop > button span{font-size:10.5px;color:var(--ink-3);}
+.addsec-note{padding:7px 10px 4px;font-size:10.5px;line-height:1.5;color:var(--ink-3);border-top:1px solid var(--line-soft);margin-top:4px;}
+
 .pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:6px 8px;margin-top:3px;overflow-wrap:anywhere;}
 
 .pfnew{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
