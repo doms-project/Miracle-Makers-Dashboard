@@ -220,11 +220,23 @@ export function groupFieldsForPipeline(
   /**
    * The orphans, GROUPED — because they are not all the same thing.
    *
-   * ⚠️ A field whose folder GoHighLevel can NAME is not "other". It is a real
-   * section nobody has filed yet, and heading it with its own name ("Website
-   * Intent Form") answers "what did this person ask for" outright, where a
-   * generic bucket makes the reader guess. `parentName` is already in the
-   * payload, so this costs nothing.
+   * 🔴 GOHIGHLEVEL NEVER RETURNS A FOLDER NAME. `parentName` comes back EMPTY
+   * on every field (verified live, twice — see :511 from round 55 and round
+   * 94), and `GET /custom-fields/object-key/opportunity` answers 400 "Api does
+   * not support objectKey of type contact or opportunity". There is no third
+   * source.
+   *
+   * So a group is NAMED only because WE stored the name when WE created the
+   * folder — `opts.folderNames`, held in the pipeline config. A folder made in
+   * GoHighLevel, or made before we started recording names, has no name
+   * anywhere and is labelled BY THE FIELDS INSIDE IT. That is not a fallback;
+   * for such a folder it is the only option there has ever been.
+   *
+   * ⚠️ THIS COMMENT PREVIOUSLY SAID THE OPPOSITE — that `parentName` "is
+   * already in the payload, so this costs nothing". It was wrong when written
+   * in round 91, the code below it was corrected in round 94, and this was
+   * not. Anyone reading the return shape to understand what orphanGroups is
+   * for would have rebuilt the parentName path believing it works.
    */
   orphanGroups: OrphanGroup[];
   /**
@@ -386,14 +398,19 @@ export function groupFieldsForPipeline(
   }
 
   // ── THE UNFILED BUCKET, IN THREE CASES ──────────────────────────────────
-  //   1. a folder GHL can name  -> its own heading, by that name
-  //   2. a folder it cannot name -> the generic heading
-  //   3. no folder at all        -> the same generic heading
-  // 2 and 3 merge: both mean "we cannot tell you more than this".
+  //   1. a folder WE named when we created it -> its own heading, by that name
+  //   2. a folder nobody has named            -> labelled by its fields
+  //   3. no folder at all                     -> the generic heading
+  //
+  // 🔴 CASE 1 WAS DEAD CODE. It tested `def.parentName`, which is ALWAYS
+  // EMPTY — so every orphan fell to the generic bucket and the named branch
+  // could never be reached. Round 94 corrected the section labels and left
+  // this builder untouched. The name now comes from the same stored map the
+  // sections use.
   const namedGroups = new Map<string, OrphanGroup>();
   const unnamed: EditableFieldDef[] = [];
   for (const def of orphans) {
-    const folderName = (def.parentName || "").trim();
+    const folderName = (names[def.parentId] || "").trim();
     if (def.parentId && folderName) {
       const g = namedGroups.get(def.parentId) || {
         id: def.parentId,
