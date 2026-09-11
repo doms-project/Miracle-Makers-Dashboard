@@ -5273,23 +5273,55 @@ export default function Dashboard() {
                 are shared with them lands on columns with nothing in them and no
                 clue that their records exist one tab away. Say so. */}
             {dragSaveErr()}
-            {boardVisible.length === 0 && data.length > 0 ? (
-              <div className="empty boardhint">
-                <b>Nothing in your own pipelines</b>
-                <br />
-                You have {data.length} record{data.length === 1 ? "" : "s"}{" "}
-                shared with you or owned in another division. The kanban shows
-                only your own division&apos;s work —{" "}
-                <button
-                  type="button"
-                  className="linkbtn"
-                  onClick={() => setView("list")}
-                >
-                  see them in the list
-                </button>
-                .
-              </div>
-            ) : null}
+            {/* 🔴 THE COUNT WAS `data.length` — THE WHOLE PAYLOAD.
+                An admin who picked one empty pipeline was told "You have 555
+                records shared with you or owned in another division" on a
+                pipeline with no records, no transfers and no owners. Both
+                halves were false: the 555 were in OTHER pipelines they can see
+                perfectly well, and as an admin nothing is shared with them at
+                all. A count that large, stated that confidently, on a screen
+                showing nothing, reads as a bug in the board rather than an
+                empty pipeline.
+
+                So the hint now counts what it names, and only claims sharing
+                when something IS shared. An empty pipeline says it is empty. */}
+            {boardVisible.length === 0 && data.length > 0
+              ? (() => {
+                  const sharedCount = data.filter((r) => r.shared).length;
+                  const pickedOne = adminPipeline !== "all";
+                  if (!sharedCount)
+                    return (
+                      <div className="empty boardhint">
+                        <b>
+                          {pickedOne
+                            ? "Nothing in this pipeline yet"
+                            : "Nothing on your board"}
+                        </b>
+                        <br />
+                        {pickedOne
+                          ? "No records have reached it. Records appear here once they are created in this pipeline or moved into it."
+                          : "No records match the current filters."}
+                      </div>
+                    );
+                  return (
+                    <div className="empty boardhint">
+                      <b>Nothing in your own pipelines</b>
+                      <br />
+                      You have {sharedCount} record{sharedCount === 1 ? "" : "s"}{" "}
+                      shared with you or owned in another division. The kanban
+                      shows only your own division&apos;s work —{" "}
+                      <button
+                        type="button"
+                        className="linkbtn"
+                        onClick={() => setView("list")}
+                      >
+                        see {sharedCount === 1 ? "it" : "them"} in the list
+                      </button>
+                      .
+                    </div>
+                  );
+                })()
+              : null}
             <div className="board">
               {boardStages.map((st) => {
                 const inCol = boardVisible.filter((r) => r.stage === st);
