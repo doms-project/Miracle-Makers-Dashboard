@@ -177,6 +177,9 @@ export interface OpportunitiesResponse {
   // and cannot fetch it. ABSENT means "could not be read", which the panel
   // treats as "not loaded" and falls back to the code map — never as "empty".
   pipelineFolders?: Record<string, string[]>;
+  // pipelineId -> the sections that pipeline hides when the record has no value
+  // in any of them. Opt-in per section; absent or empty = nothing is hidden.
+  pipelineHideEmpty?: Record<string, string[]>;
   stages?: { id: string; name: string }[]; // union of stages across pipelines (deduped by id)
   // Location users for the owner/follower pickers. `divisions` labels each user
   // (empty = none mapped -> the picker shows "—", never hides them).

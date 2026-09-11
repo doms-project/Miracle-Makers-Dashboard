@@ -98,6 +98,10 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 
 /* table — bounded scroll region */
 .scroll{flex:1 1 auto;overflow:auto;min-height:0;}
+/* 🔴 The admin screens had NO scrolling container at all — .main is
+   overflow:hidden, so "Create pipeline" was clipped off the bottom with no way
+   to reach it. Padding so the last control is never flush against the edge. */
+.adminscroll{padding:16px 18px 40px;}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;}
 thead th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:600;color:var(--ink-2);font-size:10.5px;
   padding:11px 14px;border-bottom:1.5px solid var(--line);white-space:nowrap;z-index:2;text-transform:uppercase;letter-spacing:.04em;}
@@ -336,19 +340,35 @@ tbody tr:last-child td{border-bottom:0;}
 
 /* The folder checklist. Expanding lists the fields — see the comment at the
    render site: ticking a name alone is a guess. */
-.pfseclist{flex:1 1 340px;min-width:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
-.pfsec{display:grid;grid-template-columns:1fr auto;align-items:center;border-bottom:1px solid var(--line-soft);padding:7px 10px;gap:4px 8px;}
-.pfsec:last-child{border-bottom:0;}
+/* ⚠️ COLUMNS, NOT A STACK. Fourteen full-width rows pushed every action below
+   the fold. These are short, independent items — the shape is a compact grid
+   that grows sideways before it grows down. */
+.pfseclist{flex:1 1 340px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px;}
+.pfsec{display:grid;grid-template-columns:1fr auto auto;align-items:center;border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:7px 9px;gap:3px 6px;}
+.pfsec.unnamed{border-color:#f0dcc9;background:#fdfaf6;}
 .pfseclab{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0;}
 .pfsecname{font-weight:600;overflow-wrap:anywhere;}
-.pfseccount{margin-left:auto;font-size:10.5px;color:var(--ink-3);white-space:nowrap;padding-left:10px;}
+.pfseccount{font-size:10.5px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;white-space:nowrap;}
+/* An unnameable folder shows its id, because the label is a guess. */
+.pfsecid{grid-column:1 / -1;font-size:10px;color:#7a5227;overflow-wrap:anywhere;}
+.pfsecid code{font-size:10px;}
 .pfsectoggle{border:0;background:none;color:var(--ink-3);cursor:pointer;font-size:12px;padding:2px 6px;}
 .pfsectoggle:hover{color:var(--plum);}
-.pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.6;color:var(--ink-2);background:var(--canvas);border-radius:7px;padding:7px 9px;margin-top:4px;overflow-wrap:anywhere;}
+.pfsechide{grid-column:1 / -1;display:flex;align-items:center;gap:7px;margin-top:4px;font-size:10.5px;color:var(--ink-2);cursor:pointer;line-height:1.4;}
+.pfsechide input{flex:0 0 auto;}
+.pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:6px 8px;margin-top:3px;overflow-wrap:anywhere;}
 
 .pfnew{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
-.pfnew .irow{margin-bottom:9px;}
-.pfnew textarea{flex:1 1 260px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
+/* Explicit two-column grid — label, control. Nothing can wrap into a position
+   where it cannot be reached. */
+.pffield{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:9px 12px;}
+.pffield > label{font-size:11px;font-weight:700;color:var(--ink-2);display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.pffield input,.pffield select,.pffield textarea{width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;}
+.pffield input:focus,.pffield select:focus,.pffield textarea:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.pffield input:disabled{background:var(--line-soft);color:var(--ink-3);}
+.pffield textarea{align-self:start;}
+.pffield-prefix{max-width:140px;}
+.pfnew .ihint{margin-top:9px;}
 
 /* 🔴 BLOCK is red and offers no way through. ⚠️ WARN is amber and always
    does — a false positive that stops someone working is worse than a

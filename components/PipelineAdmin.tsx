@@ -11,6 +11,8 @@ interface Section {
   key: string;
   id: string;
   label: string;
+  /** False when the label is a guess — the row then shows the id too. */
+  named: boolean;
   fields: { id: string; name: string }[];
 }
 interface PipelineRow {
@@ -227,19 +229,23 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     );
   if (!data) return <div className="isec"><div className="imeta">Loading…</div></div>;
 
-  const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
-    <div className="pfsec" key={s.key}>
+  const sectionRow = (
+    s: Section,
+    checked: boolean,
+    onToggle: () => void,
+    hide?: { on: boolean; toggle: () => void },
+  ) => (
+    <div className={`pfsec ${s.named ? "" : "unnamed"}`} key={s.key}>
       <label className="pfseclab">
         <input type="checkbox" checked={checked} onChange={onToggle} />
         <span className="pfsecname">{s.label}</span>
-        <span className="pfseccount">
-          {s.fields.length} field{s.fields.length === 1 ? "" : "s"}
-        </span>
       </label>
+      <span className="pfseccount">{s.fields.length}</span>
       <button
         type="button"
         className="pfsectoggle"
         aria-expanded={expanded.has(s.key)}
+        title="Show the fields in this section"
         onClick={() =>
           setExpanded((e) => {
             const n = new Set(e);
@@ -251,11 +257,29 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
       >
         {expanded.has(s.key) ? "▴" : "▾"}
       </button>
+      {/* 🔴 AN UNNAMEABLE SECTION CANNOT BE TICKED WITH CONFIDENCE. Two rows
+          both reading "Section" — one of them the Website Intent Form — is a
+          checklist that cannot be used. GoHighLevel gives no name for a folder
+          it did not author, so the row shows its id, and the label falls back
+          to the fields inside it. */}
+      {!s.named ? (
+        <div className="pfsecid" title="This folder has no name in GoHighLevel">
+          no name in GHL · <code>{s.id}</code>
+        </div>
+      ) : null}
       {/* ⚠️ EXPANDING LISTS THE FIELDS. Ticking a name alone is a guess —
           "More Details" and "Client Details" mean nothing until you see
           inside. The defs are already cached, so this costs no call. */}
       {expanded.has(s.key) ? (
         <div className="pfsecfields">{s.fields.map((f) => f.name).join(" · ")}</div>
+      ) : null}
+      {/* Only offered on a section that is actually shown — hiding-when-empty
+          is meaningless for one that is not drawn at all. */}
+      {hide && checked ? (
+        <label className="pfsechide" title="Only draw this section on records that have an answer in it">
+          <input type="checkbox" checked={hide.on} onChange={hide.toggle} />
+          Hide when the record has no answers here
+        </label>
       ) : null}
     </div>
   );
@@ -266,7 +290,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
 
       <div className="irow">
         <label>Name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Events" />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Pipeline name" />
         {name.trim() ? (
           <div className="ihint">
             Records here will belong to the <b>{division}</b> division — that is what
@@ -345,51 +369,80 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
 
       {fieldOpen ? (
         <div className="pfnew">
-          <div className="irow">
-            <label>
-              Prefix{" "}
+          {/* 🔴 ITS OWN GRID, NOT `.irow`. This borrowed the Destination row's
+              flex layout, where `.irow input` carries min-width:150px and the
+              label another 150 — four controls on one wrapping line, inside a
+              container that was itself being clipped. The result was an input
+              that could not be reached or typed into. A two-column grid with
+              explicit widths cannot collapse that way. */}
+          <div className="pffield">
+            <label htmlFor="pf-name">Field name</label>
+            <div className="pffield-name">
+              <input
+                id="pf-name"
+                autoFocus
+                value={fName}
+                onChange={(e) => setFName(e.target.value)}
+                placeholder="e.g. Preferred contact time"
+              />
+            </div>
+
+            <label htmlFor="pf-prefix">
+              Prefix
               <input
                 type="checkbox"
                 checked={fPrefixOn}
                 onChange={(e) => setFPrefixOn(e.target.checked)}
+                aria-label="Use a prefix"
               />
             </label>
             <input
+              id="pf-prefix"
+              className="pffield-prefix"
               value={fPrefix}
               disabled={!fPrefixOn}
               onChange={(e) => setFPrefix(e.target.value)}
-              style={{ maxWidth: 110 }}
             />
-            <label>Name</label>
-            <input value={fName} onChange={(e) => setFName(e.target.value)} placeholder="Cost" />
-          </div>
-          {fFull ? <div className="ihint">Will be created as: <code>{fFull}</code></div> : null}
 
-          <div className="irow">
-            <label>Type</label>
-            <select value={fType} onChange={(e) => setFType(e.target.value)}>
+            <label htmlFor="pf-type">Type</label>
+            <select id="pf-type" value={fType} onChange={(e) => setFType(e.target.value)}>
               {DATA_TYPES.map((t) => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
             </select>
-            <label>Section</label>
-            <select value={fParent} onChange={(e) => setFParent(e.target.value)}>
+
+            <label htmlFor="pf-section">Section</label>
+            <select
+              id="pf-section"
+              value={fParent}
+              onChange={(e) => setFParent(e.target.value)}
+            >
               <option value="">Choose a section…</option>
               {data.sections.map((s) => (
-                <option key={s.id} value={s.id}>{s.label}</option>
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                  {s.named ? "" : "  (no name in GHL)"}
+                </option>
               ))}
             </select>
+
+            {/OPTIONS|CHECKBOX/.test(fType) ? (
+              <>
+                <label htmlFor="pf-options">Choices</label>
+                <textarea
+                  id="pf-options"
+                  rows={3}
+                  value={fOptions}
+                  onChange={(e) => setFOptions(e.target.value)}
+                  placeholder="One per line"
+                />
+              </>
+            ) : null}
           </div>
 
-          {/OPTIONS|CHECKBOX/.test(fType) ? (
-            <div className="irow">
-              <label>Choices</label>
-              <textarea
-                rows={3}
-                value={fOptions}
-                onChange={(e) => setFOptions(e.target.value)}
-                placeholder={"One per line"}
-              />
+          {fFull ? (
+            <div className="ihint">
+              Will be created as: <code>{fFull}</code>
             </div>
           ) : null}
 
@@ -453,15 +506,39 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
               </summary>
               <div className="pfseclist">
                 {data.sections.map((s) =>
-                  sectionRow(s, !!entry?.folders.includes(s.key), () => {
-                    const cur = new Set(entry?.folders ?? []);
-                    if (cur.has(s.key)) cur.delete(s.key);
-                    else cur.add(s.key);
-                    void saveEntry(p.id, {
-                      scope: entry?.scope ?? "client",
-                      folders: [...cur],
-                    });
-                  }),
+                  sectionRow(
+                    s,
+                    !!entry?.folders.includes(s.key),
+                    () => {
+                      const cur = new Set(entry?.folders ?? []);
+                      if (cur.has(s.key)) cur.delete(s.key);
+                      else cur.add(s.key);
+                      void saveEntry(p.id, {
+                        scope: entry?.scope ?? "client",
+                        folders: [...cur],
+                        hideWhenEmpty: entry?.hideWhenEmpty,
+                      });
+                    },
+                    // 🔴 SOURCE-CAPTURED vs REP-FILLED, and only an admin knows
+                    // which is which. The Website Intent Form is filled once by
+                    // a form or never — so on a Facebook lead its four
+                    // questions are not "unanswered", they were never asked.
+                    // Milestones are the opposite: empty means "not yet", and
+                    // hiding them would stop a rep filling the first one.
+                    {
+                      on: !!entry?.hideWhenEmpty?.includes(s.key),
+                      toggle: () => {
+                        const cur = new Set(entry?.hideWhenEmpty ?? []);
+                        if (cur.has(s.key)) cur.delete(s.key);
+                        else cur.add(s.key);
+                        void saveEntry(p.id, {
+                          scope: entry?.scope ?? "client",
+                          folders: entry?.folders ?? [],
+                          hideWhenEmpty: [...cur],
+                        });
+                      },
+                    },
+                  ),
                 )}
               </div>
             </details>
