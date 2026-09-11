@@ -38,6 +38,7 @@ import { toDateInput, formatGhlDate, hasTime, nameImpliesTime } from "@/lib/date
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
+import AddCaregiverDialog from "@/components/AddCaregiverDialog";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -1341,6 +1342,7 @@ export default function Dashboard() {
   // persisted — see the note in the control.
   const [shownSections, setShownSections] = useState<Set<string>>(new Set());
   const [addSecOpen, setAddSecOpen] = useState(false);
+  const [addCgOpen, setAddCgOpen] = useState(false);
   // ITEM 3 — CONTACT fields for the open record. Held BESIDE the opportunity
   // values, never merged into `rec.cf`: merging would make an opportunity write
   // and a contact write indistinguishable at the call site, and they go to
@@ -4437,6 +4439,23 @@ export default function Dashboard() {
               + Add Lead
             </button>
           ) : null}
+          {/* 🔴 ITS OWN DIALOG, NOT A RENAMED ONE. The comment above held this
+              button back through six rounds for exactly one reason: pointing it
+              at AddClientDialog would file an applicant as a CLIENT, in a
+              pipeline they may not even be able to see. AddCaregiverDialog is
+              the separate piece of work that was waiting for — its own route
+              (/api/caregivers), its own pipeline set (scope:"caregiver"), its
+              own eight fields. */}
+          {railWhere === "caregivers" ? (
+            <button
+              type="button"
+              className="addclientbtn"
+              onClick={() => setAddCgOpen(true)}
+              title="Create a new applicant and their application"
+            >
+              + Add Applicant
+            </button>
+          ) : null}
           {/* Replaces refresh-on-focus. ONE request per press, and the person
               looking at the screen decides when — rather than one payload per
               alt-tab, which is what tripped GoHighLevel's rate limit. */}
@@ -6114,6 +6133,17 @@ export default function Dashboard() {
       ) : null}
 
       {/* Add Lead (item 3) */}
+      {addCgOpen ? (
+        <AddCaregiverDialog
+          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          // ⚠️ THE CAREGIVER PIPELINES ONLY. cgPipelines comes from the
+          // scope:"caregiver" half of the stored config, so a client pipeline
+          // cannot reach this dialog by construction.
+          pipelines={cgPipelines.map((p) => ({ id: p.id, name: p.name }))}
+          onClose={() => setAddCgOpen(false)}
+          onAdded={() => void loadCaregivers()}
+        />
+      ) : null}
       {addOpen ? (
         <AddClientDialog
           pipelines={pipelines}
@@ -6827,18 +6857,18 @@ export default function Dashboard() {
                   ⚠️ Only folders TICKED for this pipeline are here — this is
                   about what is DRAWN, not what is ALLOWED. */}
               {fieldGroups.available.length ? (
-                <div className="addsec">
+                <div className="pullsec">
                   <button
                     type="button"
-                    className={`addsec-btn${addSecOpen ? " on" : ""}`}
+                    className={`pullsec-btn${addSecOpen ? " on" : ""}`}
                     aria-expanded={addSecOpen}
                     onClick={() => setAddSecOpen((v) => !v)}
                   >
                     + Add a section{" "}
-                    <span className="addsec-n">({fieldGroups.available.length} available)</span>
+                    <span className="pullsec-n">({fieldGroups.available.length} available)</span>
                   </button>
                   {addSecOpen ? (
-                    <div className="addsec-pop" role="listbox">
+                    <div className="pullsec-pop" role="listbox">
                       {fieldGroups.available.map((g) => (
                         <button
                           key={g.key}
@@ -6857,7 +6887,7 @@ export default function Dashboard() {
                       {/* ⚠️ SAY WHAT HAPPENS ON RELOAD. Same as the contact
                           rule: "has a value" is evaluated fresh every load, so
                           a section added and left empty is gone next time. */}
-                      <div className="addsec-note">
+                      <div className="pullsec-note">
                         Added sections stay until you reload. Fill something in
                         and the section keeps itself.
                       </div>
