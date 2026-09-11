@@ -186,11 +186,35 @@ tbody tr:last-child td{border-bottom:0;}
 .f.wide{grid-column:1 / -1;}
 /* collapsed read-only system info */
 .sysinfo{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--canvas);overflow:hidden;}
-.sysinfo>summary{cursor:pointer;list-style:none;padding:11px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);display:flex;align-items:center;gap:8px;user-select:none;}
+/* 🔴 LEGIBLE, NOT A WHISPER. This was 11px, uppercase, letter-spaced, in
+   --ink-3 on canvas grey — the visual language of chrome, which said IGNORE
+   THIS. But "Transferred From" is the receiving rep's answer to how a case
+   landed on them: something to READ, just not to edit. Normal ink, normal
+   size. Still collapsed, still read-only, still last. */
+.sysinfo>summary{cursor:pointer;list-style:none;padding:11px 14px;font-size:12.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;user-select:none;}
+.sysinfo-n{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
+.syshint{padding:0 14px 2px;font-size:11px;color:var(--ink-3);line-height:1.5;}
 .sysinfo>summary::-webkit-details-marker{display:none;}
 .sysinfo>summary::before{content:"▸";font-size:11px;color:var(--ink-3);transition:transform .15s;}
 .sysinfo[open]>summary::before{transform:rotate(90deg);}
 .sysinfo>summary:hover{color:var(--plum);background:var(--plum-soft);}
+
+/* ── THE UNFILED BUCKET ───────────────────────────────────────────────────
+   🔴 DELIBERATELY NOT .sysinfo. System-written fields are ours and will never
+   be mapped; an unfiled field is a real field somebody created that the
+   dashboard has not been told about yet. Same collapse mechanics, a normal
+   section's voice — and an amber marker, because it is a thing to be fixed
+   rather than a thing to be ignored. */
+.unfiled{margin-top:18px;border:1px solid #f0dcc9;border-radius:10px;background:#fdfaf6;overflow:hidden;}
+.unfiled>summary{cursor:pointer;list-style:none;padding:11px 14px;font-size:12.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;user-select:none;}
+.unfiled>summary::-webkit-details-marker{display:none;}
+.unfiled>summary::before{content:"▸";font-size:11px;color:#b07a3f;transition:transform .15s;}
+.unfiled[open]>summary::before{transform:rotate(90deg);}
+.unfiled>summary:hover{background:#fbf2e8;}
+.unfiled-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#7a5227;background:#f7e9d8;border-radius:20px;padding:1px 7px;}
+.unfiled-n{margin-left:auto;font-size:10.5px;font-weight:700;color:#7a5227;background:#f7e9d8;border-radius:20px;padding:1px 7px;}
+.unfiled .pfunconf{margin:0 14px 10px;}
+.unfiled .grid{padding:4px 14px 16px;}
 .sysinfo .grid{padding:4px 14px 16px;}
 .f label{display:block;font-size:11px;color:var(--ink-2);margin-bottom:5px;font-weight:600;}
 .f .v{border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:12.5px;background:var(--bg);min-height:36px;display:flex;align-items:center;}

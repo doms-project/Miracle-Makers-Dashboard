@@ -146,6 +146,16 @@ export function folderKeyById(folderId: string): string {
   return KEY_BY_ID.get(folderId) || "";
 }
 
+/** One heading in the unfiled bucket. */
+export interface OrphanGroup {
+  /** The folder id, or "" for fields with no folder at all. */
+  id: string;
+  label: string;
+  /** True when GoHighLevel gave us the folder's real name. */
+  named: boolean;
+  fields: EditableFieldDef[];
+}
+
 export interface FieldGroup {
   key: string;
   label: string;
@@ -196,6 +206,16 @@ export function groupFieldsForPipeline(
   sections: FieldGroup[];
   systemInfo: EditableFieldDef[];
   orphans: EditableFieldDef[];
+  /**
+   * The orphans, GROUPED — because they are not all the same thing.
+   *
+   * ⚠️ A field whose folder GoHighLevel can NAME is not "other". It is a real
+   * section nobody has filed yet, and heading it with its own name ("Website
+   * Intent Form") answers "what did this person ask for" outright, where a
+   * generic bucket makes the reader guess. `parentName` is already in the
+   * payload, so this costs nothing.
+   */
+  orphanGroups: OrphanGroup[];
   /** True when the map has loaded and has nothing for this pipeline. */
   unconfigured: boolean;
 } {
@@ -231,68 +251,132 @@ export function groupFieldsForPipeline(
     unconfigured = true;
   }
 
-  // ⚠️ HYBRID LIST. The stored map holds folder KEYS; the code map holds folder
-  // IDS; a folder created at runtime has no key and is stored as its id. All
-  // three resolve here: take the entry as a key if it is one, else look it up
-  // as an id.
-  const allowedKeys = new Set(
-    allowed
-      .map((k) =>
-        Object.prototype.hasOwnProperty.call(FOLDERS, k)
-          ? (k as FolderKey)
-          : KEY_BY_ID.get(k),
-      )
-      .filter(Boolean) as FolderKey[],
-  );
+  // ⚠️ HYBRID TOKENS. The stored map holds folder KEYS; the code map holds
+  // folder IDS; a folder created in GoHighLevel has no key at all and is stored
+  // as its raw id. One token per folder, resolved here: the code key when there
+  // is one, the raw id otherwise.
+  //
+  // 🔴 THE BUCKETING BELOW MUST USE THE SAME RULE. Round 90 made this list
+  // hybrid and left the bucketing keyed on KEY_BY_ID alone, so a field in a
+  // GHL-made folder went to `orphans` BEFORE this list was ever consulted —
+  // ticking such a folder in Admin → Pipelines did nothing at all. A control
+  // with no effect is worse than no control.
+  const tokenOf = (entry: string): string =>
+    Object.prototype.hasOwnProperty.call(FOLDERS, entry)
+      ? entry
+      : KEY_BY_ID.get(entry) || entry;
+  const allowedTokens = new Set(allowed.map(tokenOf));
 
-  const buckets = new Map<FolderKey, EditableFieldDef[]>();
+  // ⚠️ "NOT MAPPED HERE" AND "NEVER HEARD OF" ARE DIFFERENT, and the difference
+  // decides whether a field is dropped or surfaced:
+  //
+  //   a folder the config KNOWS but this pipeline does not tick  -> dropped,
+  //     because somebody decided that
+  //   a folder the config has NEVER SEEN                         -> orphaned,
+  //     because nobody has decided anything about it yet
+  //
+  // Without this, the day someone adds a folder in GHL its fields would vanish
+  // from every record instead of showing up asking to be filed.
+  const knownTokens = new Set<string>(Object.keys(FOLDERS));
+  for (const id of Object.values(FOLDERS)) knownTokens.add(id);
+  if (loaded)
+    for (const list of Object.values(storedFolders)) for (const t of list) knownTokens.add(t);
+
+  const buckets = new Map<string, EditableFieldDef[]>();
   const systemInfo: EditableFieldDef[] = [];
   const orphans: EditableFieldDef[] = [];
 
   for (const def of defs) {
+    // 🔴 BOTH NAME CHECKS RUN FIRST, AND THAT IS LOAD-BEARING. They win over
+    // every folder rule below, so a system-written field stays read-only in
+    // System info no matter which folder it sits in — including a folder
+    // created in GHL. Moving either of them under the parentId logic would let
+    // a rep get an editable "Transferred From".
     if (HIDDEN_SET.has(norm(def.name))) continue; // ITEM 1
     if (SYSTEM_INFO_SET.has(norm(def.name))) {
       systemInfo.push(def);
       continue;
     }
-    const key = def.parentId ? KEY_BY_ID.get(def.parentId) : undefined;
-    if (!key) {
-      orphans.push(def);
+    // Same hybrid rule as the allow-list — see tokenOf above.
+    const token = def.parentId ? tokenOf(def.parentId) : "";
+    if (!token) {
+      orphans.push(def); // genuinely loose: no folder at all
       continue;
     }
-    if (key === "lostReason") {
+    if (token === "lostReason") {
       // Option B: only the lost-reason field mapped to THIS pipeline renders.
       if (!LOST_REASON_OVERRIDES[def.id]?.includes(pipelineId)) continue;
     }
-    if (!allowedKeys.has(key)) continue; // folder not mapped to this pipeline
-    const arr = buckets.get(key) || [];
+    if (!allowedTokens.has(token)) {
+      // Known to the config but not ticked here -> a decision, so drop it.
+      // Never seen by the config -> surface it rather than lose it.
+      if (!knownTokens.has(token)) orphans.push(def);
+      continue;
+    }
+    const arr = buckets.get(token) || [];
     arr.push(def);
-    buckets.set(key, arr);
+    buckets.set(token, arr);
   }
 
   // Emit sections in the pipeline's configured folder order, each field list in
   // GHL's authored `position` order.
   const sections: FieldGroup[] = [];
   for (const entry of allowed) {
-    // Same hybrid resolution as above — key, or id, in the admin's order.
-    const key = Object.prototype.hasOwnProperty.call(FOLDERS, entry)
-      ? (entry as FolderKey)
-      : KEY_BY_ID.get(entry);
-    if (!key) continue;
-    const fields = buckets.get(key);
+    const token = tokenOf(entry);
+    const fields = buckets.get(token);
     if (fields && fields.length) {
       sections.push({
-        key,
-        label: FOLDER_LABELS[key],
+        key: token,
+        // A code folder has a curated label. A GHL-made one is labelled by the
+        // name GHL itself returns on its fields — which is why it can render
+        // as "Website Intent Form" rather than as a generic bucket.
+        label:
+          FOLDER_LABELS[token as FolderKey] ||
+          fields.find((f) => f.parentName)?.parentName ||
+          "Section",
         fields: [...fields].sort(byPosition),
       });
     }
   }
 
+  // ── THE UNFILED BUCKET, IN THREE CASES ──────────────────────────────────
+  //   1. a folder GHL can name  -> its own heading, by that name
+  //   2. a folder it cannot name -> the generic heading
+  //   3. no folder at all        -> the same generic heading
+  // 2 and 3 merge: both mean "we cannot tell you more than this".
+  const namedGroups = new Map<string, OrphanGroup>();
+  const unnamed: EditableFieldDef[] = [];
+  for (const def of orphans) {
+    const folderName = (def.parentName || "").trim();
+    if (def.parentId && folderName) {
+      const g = namedGroups.get(def.parentId) || {
+        id: def.parentId,
+        label: folderName,
+        named: true,
+        fields: [],
+      };
+      g.fields.push(def);
+      namedGroups.set(def.parentId, g);
+    } else {
+      unnamed.push(def);
+    }
+  }
+  const orphanGroups: OrphanGroup[] = [...namedGroups.values()]
+    .map((g) => ({ ...g, fields: [...g.fields].sort(byPosition) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  if (unnamed.length)
+    orphanGroups.push({
+      id: "",
+      label: "Fields not yet assigned to a section",
+      named: false,
+      fields: [...unnamed].sort(byPosition),
+    });
+
   return {
     sections,
     systemInfo: [...systemInfo].sort(byPosition),
     orphans: [...orphans].sort(byPosition),
+    orphanGroups,
     unconfigured,
   };
 }
