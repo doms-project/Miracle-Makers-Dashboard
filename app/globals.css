@@ -297,6 +297,68 @@ tbody tr:last-child td{border-bottom:0;}
 .iheadact .iheadok{border-color:var(--plum);background:var(--plum);color:#fff;}
 .iheadact .iheadok:hover{background:#4a2170;}
 .iheadact .iheadok:disabled{opacity:.5;cursor:default;}
+/* ── ADMIN → PIPELINES ─────────────────────────────────────────────────── */
+.pfadmin .irow{align-items:flex-start;margin-bottom:14px;}
+.pfadmin .irow > label{padding-top:8px;min-width:150px;}
+
+/* Stages. Position is LIST ORDER — the number is a readout, never an input. */
+.pfstagelist{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:6px;}
+.pfstage{display:flex;align-items:center;gap:6px;}
+.pfstagepos{flex:0 0 22px;font-size:10.5px;font-weight:700;color:var(--ink-3);text-align:right;}
+.pfstage input{flex:1 1 auto;min-width:0;}
+.pfstage button{padding:5px 8px;border:1px solid var(--line);background:var(--bg);border-radius:6px;font-size:11px;cursor:pointer;color:var(--ink-2);}
+.pfstage button:disabled{opacity:.35;cursor:default;}
+.pfstage button:not(:disabled):hover{border-color:var(--plum);color:var(--plum);}
+
+/* The folder checklist. Expanding lists the fields — see the comment at the
+   render site: ticking a name alone is a guess. */
+.pfseclist{flex:1 1 340px;min-width:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
+.pfsec{display:grid;grid-template-columns:1fr auto;align-items:center;border-bottom:1px solid var(--line-soft);padding:7px 10px;gap:4px 8px;}
+.pfsec:last-child{border-bottom:0;}
+.pfseclab{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0;}
+.pfsecname{font-weight:600;overflow-wrap:anywhere;}
+.pfseccount{margin-left:auto;font-size:10.5px;color:var(--ink-3);white-space:nowrap;padding-left:10px;}
+.pfsectoggle{border:0;background:none;color:var(--ink-3);cursor:pointer;font-size:12px;padding:2px 6px;}
+.pfsectoggle:hover{color:var(--plum);}
+.pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.6;color:var(--ink-2);background:var(--canvas);border-radius:7px;padding:7px 9px;margin-top:4px;overflow-wrap:anywhere;}
+
+.pfnew{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
+.pfnew .irow{margin-bottom:9px;}
+.pfnew textarea{flex:1 1 260px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
+
+/* 🔴 BLOCK is red and offers no way through. ⚠️ WARN is amber and always
+   does — a false positive that stops someone working is worse than a
+   duplicate they can merge later. */
+.pfblock,.pfwarn{border-radius:9px;padding:9px 12px;font-size:11.5px;line-height:1.5;margin-bottom:9px;}
+.pfblock{border:1px solid #f3d2cd;background:#fdeeec;color:#8c2f22;}
+.pfwarn{border:1px solid #f0dcc9;background:#fdf8f2;color:#7a5227;}
+.pfwhere{margin-top:4px;font-size:11px;opacity:.85;}
+.pfwarnacts{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px;}
+.pfwarnacts button{padding:5px 10px;border:1px solid #e0c9ae;background:#fff;color:#7a5227;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;}
+.pfwarnacts button:hover{background:#fbf2e8;}
+
+.pflist{border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+.pfrow{border-bottom:1px solid var(--line-soft);}
+.pfrow:last-child{border-bottom:0;}
+.pfrow > summary{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;font-size:12.5px;}
+.pfrow > summary:hover{background:var(--row-hover);}
+.pfrow[open] > summary{background:var(--sel);}
+.pfrow .pfseclist{margin:0 12px 12px;border-radius:8px;}
+.pfscope{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
+.pfcount{margin-left:auto;font-size:11px;color:var(--ink-3);}
+
+/* Stale keys are RECONCILED, never auto-removed. */
+.pfstale{margin-top:14px;border:1px solid var(--line);background:var(--canvas);border-radius:10px;padding:11px 13px;font-size:12px;}
+.pfstalerow{display:flex;align-items:center;gap:10px;margin-top:7px;}
+.pfstalerow code{flex:1 1 auto;min-width:0;font-size:11px;overflow-wrap:anywhere;}
+.pfstalerow button{padding:4px 10px;border:1px solid var(--line);background:var(--bg);border-radius:7px;font-size:11.5px;cursor:pointer;color:var(--ink-2);}
+.pfstalerow button:hover{border-color:#c0392b;color:#8c2f22;}
+
+/* The notice checkPipelineConfig() should always have shown someone. */
+.pfunconf{margin-bottom:12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;padding:9px 12px;font-size:11.5px;line-height:1.55;color:#7a5227;}
+.pfunconf b{color:#5c3d1c;}
+.pfunconf button{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--plum);cursor:pointer;text-decoration:underline;}
+
 .idrops{margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);background:var(--canvas);border-radius:9px;font-size:11.5px;line-height:1.5;color:var(--ink-2);}
 .idrops b{color:var(--ink);}
 .isplit{margin:0 0 10px;padding:9px 12px;border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:9px;font-size:11.5px;color:var(--ink-2);}

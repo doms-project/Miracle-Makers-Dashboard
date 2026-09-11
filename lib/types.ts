@@ -170,6 +170,13 @@ export interface OpportunitiesResponse {
   viewer?: Viewer;
   // Metadata for the Phase 2 editors (same for all records).
   fieldDefs?: EditableFieldDef[]; // OLTL opportunity custom-field definitions
+  // 🔴 pipelineId -> the folder KEYS (or raw ids, for folders created at
+  // runtime) that pipeline's record panel shows — the admin's stored decision.
+  //
+  // Shipped WITH fieldDefs on purpose: groupFieldsForPipeline is synchronous
+  // and cannot fetch it. ABSENT means "could not be read", which the panel
+  // treats as "not loaded" and falls back to the code map — never as "empty".
+  pipelineFolders?: Record<string, string[]>;
   stages?: { id: string; name: string }[]; // union of stages across pipelines (deduped by id)
   // Location users for the owner/follower pickers. `divisions` labels each user
   // (empty = none mapped -> the picker shows "—", never hides them).

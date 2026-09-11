@@ -37,6 +37,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 import { toDateInput, formatGhlDate, hasTime, nameImpliesTime } from "@/lib/dates";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
+import PipelineAdmin from "@/components/PipelineAdmin";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -1322,6 +1323,14 @@ export default function Dashboard() {
 
   // Phase 2 editing metadata (from the API) + per-field save state.
   const [fieldDefs, setFieldDefs] = useState<EditableFieldDef[]>([]);
+  // The admin's stored folder map, fetched WITH the field defs.
+  //
+  // 🔴 UNDEFINED MEANS "NOT LOADED YET", NOT "EMPTY". groupFieldsForPipeline
+  // falls back to the code map while this is undefined, so the panel renders
+  // correctly on first paint instead of flashing "not configured" for a frame.
+  const [pipelineFolders, setPipelineFolders] = useState<
+    Record<string, string[]> | undefined
+  >(undefined);
   // ITEM 3 — CONTACT fields for the open record. Held BESIDE the opportunity
   // values, never merged into `rec.cf`: merging would make an opportunity write
   // and a contact write indistinguishable at the call site, and they go to
@@ -1375,6 +1384,7 @@ export default function Dashboard() {
     | "resources"
     | "import"
     | "access"
+    | "pipelines"
     | "caregivers"
   >("board");
   const [selId, setSelId] = useState<string | null>(null);
@@ -1543,6 +1553,7 @@ export default function Dashboard() {
       const body = (await res.json()) as OpportunitiesResponse;
       setData(body.records || []);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
+      if (body.pipelineFolders) setPipelineFolders(body.pipelineFolders);
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
       if (body.pipelines) setPipelines(body.pipelines);
@@ -3175,9 +3186,12 @@ export default function Dashboard() {
   const fieldGroups = useMemo(
     () =>
       selected
-        ? groupFieldsForPipeline(fieldDefs, selected.pipelineId)
-        : { sections: [], systemInfo: [], orphans: [] },
-    [selected, fieldDefs],
+        ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders)
+        : { sections: [], systemInfo: [], orphans: [], unconfigured: false },
+    // ⚠️ pipelineFolders BELONGS IN THESE DEPS. Without it the panel keeps
+    // rendering the map it had at mount — an admin's change would not show
+    // until the selected record changed.
+    [selected, fieldDefs, pipelineFolders],
   );
 
   const ssoHeader = (): Record<string, string> =>
@@ -3998,10 +4012,12 @@ export default function Dashboard() {
     | "caregivers"
     | "master"
     | "import"
-    | "access" =
+    | "access"
+    | "pipelines" =
     view === "caregivers" ||
     view === "import" ||
     view === "access" ||
+    view === "pipelines" ||
     // ITEM 3 — Master is a CROSS-PIPELINE LENS, not another way of looking at
     // one pipeline's records, and it is the only entry in that row with its own
     // Access-tab grant. That makes it a place you go, like Caregivers — so it
@@ -4089,6 +4105,19 @@ export default function Dashboard() {
             >
               <IconKey />
               <span>Access</span>
+            </button>
+            {/* Same argument as the two above: creating a pipeline is somewhere
+                you go, not a lens on the list. /api/admin/pipelines re-derives
+                the role from the SSO blob server-side and answers 403 — this
+                button being hidden is convenience, not the boundary. */}
+            <button
+              className={railWhere === "pipelines" ? "railsec active" : "railsec"}
+              title="Create a pipeline and choose the fields its records show"
+              type="button"
+              onClick={() => setView("pipelines")}
+            >
+              <IconBoard />
+              <span>Pipelines</span>
             </button>
           </>
         )}
@@ -4915,6 +4944,16 @@ export default function Dashboard() {
               <b>Admins only</b>
               <br />
               Pipeline access is restricted to admin users.
+            </div>
+          )
+        ) : view === "pipelines" ? (
+          isAdminViewer ? (
+            <PipelineAdmin ssoBlob={sso.status === "ready" ? sso.blob : null} />
+          ) : (
+            <div className="empty">
+              <b>Admins only</b>
+              <br />
+              Creating pipelines is restricted to admin users.
             </div>
           )
         ) : view === "import" ? (
@@ -6096,6 +6135,23 @@ export default function Dashboard() {
                   Private Pay card from carrying ODP milestones, and a rep FILLS
                   these as the case moves — hiding the empty ones would stop
                   them. See the branch comment in groupContactFields. */}
+              {/* 🔴 THE DELIVERY HALF. checkPipelineConfig() in lib/ghl.ts has
+                  computed this condition since the caregiver incident, and
+                  console.warn'd it once per lambda where nobody would ever see
+                  it. An unconfigured pipeline now SAYS SO, on the record, to
+                  the person looking at it — and shows the Shared folder alone
+                  rather than all twelve, because a missing field is a question
+                  someone asks while a wrong one misleads quietly. */}
+              {fieldGroups.unconfigured && isAdminViewer ? (
+                <div className="pfunconf">
+                  <b>This pipeline has no field sections configured.</b> Only
+                  Shared is shown. Choose its sections under{" "}
+                  <button type="button" onClick={() => setView("pipelines")}>
+                    Admin → Pipelines
+                  </button>
+                  .
+                </div>
+              ) : null}
               {fieldGroups.sections.length ? (
                 <>
                   <div className="blockhead">Opportunity</div>

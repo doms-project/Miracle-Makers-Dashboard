@@ -137,6 +137,15 @@ const KEY_BY_ID = new Map<string, FolderKey>(
   (Object.keys(FOLDERS) as FolderKey[]).map((k) => [FOLDERS[k], k]),
 );
 
+/**
+ * A folder id -> its stable code key, or "" for a folder created at runtime.
+ * Exported so the seed can store KEYS rather than ids: half the bytes, and
+ * legible to whoever opens the custom value in GoHighLevel's own screen.
+ */
+export function folderKeyById(folderId: string): string {
+  return KEY_BY_ID.get(folderId) || "";
+}
+
 export interface FieldGroup {
   key: string;
   label: string;
@@ -170,20 +179,70 @@ function byPosition(a: EditableFieldDef, b: EditableFieldDef): number {
 export function groupFieldsForPipeline(
   defs: EditableFieldDef[],
   pipelineId: string,
-): { sections: FieldGroup[]; systemInfo: EditableFieldDef[]; orphans: EditableFieldDef[] } {
-  // 🔴 PRESENCE, NOT NON-EMPTY. This read `PIPELINE_FOLDERS[pipelineId]?.length`,
-  // which is FALSY FOR AN EMPTY ARRAY — so a pipeline deliberately mapped to
-  // few-or-no folders fell through to "show everything", the exact opposite of
-  // what the mapping says. It never bit while every mapping was long; it would
-  // have bitten immediately on the caregiver pipelines above.
-  const allowed = Object.prototype.hasOwnProperty.call(
-    PIPELINE_FOLDERS,
-    pipelineId,
-  )
-    ? PIPELINE_FOLDERS[pipelineId]
-    : Object.values(FOLDERS); // genuinely UNMAPPED pipeline → show all folders
+  // 🔴 THIS FUNCTION IS SYNCHRONOUS AND MUST STAY THAT WAY. It runs inside a
+  // useMemo in app/page.tsx. Nothing here can fetch: the admin's stored map has
+  // to arrive already loaded, fetched alongside the field defs.
+  //
+  // ⚠️ THREE STATES, NOT TWO.
+  //   undefined — NOT LOADED YET. Falls back to the code map, so the panel
+  //               renders correctly on first paint instead of flashing
+  //               "not configured".
+  //   {}        — LOADED, and this pipeline is not in it.
+  //   {…}       — LOADED and configured.
+  // Collapsing the first two would make every panel flash an unconfigured
+  // warning for one frame on every open.
+  storedFolders?: Record<string, string[]>,
+): {
+  sections: FieldGroup[];
+  systemInfo: EditableFieldDef[];
+  orphans: EditableFieldDef[];
+  /** True when the map has loaded and has nothing for this pipeline. */
+  unconfigured: boolean;
+} {
+  // ── RESOLUTION ──────────────────────────────────────────────────────────
+  // 1. the stored map — the admin's decision, and the only source once seeded
+  // 2. the code map — ONLY while the stored map has not loaded yet
+  // 3. the Shared folder alone, and say so
+  //
+  // 🔴 STEP 3 REPLACES THE ALL-TWELVE FALL-THROUGH, and degrades toward LESS.
+  // A missing field is a question someone asks. A wrong one misleads quietly —
+  // which is exactly how an applicant came to be shown Client SSN.
+  const loaded = storedFolders !== undefined;
+  const stored =
+    loaded && Object.prototype.hasOwnProperty.call(storedFolders, pipelineId)
+      ? storedFolders[pipelineId]
+      : null;
+
+  let unconfigured = false;
+  let allowed: string[];
+  if (stored) {
+    allowed = stored;
+  } else if (!loaded) {
+    // 🔴 PRESENCE, NOT NON-EMPTY. This read `PIPELINE_FOLDERS[pipelineId]?.length`,
+    // which is FALSY FOR AN EMPTY ARRAY — so a pipeline deliberately mapped to
+    // few-or-no folders fell through to "show everything", the exact opposite of
+    // what the mapping says. It never bit while every mapping was long; it would
+    // have bitten immediately on the caregiver pipelines above.
+    allowed = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, pipelineId)
+      ? PIPELINE_FOLDERS[pipelineId]
+      : [FOLDERS.shared];
+  } else {
+    allowed = [FOLDERS.shared];
+    unconfigured = true;
+  }
+
+  // ⚠️ HYBRID LIST. The stored map holds folder KEYS; the code map holds folder
+  // IDS; a folder created at runtime has no key and is stored as its id. All
+  // three resolve here: take the entry as a key if it is one, else look it up
+  // as an id.
   const allowedKeys = new Set(
-    allowed.map((id) => KEY_BY_ID.get(id)).filter(Boolean) as FolderKey[],
+    allowed
+      .map((k) =>
+        Object.prototype.hasOwnProperty.call(FOLDERS, k)
+          ? (k as FolderKey)
+          : KEY_BY_ID.get(k),
+      )
+      .filter(Boolean) as FolderKey[],
   );
 
   const buckets = new Map<FolderKey, EditableFieldDef[]>();
@@ -214,8 +273,11 @@ export function groupFieldsForPipeline(
   // Emit sections in the pipeline's configured folder order, each field list in
   // GHL's authored `position` order.
   const sections: FieldGroup[] = [];
-  for (const folderId of allowed) {
-    const key = KEY_BY_ID.get(folderId);
+  for (const entry of allowed) {
+    // Same hybrid resolution as above — key, or id, in the admin's order.
+    const key = Object.prototype.hasOwnProperty.call(FOLDERS, entry)
+      ? (entry as FolderKey)
+      : KEY_BY_ID.get(entry);
     if (!key) continue;
     const fields = buckets.get(key);
     if (fields && fields.length) {
@@ -231,6 +293,7 @@ export function groupFieldsForPipeline(
     sections,
     systemInfo: [...systemInfo].sort(byPosition),
     orphans: [...orphans].sort(byPosition),
+    unconfigured,
   };
 }
 
