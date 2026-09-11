@@ -284,7 +284,31 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     <div className={`pfsec ${s.named ? "" : "unnamed"}`} key={s.key}>
       <label className="pfseclab">
         <input type="checkbox" checked={checked} onChange={onToggle} />
-        <span className="pfsecname">{s.label}</span>
+        {/* 🔴 A NAME AND A DIAGNOSIS ARE NOT THE SAME THING, so they are not
+            styled the same.
+
+            A NAMED section's label is one or two words and reads as an
+            identity — unchanged, at the card's own size.
+
+            An UNNAMED section's label is a SENTENCE: the words "Unnamed
+            section" plus a list of what is inside it. Rendered at the same
+            weight and size as "Milestones" it READS AS A NAME, which invites
+            an admin to tick it as though they know what it is. The whole
+            reason the fields are listed is to say WE DO NOT KNOW, so the
+            styling has to say that too: the marker small and in the warning
+            colour already used by .pfunconf and .pfsecid, the field list
+            smaller again and quieter, as supporting detail. */}
+        {s.named ? (
+          <span className="pfsecname">{s.label}</span>
+        ) : (
+          <span className="pfsecunk">
+            <span className="pfsecunk-t">Unnamed section</span>
+            <span className="pfsecunk-f">
+              {s.fields.slice(0, 3).map((f) => f.name).join(", ")}
+              {s.fields.length > 3 ? "…" : ""}
+            </span>
+          </span>
+        )}
       </label>
       <span className="pfseccount">{s.fields.length}</span>
       <button
@@ -310,7 +334,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
           to the fields inside it. */}
       {!s.named ? (
         <div className="pfsecid" title="This folder has no name in GoHighLevel">
-          no name in GHL · <code>{s.id}</code>
+          <code>{s.id}</code>
         </div>
       ) : null}
       {/* ⚠️ EXPANDING LISTS THE FIELDS. Ticking a name alone is a guess —
@@ -486,7 +510,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
                 {data.sections.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.label}
-                    {s.named ? "" : "  (no name in GHL)"}
+                    {s.named ? "" : " · unnamed"}
                   </option>
                 ))}
               </select>
