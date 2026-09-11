@@ -63,6 +63,19 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 .stats{display:flex;gap:11px;padding:14px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;background:linear-gradient(180deg,#fbf9fe,#fff);}
 .stat{flex:1;min-width:120px;border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--bg);box-shadow:var(--shadow-sm);position:relative;overflow:hidden;}
 .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--plum);}
+/* A tile that FILTERS. Same box as .stat — a button element so it is
+   keyboard-reachable and announces itself — with the lit state the board's
+   source picker already uses. */
+.statbtn{display:block;width:100%;text-align:left;font:inherit;cursor:pointer;}
+.statbtn:hover{border-color:var(--plum-line);background:var(--plum-soft);}
+.statbtn.on{border-color:var(--plum);background:var(--plum-soft);box-shadow:0 0 0 2px var(--plum-soft);}
+/* The excluded-count, beside the number it is excluded from. */
+.vsub{font-size:12px;font-weight:600;color:var(--ink-3);}
+/* The master view's tile row scrolls with the page rather than pinning. */
+.mstats{border-bottom:0;padding-bottom:4px;background:none;}
+/* What a lit tile is filtering to, and the way out. */
+.mfocus{margin:0 22px 10px;font-size:11.5px;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:7px 11px;}
+.mfocus button{font:inherit;font-weight:700;color:var(--plum);text-decoration:underline;cursor:pointer;}
 .stat.gold::before{background:var(--gold);} .stat.blk::before{background:var(--blk);} .stat.ok::before{background:var(--ok);}
 .stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;}
 .stat .v{font-size:23px;font-weight:800;letter-spacing:-.02em;margin-top:3px;line-height:1;}

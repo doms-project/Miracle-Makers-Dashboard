@@ -1398,6 +1398,14 @@ export default function Dashboard() {
     | "caregivers"
   >("board");
   const [selId, setSelId] = useState<string | null>(null);
+  const [masterFocus, setMasterFocus] = useState<{
+    kind: "pipeline" | "owner" | "source" | "status" | "blocked" | "shared" | "stalled";
+    value?: string;
+  } | null>(null);
+  const [cgFocus, setCgFocus] = useState<{
+    kind: "stage" | "recruiter" | "source" | "stalled";
+    value?: string;
+  } | null>(null);
   // ITEM 4 — the Master view GRANT, decided server-side (admins always).
   const [canSeeMaster, setCanSeeMaster] = useState(false);
   // Pipelines whose fetch failed on the last load. Their records are missing —
@@ -2809,10 +2817,88 @@ export default function Dashboard() {
     },
     [transferredFromId],
   );
+  // ═══════════════════════════════════════════════════════════════════════
+  // MASTER + CAREGIVER STATS
+  //
+  // 🔴 ZERO EXTRA CALLS. Every field these read is already on the record — 34
+  // of them, in memory, fetched once. Each tile is a reduce over an array that
+  // is already there.
+  //
+  // 🔴 STALLED EXCLUDES RECORDS WITH NO stageChangedAt, AND SAYS SO.
+  // daysInStage() returns null when GoHighLevel sent no timestamp, and the UI
+  // has always rendered nothing rather than "0 days" — a confident claim about
+  // a record whose history we do not know. A tile that silently drops those is
+  // the same failure class as everything else found this week, so the count of
+  // undateable records is printed BESIDE the number: "142 stalled · 8 no date".
+  // ═══════════════════════════════════════════════════════════════════════
+  const STALL_DAYS = 14;
+
+  // One piece of state for every master tile. A tile is either lit or it is
+  // not, and clicking the lit one clears it — the same contract as the board's
+  // source tile, so the two behave alike.
+  type MasterFocus =
+    | { kind: "pipeline" | "owner" | "source" | "status"; value: string }
+    | { kind: "blocked" | "shared" | "stalled" }
+    | null;
+
+
+  const tallyBy = (
+    rows: OpportunityRecord[],
+    pick: (r: OpportunityRecord) => string,
+  ): { k: string; n: number }[] => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const k = (pick(r) || "").trim();
+      if (!k) continue;
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()]
+      .map(([k, n]) => ({ k, n }))
+      .sort((a, b) => b.n - a.n || a.k.localeCompare(b.k));
+  };
+
+  const stallOf = (rows: OpportunityRecord[]) => {
+    let stalled = 0;
+    let noDate = 0;
+    for (const r of rows) {
+      const d = daysInStage(r);
+      if (d == null) noDate++;
+      else if (d >= STALL_DAYS) stalled++;
+    }
+    return { stalled, noDate };
+  };
+
   const masterColumns = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    // ⚠️ THE TILES FILTER THE BOARD. A number you cannot act on is trivia —
+    // clicking "unassigned" or "stalled" is the point of counting them.
+    const focused = (r: OpportunityRecord) => {
+      const f = masterFocus;
+      if (!f) return true;
+      switch (f.kind) {
+        case "pipeline":
+          return r.pipelineName === f.value;
+        case "owner":
+          return f.value === "" ? !r.ownerId : r.rep === f.value;
+        case "source":
+          return (r.src || "").trim() === f.value;
+        case "status":
+          return (r.status || "").trim() === f.value;
+        case "blocked":
+          return r.block !== "None" && !!r.block;
+        case "shared":
+          return r.shared;
+        case "stalled": {
+          const d = daysInStage(r);
+          return d != null && d >= STALL_DAYS;
+        }
+        default:
+          return true;
+      }
+    };
     const match = (r: OpportunityRecord) =>
       (office === "all" || r.office === office) &&
+      focused(r) &&
       (needle === "" ||
         `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
     const byCat = new Map<MasterCatId, OpportunityRecord[]>();
@@ -2837,7 +2923,62 @@ export default function Dashboard() {
         records: other,
       });
     return cols;
-  }, [data, q, office, transferredFrom]);
+  }, [data, q, office, transferredFrom, masterFocus]);
+
+  // Computed over everything the viewer can access, NOT over the focused set —
+  // otherwise clicking a tile would rewrite the numbers you clicked.
+  // Lit-or-not, and clicking the lit one clears it — the same contract as the
+  // board's source tile.
+  const mFocus = (kind: string, value?: string) =>
+    !!masterFocus && masterFocus.kind === kind && masterFocus.value === value;
+  const setMFocus = (kind: string, value?: string) =>
+    setMasterFocus((f) =>
+      f && f.kind === kind && f.value === value
+        ? null
+        : ({ kind, value } as typeof f),
+    );
+  const focusLabel = (f: NonNullable<typeof masterFocus>) =>
+    f.kind === "owner" && f.value === ""
+      ? "unassigned"
+      : f.kind === "stalled"
+        ? `${STALL_DAYS}+ days in stage`
+        : f.kind === "shared"
+          ? "shared with you"
+          : f.kind === "blocked"
+            ? "road-blocked"
+            : `${f.kind}: ${f.value}`;
+
+  const masterStats = useMemo(() => {
+    const rows = data;
+    return {
+      total: rows.length,
+      // 🔴 SPLIT, NOT COLLAPSED. divisionLabel() strips the suffix and merges
+      // "OLTL Enrollment" with "OLTL Transfer" — different work, different
+      // owners. The master view exists to show WHERE WORK SITS, so it counts
+      // the pipeline itself and never the division.
+      byPipeline: tallyBy(rows, (r) => r.pipelineName),
+      // 🔴 ASSIGNED ONLY. Counting r.rep across everything put the
+      // unassigned records in TWICE — once in the "unassigned" row and again
+      // under whatever placeholder the owner resolver returns for no owner
+      // ("—"), so the column summed to more than the total and two rows
+      // described the same records.
+      byOwner: tallyBy(rows.filter((r) => r.ownerId), (r) => r.rep),
+      unassigned: rows.filter((r) => !r.ownerId).length,
+      bySource: tallyBy(rows, (r) => r.src),
+      byStatus: tallyBy(rows, (r) => r.status),
+      blocked: rows.filter((r) => r.block && r.block !== "None").length,
+      // 🔴 NOBODY COUNTS THESE TODAY, and they are the ones most likely to be
+      // missed: surfaced through a NON-home pipeline, so they are on nobody's
+      // board by default.
+      shared: rows.filter((r) => r.shared).length,
+      ...stallOf(rows),
+      byOffice: tallyBy(rows, (r) => r.office),
+      byCounty: tallyBy(rows, (r) => r.county),
+      followerNoOwner: rows.filter((r) => !r.ownerId && r.followerIds.length > 0).length,
+      checked: rows.filter((r) => r.checked).length,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   // ITEM 13 — the caregiver board. One column per stage of the selected
   // caregiver pipeline. Deliberately NOT the client board's stage union: the two
@@ -2886,13 +3027,35 @@ export default function Dashboard() {
     [cgPreStage, cgStage],
   );
 
+  // ⚠️ APPLIED AFTER cgVisible, so cgStats keeps counting the unfocused set —
+  // otherwise clicking a tile would rewrite the number you clicked.
+  const cgFocused = useMemo(() => {
+    if (!cgFocus) return cgVisible;
+    return cgVisible.filter((r) => {
+      switch (cgFocus.kind) {
+        case "stage":
+          return r.stage === cgFocus.value;
+        case "recruiter":
+          return cgFocus.value === "" ? !r.ownerId : r.rep === cgFocus.value;
+        case "source":
+          return (r.src || "").trim() === cgFocus.value;
+        case "stalled": {
+          const d = daysInStage(r);
+          return d != null && d >= STALL_DAYS;
+        }
+        default:
+          return true;
+      }
+    });
+  }, [cgVisible, cgFocus]);
+
   // Sorted copy. `days` sorts NUMERICALLY and pushes unknowns last in both
   // directions — a record whose stage date GoHighLevel never sent is not "0
   // days", and letting it sort as 0 would put it top of an "oldest first" list.
   const cgSorted = useMemo(() => {
-    if (!cgSortKey) return cgVisible;
+    if (!cgSortKey) return cgFocused;
     const dir = cgSortDir === "asc" ? 1 : -1;
-    return [...cgVisible].sort((a, b) => {
+    return [...cgFocused].sort((a, b) => {
       if (cgSortKey === "days") {
         const x = daysInStage(a);
         const y = daysInStage(b);
@@ -2903,7 +3066,7 @@ export default function Dashboard() {
       }
       return cgStr(a, cgSortKey).localeCompare(cgStr(b, cgSortKey)) * dir;
     });
-  }, [cgVisible, cgSortKey, cgSortDir]);
+  }, [cgFocused, cgSortKey, cgSortDir]);
 
   const cgGrouped = useMemo(() => {
     if (!cgGroupKey) return null;
@@ -2939,8 +3102,28 @@ export default function Dashboard() {
       .map((r) => ({ r, d: daysInStage(r) }))
       .filter((x): x is { r: OpportunityRecord; d: number } => x.d != null)
       .sort((a, b) => b.d - a.d);
-    return { unassigned, oldest: aged[0] || null, dated: aged.length };
+    return {
+      unassigned,
+      oldest: aged[0] || null,
+      dated: aged.length,
+      // Same treatment as the master view, different fields.
+      total: cgVisible.length,
+      byStage: tallyBy(cgVisible, (r) => r.stage),
+      // ⚠️ EVERY APPLICANT IS UNASSIGNED TODAY, so this reads as one row with
+      // the whole count. That is the truth and it is worth seeing.
+      byRecruiter: tallyBy(cgVisible.filter((r) => r.ownerId), (r) => r.rep),
+      bySource: tallyBy(cgVisible, (r) => r.src),
+      ...stallOf(cgVisible),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cgVisible]);
+
+  const cgF = (kind: string, value?: string) =>
+    !!cgFocus && cgFocus.kind === kind && cgFocus.value === value;
+  const setCgF = (kind: string, value?: string) =>
+    setCgFocus((f) =>
+      f && f.kind === kind && f.value === value ? null : ({ kind, value } as typeof f),
+    );
 
   const cgToggleSort = (key: string) => {
     if (cgSortKey === key) setCgSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -4771,7 +4954,118 @@ export default function Dashboard() {
                       : "no stage dates on the applicants shown"}
                   </div>
                 </div>
+
+                {/* 🔴 THE SAME TREATMENT AS THE MASTER VIEW, different fields.
+                    Same markup and classes again — one visual language. */}
+                <div className="stat">
+                  <div className="k">By stage</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {cgStats.byStage.length ? (
+                      cgStats.byStage.map((x) => (
+                        <button
+                          key={x.k}
+                          type="button"
+                          className={`srcpick${cgF("stage", x.k) ? " on" : ""}`}
+                          onClick={() => setCgF("stage", x.k)}
+                          title={`Show ${x.k} only (${x.n})`}
+                        >
+                          <b>{x.n}</b> {x.k}
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="stat">
+                  <div className="k">By recruiter</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {/* ⚠️ EVERY APPLICANT IS UNASSIGNED TODAY, so this reads as
+                        one row carrying the whole count. That is the truth and
+                        it is worth seeing. */}
+                    <button
+                      type="button"
+                      className={`srcpick${cgF("recruiter", "") ? " on" : ""}`}
+                      onClick={() => setCgF("recruiter", "")}
+                      title="Show unassigned applicants only"
+                    >
+                      <b>{cgStats.unassigned}</b> unassigned
+                    </button>
+                    {cgStats.byRecruiter.map((x) => (
+                      <button
+                        key={x.k}
+                        type="button"
+                        className={`srcpick${cgF("recruiter", x.k) ? " on" : ""}`}
+                        onClick={() => setCgF("recruiter", x.k)}
+                        title={`Show ${x.k} only (${x.n})`}
+                      >
+                        <b>{x.n}</b> {x.k}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="stat">
+                  <div className="k">By source</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {cgStats.bySource.length ? (
+                      cgStats.bySource.map((x) => (
+                        <button
+                          key={x.k}
+                          type="button"
+                          className={`srcpick${cgF("source", x.k) ? " on" : ""}`}
+                          onClick={() => setCgF("source", x.k)}
+                          title={`Show ${x.k} only (${x.n})`}
+                        >
+                          <b>{x.n}</b> {x.k}
+                          <SourceMark src={x.k} small />
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className={`stat statbtn${cgF("stalled") ? " on" : ""}`}
+                  onClick={() => setCgF("stalled")}
+                  title={`Show applicants ${STALL_DAYS}+ days in stage`}
+                >
+                  <div className="k">Stalled</div>
+                  <div className="v">
+                    {cgStats.stalled}
+                    {cgStats.noDate ? (
+                      <span className="vsub"> · {cgStats.noDate} no date</span>
+                    ) : null}
+                  </div>
+                  <div className="sub">
+                    {STALL_DAYS}+ days in stage
+                    {cgStats.noDate
+                      ? ` · ${cgStats.noDate} without a stage date`
+                      : ""}
+                  </div>
+                </button>
               </div>
+
+              {cgFocus ? (
+                <div className="mfocus">
+                  Showing{" "}
+                  <b>
+                    {cgFocus.kind === "recruiter" && cgFocus.value === ""
+                      ? "unassigned"
+                      : cgFocus.kind === "stalled"
+                        ? `${STALL_DAYS}+ days in stage`
+                        : `${cgFocus.kind}: ${cgFocus.value}`}
+                  </b>{" "}
+                  —{" "}
+                  <button type="button" onClick={() => setCgFocus(null)}>
+                    show every applicant
+                  </button>
+                </div>
+              ) : null}
               <div className="toolbar mtoolbar">
                 <div className="search">
                   <IconSearch />
@@ -5124,6 +5418,170 @@ export default function Dashboard() {
                     : "s"}
                 </span>
               </div>
+              {/* 🔴 THE MASTER VIEW HAD NO NUMBERS AT ALL — it listed records
+                  and nothing else, while the client board carried four tiles.
+                  This is the one place someone sees every division at once, so
+                  it is where a cross-cutting count is worth most.
+                  ⚠️ Same markup and classes as the client board's stats, so the
+                  two read as one app rather than two. */}
+              <div className="stats mstats">
+                <div className="stat">
+                  <div className="k">By pipeline</div>
+                  {/* 🔴 SPLIT, NOT COLLAPSED — Enrollment and Transfer are
+                      different work with different owners. */}
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {masterStats.byPipeline.length ? (
+                      masterStats.byPipeline.map((x) => (
+                        <button
+                          key={x.k}
+                          type="button"
+                          className={`srcpick${mFocus("pipeline", x.k) ? " on" : ""}`}
+                          onClick={() => setMFocus("pipeline", x.k)}
+                          title={`Show ${x.k} only (${x.n})`}
+                        >
+                          <b>{x.n}</b> {x.k}
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="stat gold">
+                  <div className="k">By owner</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {/* Unassigned is its OWN row, first — it is the one that
+                        needs action, not a gap in a list. */}
+                    <button
+                      type="button"
+                      className={`srcpick${mFocus("owner", "") ? " on" : ""}`}
+                      onClick={() => setMFocus("owner", "")}
+                      title="Show unassigned only"
+                    >
+                      <b>{masterStats.unassigned}</b> unassigned
+                    </button>
+                    {masterStats.byOwner.map((x) => (
+                      <button
+                        key={x.k}
+                        type="button"
+                        className={`srcpick${mFocus("owner", x.k) ? " on" : ""}`}
+                        onClick={() => setMFocus("owner", x.k)}
+                        title={`Show ${x.k} only (${x.n})`}
+                      >
+                        <b>{x.n}</b> {x.k}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className={`stat blk statbtn${mFocus("stalled") ? " on" : ""}`}
+                  onClick={() => setMFocus("stalled")}
+                  title={`Show records ${STALL_DAYS}+ days in stage`}
+                >
+                  <div className="k">Stalled</div>
+                  <div className="v">
+                    {masterStats.stalled}
+                    {/* 🔴 SAY WHAT IS EXCLUDED. daysInStage is null when
+                        GoHighLevel sent no timestamp, and those records are not
+                        "0 days" — they are unknown. A tile that quietly drops
+                        eight is the failure class we have hit all week. */}
+                    {masterStats.noDate ? (
+                      <span className="vsub"> · {masterStats.noDate} no date</span>
+                    ) : null}
+                  </div>
+                  <div className="sub">
+                    {STALL_DAYS}+ days in stage
+                    {masterStats.noDate
+                      ? ` · ${masterStats.noDate} record${
+                          masterStats.noDate === 1 ? " has" : "s have"
+                        } no stage date, so cannot be judged`
+                      : ""}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className={`stat statbtn${mFocus("shared") ? " on" : ""}`}
+                  onClick={() => setMFocus("shared")}
+                  title="Show shared records only"
+                >
+                  <div className="k">Shared with you</div>
+                  <div className="v">{masterStats.shared}</div>
+                  {/* 🔴 NOTHING COUNTED THESE BEFORE, and they are the ones
+                      most likely to be missed — surfaced through a NON-home
+                      pipeline, so they sit on nobody's board by default. */}
+                  <div className="sub">
+                    {masterStats.shared === 0
+                      ? "none — everything here is your own"
+                      : "on nobody's board by default"}
+                  </div>
+                </button>
+
+                <div className="stat">
+                  <div className="k">By source</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {masterStats.bySource.length ? (
+                      masterStats.bySource.map((x) => (
+                        <button
+                          key={x.k}
+                          type="button"
+                          className={`srcpick${mFocus("source", x.k) ? " on" : ""}`}
+                          onClick={() => setMFocus("source", x.k)}
+                          title={`Show ${x.k} only (${x.n})`}
+                        >
+                          <b>{x.n}</b> {x.k}
+                          <SourceMark src={x.k} small />
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="stat">
+                  <div className="k">By status</div>
+                  <div className="mini" style={{ marginTop: 9 }}>
+                    {masterStats.byStatus.map((x) => (
+                      <button
+                        key={x.k}
+                        type="button"
+                        className={`srcpick${mFocus("status", x.k) ? " on" : ""}`}
+                        onClick={() => setMFocus("status", x.k)}
+                        title={`Show ${x.k} only (${x.n})`}
+                      >
+                        <b>{x.n}</b> {x.k}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className={`stat statbtn${mFocus("blocked") ? " on" : ""}`}
+                  onClick={() => setMFocus("blocked")}
+                  title="Show road-blocked records only"
+                >
+                  <div className="k">Road-blocked</div>
+                  <div className="v">{masterStats.blocked}</div>
+                  <div className="sub">
+                    of {masterStats.total} · {masterStats.checked} checked this week
+                  </div>
+                </button>
+              </div>
+
+              {masterFocus ? (
+                <div className="mfocus">
+                  Showing <b>{focusLabel(masterFocus)}</b> —{" "}
+                  <button type="button" onClick={() => setMasterFocus(null)}>
+                    show everything
+                  </button>
+                </div>
+              ) : null}
+
               {/* Says the one thing that isn't obvious from looking at it: a
                   drop here ASKS, it doesn't move. */}
               <div className="mnote">
