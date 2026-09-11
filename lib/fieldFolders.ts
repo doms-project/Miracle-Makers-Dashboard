@@ -202,6 +202,20 @@ export function groupFieldsForPipeline(
   // Collapsing the first two would make every panel flash an unconfigured
   // warning for one frame on every open.
   storedFolders?: Record<string, string[]>,
+  /**
+   * Sections this pipeline hides when the RECORD has no value in any of them,
+   * plus the record's values to judge that by.
+   *
+   * 🔴 SECTION-LEVEL, AND OPT-IN PER SECTION. Round 54's rule stands for
+   * everything not listed here: "a rep FILLS these as the case moves — hiding
+   * the empty ones would stop them". A blanket hide-empty rule would take
+   * Milestones off every brand-new OLTL record, where every milestone is empty
+   * by definition and the rep needs to fill the first one.
+   *
+   * ⚠️ ONCE ONE FIELD IN THE SECTION IS FILLED, THE WHOLE SECTION APPEARS —
+   * empty fields included — so a rep can complete the set.
+   */
+  hideEmpty?: { tokens: string[]; values: Record<string, unknown> },
 ): {
   sections: FieldGroup[];
   systemInfo: EditableFieldDef[];
@@ -320,10 +334,23 @@ export function groupFieldsForPipeline(
 
   // Emit sections in the pipeline's configured folder order, each field list in
   // GHL's authored `position` order.
+  const hideTokens = new Set((hideEmpty?.tokens || []).map(tokenOf));
+  const vals = hideEmpty?.values;
+
   const sections: FieldGroup[] = [];
   for (const entry of allowed) {
     const token = tokenOf(entry);
     const fields = buckets.get(token);
+    // A section marked hide-when-empty is DRAWN ONLY IF SOMETHING IN IT IS
+    // ANSWERED. Nothing is hidden field-by-field — it is the whole section or
+    // none of it.
+    if (
+      fields &&
+      hideTokens.has(token) &&
+      vals &&
+      !fields.some((f) => hasValue(vals[f.id]))
+    )
+      continue;
     if (fields && fields.length) {
       sections.push({
         key: token,

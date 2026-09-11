@@ -47,6 +47,30 @@ export interface StoredPipelineEntry {
   // ⚠️ HYBRID BY DESIGN. A folder created at runtime has no key in code, so its
   // raw id is stored instead. Both resolve through the same KEY_BY_ID lookup.
   folders: string[];
+  /**
+   * Sections to HIDE ON A RECORD THAT HAS NO VALUE IN ANY OF THEM.
+   *
+   * 🔴 A PROPERTY OF THE SECTION, NOT OF THE RECORD, and that distinction is
+   * the whole reason this is a stored flag rather than a blanket rule.
+   *
+   * Some sections are SOURCE-CAPTURED: the Website Intent Form, the Facebook
+   * Form, Ad Attribution, Private Pay Intake. A form fills them once at intake
+   * or never. Empty on this record means the person was never asked — so the
+   * questions are not "not yet answered", they are questions that were never
+   * put to them. Four permanently blank questions on every Facebook lead is
+   * wrong MEANING, not just clutter.
+   *
+   * Other sections are REP-FILLED: Milestones, Enrollment. Empty means "not
+   * yet", and a rep fills them as the case moves. `app/page.tsx` has carried
+   * the rule since round 54 — "a rep FILLS these as the case moves, hiding the
+   * empty ones would stop them" — and a blanket hide-empty-sections rule would
+   * break exactly that: a brand-new OLTL record has no milestones filled, so
+   * Milestones would vanish and the rep could never fill the first one.
+   *
+   * ⚠️ DEFAULT EMPTY = TODAY'S BEHAVIOUR. Nothing is hidden until an admin
+   * ticks it, per section, in Admin → Pipelines.
+   */
+  hideWhenEmpty?: string[];
 }
 
 export interface StoredPipelineConfig {
@@ -99,7 +123,14 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
     const folders = Array.isArray(e.folders)
       ? e.folders.map((f) => String(f ?? "").trim()).filter(Boolean)
       : [];
-    pipelines[id] = { scope, folders };
+    const hideWhenEmpty = Array.isArray(e.hideWhenEmpty)
+      ? e.hideWhenEmpty.map((f) => String(f ?? "").trim()).filter(Boolean)
+      : [];
+    // Omitted rather than written as [] so an untouched entry stays byte-clean
+    // and the stored value does not grow for pipelines nobody has configured.
+    pipelines[id] = hideWhenEmpty.length
+      ? { scope, folders, hideWhenEmpty }
+      : { scope, folders };
   }
   return { seeded: rec.seeded === true, pipelines };
 }

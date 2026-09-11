@@ -81,24 +81,42 @@ function sectionsFromDefs(defs: EditableFieldDef[]) {
     key: string; // the stored token: a code key, or a raw id for a runtime folder
     id: string;
     label: string;
+    /**
+     * 🔴 FALSE MEANS THE LABEL IS A GUESS, and the screen has to say so.
+     * Two sections both reading "Section" — 4 fields and 2 fields — is a
+     * checklist nobody can tick with confidence: one of them was the Website
+     * Intent Form and there was no way to tell which.
+     */
+    named: boolean;
     fields: { id: string; name: string }[];
   }[] = [];
   for (const [folderId, fields] of byFolder) {
     const key = folderKeyById(folderId);
-    const label =
-      (key && FOLDER_LABELS[key as keyof typeof FOLDER_LABELS]) ||
-      fields.find((f) => f.parentName)?.parentName ||
-      "Section";
+    const curated = key ? FOLDER_LABELS[key as keyof typeof FOLDER_LABELS] : "";
+    const fromGhl = fields.find((f) => f.parentName)?.parentName || "";
+    const named = !!(curated || fromGhl);
     out.push({
       key: key || folderId, // hybrid: runtime folders have no key, so store the id
       id: folderId,
-      label,
+      // With no name from either source, name it by what is IN it rather than
+      // by the word "Section" — a heading that is identical for every
+      // unnameable folder is worse than no heading.
+      label:
+        curated ||
+        fromGhl ||
+        `Unnamed section · ${fields
+          .slice(0, 2)
+          .map((f) => f.name)
+          .join(", ")}${fields.length > 2 ? "…" : ""}`,
+      named,
       fields: fields
         .map((f) => ({ id: f.id, name: f.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     });
   }
-  return out.sort((a, b) => a.label.localeCompare(b.label));
+  return out.sort(
+    (a, b) => Number(b.named) - Number(a.named) || a.label.localeCompare(b.label),
+  );
 }
 
 function knownFields(defs: EditableFieldDef[], sections: ReturnType<typeof sectionsFromDefs>): KnownField[] {
@@ -165,6 +183,7 @@ interface Body {
   stages?: string[];
   scope?: "client" | "caregiver";
   folders?: string[];
+  hideWhenEmpty?: string[];
   // save-config
   config?: unknown;
   // create-section / create-field
@@ -202,6 +221,9 @@ export async function POST(request: Request) {
           folders: Array.isArray(body.folders) && body.folders.length
             ? body.folders.map(String)
             : [folderKeyById(FOLDERS.shared) || FOLDERS.shared],
+          ...(Array.isArray(body.hideWhenEmpty) && body.hideWhenEmpty.length
+            ? { hideWhenEmpty: body.hideWhenEmpty.map(String) }
+            : {}),
         };
         const saved = await savePipelineConfig({
           seeded: true,

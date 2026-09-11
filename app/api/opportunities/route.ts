@@ -63,13 +63,20 @@ async function buildResponse(
   // map rather than rendering nothing — an unreadable custom value must not
   // take the record panel down with it.
   let pipelineFolders: Record<string, string[]> | undefined;
+  let pipelineHideEmpty: Record<string, string[]> | undefined;
   try {
     const cfg = await getPipelineConfig();
     pipelineFolders = Object.fromEntries(
       Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
     );
+    pipelineHideEmpty = Object.fromEntries(
+      Object.entries(cfg.pipelines)
+        .filter(([, e]) => e.hideWhenEmpty?.length)
+        .map(([id, e]) => [id, e.hideWhenEmpty as string[]]),
+    );
   } catch {
     pipelineFolders = undefined;
+    pipelineHideEmpty = undefined;
   }
 
   const meta = {
@@ -77,6 +84,7 @@ async function buildResponse(
     users: labelledUsers,
     fieldDefs,
     pipelineFolders,
+    pipelineHideEmpty,
     pipelines,
     stagesByPipeline,
   };

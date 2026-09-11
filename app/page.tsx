@@ -1336,6 +1336,9 @@ export default function Dashboard() {
   const [pipelineFolders, setPipelineFolders] = useState<
     Record<string, string[]> | undefined
   >(undefined);
+  const [pipelineHideEmpty, setPipelineHideEmpty] = useState<
+    Record<string, string[]>
+  >({});
   // ITEM 3 — CONTACT fields for the open record. Held BESIDE the opportunity
   // values, never merged into `rec.cf`: merging would make an opportunity write
   // and a contact write indistinguishable at the call site, and they go to
@@ -1559,6 +1562,7 @@ export default function Dashboard() {
       setData(body.records || []);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.pipelineFolders) setPipelineFolders(body.pipelineFolders);
+      setPipelineHideEmpty(body.pipelineHideEmpty || {});
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
       if (body.pipelines) setPipelines(body.pipelines);
@@ -2086,6 +2090,41 @@ export default function Dashboard() {
     // so fall back to a label that promises nothing.
     return data.length ? "Shared with me" : "Cases";
   }, [adminPipeline, isAdminViewer, pipelines, homePipelineIds, data.length]);
+
+  // The title + strapline for whatever is actually on screen. The board's own
+  // label is computed below as `headerLabel` and used only where a board is.
+  const screenHeader = useMemo((): { title: string; sub: string } => {
+    switch (view) {
+      case "pipelines":
+        return {
+          title: "Pipelines",
+          sub: "Create a pipeline and choose which field sections its records show",
+        };
+      case "import":
+        return {
+          title: "Import",
+          sub: "Bulk-create records from a spreadsheet",
+        };
+      case "access":
+        return {
+          title: "Access",
+          sub: "Who may see which pipeline",
+        };
+      case "resources":
+        return { title: "Resources", sub: "Shared documents and folders" };
+      case "caregivers":
+        return {
+          title: "Caregiver applicants",
+          sub: "Applicants across the recruiting pipelines",
+        };
+      default:
+        return {
+          title: headerLabel,
+          sub: "Enrollments across your division · contacts, comms and settings stay in GoHighLevel",
+        };
+    }
+  }, [view, headerLabel]);
+
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
   // (a new hire must not be invisible); an unknown id renders "Former user".
@@ -3191,12 +3230,15 @@ export default function Dashboard() {
   const fieldGroups = useMemo(
     () =>
       selected
-        ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders)
+        ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders, {
+            tokens: pipelineHideEmpty[selected.pipelineId] || [],
+            values: selected.cf || {},
+          })
         : { sections: [], systemInfo: [], orphans: [], orphanGroups: [], unconfigured: false },
     // ⚠️ pipelineFolders BELONGS IN THESE DEPS. Without it the panel keeps
     // rendering the map it had at mount — an admin's change would not show
     // until the selected record changed.
-    [selected, fieldDefs, pipelineFolders],
+    [selected, fieldDefs, pipelineFolders, pipelineHideEmpty],
   );
 
   const ssoHeader = (): Record<string, string> =>
@@ -4137,13 +4179,16 @@ export default function Dashboard() {
       <div className="main">
         <div className="topbar">
           <div className="title">
+            {/* 🔴 THE HEADER HAS TO MATCH THE SCREEN. Both lines were the
+                CLIENT BOARD's — an admin on Pipelines was told "test —
+                Enrollments across your division", which describes neither the
+                screen they are on nor anything they can do there. Each admin
+                screen names itself and says what it is for; the board keeps the
+                header it had. */}
             <h1>
-              <span className="pipe" /> {headerLabel}
+              <span className="pipe" /> {screenHeader.title}
             </h1>
-            <small>
-              Enrollments across your division · contacts, comms and settings
-              stay in GoHighLevel
-            </small>
+            <small>{screenHeader.sub}</small>
           </div>
           <div className="spacer" />
           <div
@@ -4172,16 +4217,28 @@ export default function Dashboard() {
               Hidden rather than rewired: adding applicants from here is its own
               piece of work, and a button that does the wrong thing is worse
               than no button. */}
-          {railWhere === "caregivers" ? null : (
-          <button
-            type="button"
-            className="addclientbtn"
-            onClick={() => setAddOpen(true)}
-            title="Create a new lead and their case"
-          >
-            + Add Lead
-          </button>
-          )}
+          {/* 🔴 THE CLIENT BOARD AND LIST, AND NOWHERE ELSE.
+              This was `railWhere === "caregivers" ? null : …`, which is a test
+              for ONE excluded section rather than for the two screens the
+              button belongs on. railWhere collapses import, access, pipelines
+              and master into values that are simply not "caregivers", so all of
+              them fell through to the else and rendered it — "+ Add Lead" sat
+              on top of the Pipelines, Import and Access screens, where there is
+              no board and no record for it to add to.
+              Naming the two views it works on cannot drift that way: a new
+              section added later is excluded by default rather than included by
+              accident. Resources is excluded for the same reason — it is under
+              the Clients rail but has no board either. */}
+          {view === "list" || view === "board" ? (
+            <button
+              type="button"
+              className="addclientbtn"
+              onClick={() => setAddOpen(true)}
+              title="Create a new lead and their case"
+            >
+              + Add Lead
+            </button>
+          ) : null}
           {/* Replaces refresh-on-focus. ONE request per press, and the person
               looking at the screen decides when — rather than one payload per
               alt-tab, which is what tripped GoHighLevel's rate limit. */}
@@ -4941,9 +4998,11 @@ export default function Dashboard() {
           )
         ) : view === "access" ? (
           isAdminViewer ? (
-            <PipelineAccessTab
-              ssoBlob={sso.status === "ready" ? sso.blob : null}
-            />
+            <div className="scroll adminscroll">
+              <PipelineAccessTab
+                ssoBlob={sso.status === "ready" ? sso.blob : null}
+              />
+            </div>
           ) : (
             <div className="empty">
               <b>Admins only</b>
@@ -4953,7 +5012,16 @@ export default function Dashboard() {
           )
         ) : view === "pipelines" ? (
           isAdminViewer ? (
-            <PipelineAdmin ssoBlob={sso.status === "ready" ? sso.blob : null} />
+            /* 🔴 .main is overflow:hidden, and these three views were rendered
+               straight into the view switch with no scrolling container of
+               their own — so anything taller than the viewport was CLIPPED,
+               with no scrollbar to reach it. On Pipelines that put "Create
+               pipeline" permanently off-screen: the screen could be read but
+               not used. The board and the list each sit in a .scroll; the admin
+               screens now do too. */
+            <div className="scroll adminscroll">
+              <PipelineAdmin ssoBlob={sso.status === "ready" ? sso.blob : null} />
+            </div>
           ) : (
             <div className="empty">
               <b>Admins only</b>
@@ -4963,7 +5031,9 @@ export default function Dashboard() {
           )
         ) : view === "import" ? (
           isAdminViewer ? (
-            <ImportWizard ssoBlob={sso.status === "ready" ? sso.blob : null} />
+            <div className="scroll adminscroll">
+              <ImportWizard ssoBlob={sso.status === "ready" ? sso.blob : null} />
+            </div>
           ) : (
             <div className="empty">
               <b>Admins only</b>
@@ -6031,7 +6101,7 @@ export default function Dashboard() {
                         {/* The count is what is ANSWERED. A client section with
                             nothing answered shows no number at all — a heading
                             followed by a bare "0" reads as broken, and its
-                            "+ Add a field" control already says how many
+                            "Show N empty fields" control already says how many
                             questions are waiting. */}
                         {g.fields.length ? (
                           <span className="seccount">{g.fields.length}</span>
@@ -6094,10 +6164,22 @@ export default function Dashboard() {
                               setAddFieldOpen((k) => (k === g.key ? "" : g.key))
                             }
                           >
-                            + Add a field{" "}
-                            <span className="addfield-n">
-                              ({(g.hidden || []).filter((d) => !revealedFields.has(d.id)).length})
-                            </span>
+                            {/* 🔴 SAY WHAT IT DOES. This read "+ Add a field",
+                                which is the round-90 CREATE-A-FIELD flow's
+                                name — and this control creates nothing. It
+                                reveals a field that already exists in this
+                                folder and happens to be empty on this record.
+                                Someone reading "+ Add a field" reasonably
+                                expects to be asked for a name and a type.
+                                Round 78 built it as a reveal; only the label
+                                had drifted. */}
+                            Show{" "}
+                            {(g.hidden || []).filter((d) => !revealedFields.has(d.id)).length}{" "}
+                            empty field
+                            {(g.hidden || []).filter((d) => !revealedFields.has(d.id))
+                              .length === 1
+                              ? ""
+                              : "s"}
                           </button>
                           {addFieldOpen === g.key ? (
                             <div className="addfield-pop" role="listbox">
