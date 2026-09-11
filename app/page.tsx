@@ -1306,6 +1306,11 @@ function MasterColumn({
   );
 }
 
+// Beyond this many, an unfiled group renders collapsed — a pipeline with 40
+// unmapped fields rendered open pushes the rest of the panel off the screen.
+// The count is in the heading either way, so nothing is hidden by surprise.
+const ORPHAN_OPEN_MAX = 8;
+
 export default function Dashboard() {
   // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
   // (or "none" when not embedded / not configured). Filtering is NOT wired yet
@@ -3187,7 +3192,7 @@ export default function Dashboard() {
     () =>
       selected
         ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders)
-        : { sections: [], systemInfo: [], orphans: [], unconfigured: false },
+        : { sections: [], systemInfo: [], orphans: [], orphanGroups: [], unconfigured: false },
     // ⚠️ pipelineFolders BELONGS IN THESE DEPS. Without it the panel keeps
     // rendering the map it had at mount — an admin's change would not show
     // until the selected record changed.
@@ -6195,27 +6200,91 @@ export default function Dashboard() {
                 panelReady={cFields !== null || cErr !== null}
               />
 
-              {/* System info — external ids / derived / automation (collapsed).
-                  Airtable Record ID is editable here; compliance/derived are
-                  read-only via the blocklist. */}
+              {/* ⚠️ "SET AUTOMATICALLY", not "System info".
+                  All four of these are written by something other than a rep —
+                  Airtable Record ID by the migration, APP - Compliance Cleared
+                  by WF3b, Transferred From/Date by the Move flow — so the
+                  category is coherent and stays whole. But "System info" reads
+                  as plumbing, and two of the four are the receiving rep's
+                  answer to HOW A CASE LANDED ON THEM. Something to READ, just
+                  not to edit.
+
+                  🔴 The collapse is fine; the WHISPER was the problem. The
+                  summary was 11px uppercase in --ink-3 on canvas grey, which is
+                  the visual language of chrome — it said IGNORE THIS. It is now
+                  legible: normal ink, normal size, still collapsed, still
+                  last. */}
               {fieldGroups.systemInfo.length ? (
                 <details className="sysinfo">
-                  <summary>System info</summary>
+                  <summary>
+                    Set automatically
+                    <span className="sysinfo-n">
+                      {fieldGroups.systemInfo.length}
+                    </span>
+                  </summary>
+                  <div className="syshint">
+                    Written by the system, not editable here.
+                  </div>
                   <div className="grid">
                     {fieldGroups.systemInfo.map((def) => renderField(selected, def))}
                   </div>
                 </details>
               ) : null}
 
-              {/* Any field not in a mapped folder — never hidden. */}
-              {fieldGroups.orphans.length ? (
-                <details className="sysinfo">
-                  <summary>Other fields</summary>
-                  <div className="grid">
-                    {fieldGroups.orphans.map((def) => renderField(selected, def))}
-                  </div>
-                </details>
-              ) : null}
+              {/* 🔴 NOT .sysinfo. These are not plumbing and not ours: they are
+                  real fields somebody created that the dashboard has not been
+                  told about yet. Filing them beside the Airtable Record ID,
+                  under a heading meaning "we don't know what these are", hid
+                  them AND said they did not matter — and a rep looking for
+                  "what did this person ask for" would never open it.
+
+                  ⚠️ NAMED WHERE GHL NAMES THEM. `parentName` is already in the
+                  payload, so a folder created in GoHighLevel renders under its
+                  own heading — "Website Intent Form" — rather than a generic
+                  bucket. Only the genuinely unnameable fall back to the
+                  generic heading. */}
+              {fieldGroups.orphanGroups.map((g) => {
+                // Open when it is short enough to read at a glance; collapsed
+                // when it would push everything else off the screen. The count
+                // is in the heading either way.
+                const open = g.fields.length <= ORPHAN_OPEN_MAX;
+                return (
+                  <details className="unfiled" key={g.id || "none"} open={open}>
+                    <summary>
+                      {g.label}
+                      {g.named ? (
+                        <span className="unfiled-tag">not yet assigned</span>
+                      ) : null}
+                      <span className="unfiled-n">{g.fields.length}</span>
+                    </summary>
+                    {/* Same voice, same destination as the pipeline-level
+                        notice — these are one failure at two scales. */}
+                    {isAdminViewer ? (
+                      <div className="pfunconf">
+                        {g.named ? (
+                          <>
+                            <b>{g.label}</b> exists in GoHighLevel but is not
+                            assigned to this pipeline.
+                          </>
+                        ) : (
+                          <>
+                            <b>These fields are in no section the dashboard
+                            knows.</b>
+                          </>
+                        )}{" "}
+                        Assign it under{" "}
+                        <button type="button" onClick={() => setView("pipelines")}>
+                          Admin → Pipelines
+                        </button>
+                        .
+                      </div>
+                    ) : null}
+                    <div className="grid">
+                      {g.fields.map((def) => renderField(selected, def))}
+                    </div>
+                  </details>
+                );
+              })}
               <div className="sechead">Notes</div>
               <div>
                 {notesLoading ? (
