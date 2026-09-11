@@ -1047,3 +1047,187 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .srcpick.on{border-color:var(--plum);background:var(--plum-soft);color:var(--plum);font-weight:600;}
 .srcpick .srcmark{margin-left:5px;color:inherit;}
 .srcclr{margin-left:6px;border:0;background:none;padding:0;font:inherit;font-size:9.5px;letter-spacing:.05em;color:var(--plum);text-decoration:underline;cursor:pointer;text-transform:uppercase;}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REFERRAL PARTNERS — Sources · Touch queue · Events · Overview.
+
+   ⚠️ EVERY CLASS IS `rf`-PREFIXED. Round 88 shipped an `.iskip` that collided
+   with a pre-existing pill, and round 98 found a duplicate `.addsec` that had
+   sat in two components since round 33. A whole section's worth of generic
+   names (.kpi, .box, .bars, .drawer, .badge) would have been the third time,
+   so none of them are used: rfkpi, rfbox, rfbars, rfdrawer, rfbadge.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.rfwrap{padding:18px 22px 40px;max-width:1180px}
+
+/* The heading IS the division control. Styled as heading text, not as a
+   control: no border, no background, no select chrome — a chevron and a hover
+   underline are the only things that say it can be pressed. */
+.rfhead{position:relative;margin:0 0 16px}
+.rfdiv{display:inline-flex;align-items:center;gap:9px;background:none;border:0;padding:0;
+  cursor:pointer;color:var(--ink);font:inherit}
+.rfdivname{font-size:25px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+.rfdiv:hover .rfdivname{text-decoration:underline;text-decoration-color:var(--plum-line);
+  text-underline-offset:5px;text-decoration-thickness:2px}
+.rfdiv:focus-visible{outline:2px solid var(--plum);outline-offset:4px;border-radius:4px}
+.rfcar{width:11px;height:7px;color:var(--ink-3);flex:none;transition:transform .14s}
+.rfdiv[aria-expanded="true"] .rfcar{transform:rotate(180deg)}
+.rfdivpop{position:absolute;top:100%;left:-10px;z-index:40;margin:6px 0 0;padding:5px;
+  list-style:none;min-width:216px;background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--radius);box-shadow:var(--shadow)}
+.rfdivpop li{margin:0}
+.rfdivpop button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 11px;background:none;border:0;border-radius:6px;cursor:pointer;
+  font:inherit;font-size:13.5px;color:var(--ink);text-align:left}
+.rfdivpop button:hover{background:var(--row-hover)}
+.rfdivpop button.on{background:var(--sel);font-weight:600}
+.rftick{color:var(--plum);font-weight:700}
+.rfsub{margin:7px 0 0;font-size:13px;color:var(--ink-2);max-width:70ch;line-height:1.55}
+
+.rftabs{display:flex;gap:3px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
+.rftab{background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;
+  padding:9px 14px;cursor:pointer;font:inherit;font-size:13.5px;font-weight:600;color:var(--ink-2)}
+.rftab:hover{color:var(--ink)}
+.rftab.on{color:var(--plum);border-bottom-color:var(--plum)}
+.rftab .n{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:9px;
+  background:var(--plum-soft);color:var(--plum);font-size:11px;font-weight:700}
+.rftab.on .n{background:var(--plum);color:#fff}
+
+.rfkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:11px;margin-bottom:15px}
+.rfkpi{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px}
+.rfkpi .l{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.rfkpi .v{font-size:26px;font-weight:800;letter-spacing:-.02em;margin:5px 0 2px;color:var(--ink)}
+.rfkpi .v.warn{color:var(--blk)}
+.rfkpi .d{font-size:11.5px;color:var(--ink-2);line-height:1.45}
+
+/* What the numbers do not include. Gold, not red: this is a caveat about
+   coverage, not an error — the round-97 "142 stalled · 8 no date" rule with
+   room to say all of it. */
+.rfcaveat{background:var(--gold-soft);border:1px solid #f0dbb4;border-radius:var(--radius);
+  padding:12px 15px;margin-bottom:15px}
+.rfcaveat b{display:block;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--gold-ink);margin-bottom:6px}
+.rfcaveat ul{margin:0;padding-left:18px}
+.rfcaveat li{font-size:12.5px;color:#7a5405;line-height:1.6}
+.rfcavacts{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-top:10px}
+.rfcavnote{font-size:12px;color:#7a5405}
+
+/* Something this screen genuinely cannot compute, and why. */
+.rfgap{background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:var(--radius);
+  padding:13px 16px;margin-bottom:15px}
+.rfgap b{display:block;font-size:13.5px;color:var(--plum-deep);margin-bottom:5px}
+.rfgap p{margin:0 0 7px;font-size:12.5px;color:var(--ink-2);line-height:1.6;max-width:82ch}
+.rfgap p:last-child{margin-bottom:0}
+
+.rffilters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:13px}
+.rffilters select{padding:6px 10px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg);font:inherit;font-size:12.5px;color:var(--ink)}
+.rfgrow{flex:1 1 190px;min-width:170px}
+.rffilters input[type=search]{width:100%;padding:7px 11px;border:1px solid var(--line);
+  border-radius:7px;background:var(--bg);font:inherit;font-size:12.5px}
+
+.rftw{overflow-x:auto}
+.rftable{width:100%;border-collapse:collapse;font-size:13px}
+.rftable th{position:sticky;top:0;z-index:1;background:var(--line-soft);text-align:left;
+  padding:9px 13px;font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);white-space:nowrap;cursor:pointer;border-bottom:1px solid var(--line)}
+.rftable th.num,.rftable td.num{text-align:right}
+.rftable td{padding:10px 13px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.rftable tbody tr:hover{background:var(--row-hover);cursor:pointer}
+.rfar{margin-left:5px;color:var(--plum);font-size:9px}
+.rforg{font-weight:600;color:var(--ink)}
+.rfsub2{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+.rfmoney{font-variant-numeric:tabular-nums}
+.rflate{color:var(--blk);font-weight:600}
+.rfok{color:var(--ink-2)}
+.rfunk{color:var(--ink-3);cursor:help}
+.rffoot{font-size:12px;color:var(--ink-3);margin:11px 0 24px;line-height:1.6;max-width:86ch}
+.rfh3{font-size:14px;font-weight:700;color:var(--ink);margin:26px 0 10px;display:flex;
+  align-items:center;gap:9px}
+.rfn{padding:1px 8px;border-radius:9px;background:var(--plum-soft);color:var(--plum);
+  font-size:11px;font-weight:700}
+
+.rfbadge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.rfbadge.a{background:var(--ok-soft);color:var(--ok)}
+.rfbadge.b{background:var(--plum-soft);color:var(--plum)}
+.rfbadge.c{background:var(--line-soft);color:var(--ink-2)}
+.rfbadge.prospect{background:var(--gold-soft);color:var(--gold-ink)}
+
+.rfq{display:flex;align-items:center;gap:13px;padding:12px 15px;border-bottom:1px solid var(--line-soft)}
+.rfq:last-child{border-bottom:0}
+.rfbar{width:3px;align-self:stretch;border-radius:2px;flex:none}
+.rfq.od .rfbar{background:var(--blk)}
+.rfq.soon .rfbar{background:var(--gold)}
+.rfqb{flex:1;min-width:0}
+.rfqb .t{font-weight:600;font-size:13.5px;color:var(--ink)}
+.rfqb .m{font-size:12px;color:var(--ink-2);margin-top:3px}
+.rfqb .m .r{color:var(--blk);font-weight:600}
+.rfacts{display:flex;gap:7px;flex:none}
+
+.rfev{padding:15px;border-bottom:1px solid var(--line-soft)}
+.rfev:last-child{border-bottom:0}
+.rfev .hd{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.rfev .nm{font-weight:700;font-size:14.5px;color:var(--ink)}
+.rfevsub{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+.rfev .dt{font-size:12px;color:var(--ink-2);text-align:right;white-space:nowrap}
+.rfstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:9px;margin-top:12px}
+.rfstat{background:var(--canvas);border-radius:7px;padding:9px 11px}
+.rfstat .l{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.rfstat .v{font-size:17px;font-weight:800;color:var(--ink);margin-top:3px}
+.rfstat .v.good{color:var(--ok)}
+.rfstat .v.bad{color:var(--blk)}
+.rfout{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600;
+  background:var(--line-soft);color:var(--ink-2)}
+.rfout.good{background:var(--ok-soft);color:var(--ok)}
+.rfout.pending{background:var(--gold-soft);color:var(--gold-ink)}
+
+.rfgrid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:14px;margin-bottom:16px}
+.rfbox{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px}
+.rfbox h3{margin:0;font-size:14px;font-weight:700;color:var(--ink)}
+.rfcap{margin:4px 0 12px;font-size:11.5px;color:var(--ink-3);line-height:1.5}
+.rfbars{display:flex;flex-direction:column;gap:8px}
+.rfbrow{display:grid;grid-template-columns:minmax(96px,1.1fr) 3fr auto;gap:10px;align-items:center}
+.rfbrow .lb{font-size:12px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rfbrow .tr{height:8px;border-radius:5px;background:var(--line-soft);overflow:hidden}
+.rfbrow .fl{height:100%;border-radius:5px;background:var(--plum-mid);min-width:2px}
+.rfbrow .vl{font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+
+.rfquiet{background:var(--gold-soft);border:1px solid #f0dbb4;border-radius:var(--radius);padding:15px 17px}
+.rfquiet h3{margin:0;font-size:14px;font-weight:700;color:var(--gold-ink)}
+.rfqnone{font-size:12.5px;color:#7a5405;padding-top:10px;border-top:1px solid #f0dbb4}
+.rfqi{display:flex;justify-content:space-between;gap:14px;align-items:center;
+  padding:10px 0;border-top:1px solid #f0dbb4}
+.rfqi .nm{font-weight:600;font-size:13px;color:var(--ink)}
+.rfqi .dd{font-size:11.5px;color:#7a5405;margin-top:2px}
+.rfqr{text-align:right;flex:none}
+.rfqr .d{font-weight:800;color:var(--blk);font-size:15px}
+
+/* The drawer. Its own name, because .drawer does not exist in this stylesheet
+   and inventing a generic one is how the collisions above happened. */
+.rfdrawer{position:fixed;top:0;right:0;bottom:0;width:min(470px,94vw);z-index:60;
+  background:var(--bg);border-left:1px solid var(--line);box-shadow:var(--shadow);
+  display:flex;flex-direction:column}
+.rfdhd{padding:17px 20px 14px;border-bottom:1px solid var(--line);position:relative}
+.rfdhd h2{margin:0 30px 6px 0;font-size:18px;font-weight:800;color:var(--ink)}
+.rfdhd .x{position:absolute;top:13px;right:14px;background:none;border:0;cursor:pointer;
+  font-size:21px;line-height:1;color:var(--ink-3)}
+.rfdmeta{font-size:12.5px;color:var(--ink-2);margin-top:3px;display:flex;align-items:center;
+  gap:8px;flex-wrap:wrap}
+.rfdbd{flex:1;overflow-y:auto;padding:4px 20px 26px}
+.rfdsec{padding:15px 0;border-bottom:1px solid var(--line-soft)}
+.rfdsec:last-child{border-bottom:0}
+.rfdsec h4{margin:0 0 9px;font-size:10.5px;font-weight:700;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-3)}
+.rfkv{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px}
+.rfkv dt{font-size:12.5px;color:var(--ink-2)}
+.rfkv dd{margin:0;font-size:12.5px;font-weight:600;color:var(--ink);text-align:right}
+.rfkvrow{display:contents}
+.rfred{color:var(--blk)}
+.rfgreen{color:var(--ok)}
+.rfdacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.rfdhint{font-size:11.5px;color:var(--ink-3);line-height:1.6;margin-top:8px}
+.rfdnote{font-size:12.5px;color:var(--ink-2);line-height:1.6;white-space:pre-wrap}
+.rftl{display:flex;flex-direction:column;gap:10px}
+.rftli{border-left:2px solid var(--plum-line);padding-left:11px}
+.rftli .d{font-size:11px;color:var(--ink-3)}
+.rftli .t{font-size:12px;font-weight:600;color:var(--ink)}
+.rftli .n{font-size:12.5px;color:var(--ink-2);line-height:1.55;white-space:pre-wrap;margin-top:2px}
