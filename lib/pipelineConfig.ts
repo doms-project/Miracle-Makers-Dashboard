@@ -47,30 +47,6 @@ export interface StoredPipelineEntry {
   // ⚠️ HYBRID BY DESIGN. A folder created at runtime has no key in code, so its
   // raw id is stored instead. Both resolve through the same KEY_BY_ID lookup.
   folders: string[];
-  /**
-   * Sections to HIDE ON A RECORD THAT HAS NO VALUE IN ANY OF THEM.
-   *
-   * 🔴 A PROPERTY OF THE SECTION, NOT OF THE RECORD, and that distinction is
-   * the whole reason this is a stored flag rather than a blanket rule.
-   *
-   * Some sections are SOURCE-CAPTURED: the Website Intent Form, the Facebook
-   * Form, Ad Attribution, Private Pay Intake. A form fills them once at intake
-   * or never. Empty on this record means the person was never asked — so the
-   * questions are not "not yet answered", they are questions that were never
-   * put to them. Four permanently blank questions on every Facebook lead is
-   * wrong MEANING, not just clutter.
-   *
-   * Other sections are REP-FILLED: Milestones, Enrollment. Empty means "not
-   * yet", and a rep fills them as the case moves. `app/page.tsx` has carried
-   * the rule since round 54 — "a rep FILLS these as the case moves, hiding the
-   * empty ones would stop them" — and a blanket hide-empty-sections rule would
-   * break exactly that: a brand-new OLTL record has no milestones filled, so
-   * Milestones would vanish and the rep could never fill the first one.
-   *
-   * ⚠️ DEFAULT EMPTY = TODAY'S BEHAVIOUR. Nothing is hidden until an admin
-   * ticks it, per section, in Admin → Pipelines.
-   */
-  hideWhenEmpty?: string[];
 }
 
 export interface StoredPipelineConfig {
@@ -83,12 +59,39 @@ export interface StoredPipelineConfig {
   // LOST, and those must never be treated the same.
   seeded: boolean;
   pipelines: Record<string, StoredPipelineEntry>;
+  /**
+   * 🔴 folderId -> NAME, AND THIS IS THE ONLY PLACE A FOLDER NAME CAN LIVE.
+   *
+   * GoHighLevel will not tell us. `parentName` comes back EMPTY on every field
+   * — lib/fieldFolders.ts:491 recorded that in round 55 and verified it live —
+   * and `GET /custom-fields/object-key/opportunity` answers 400 "Api does not
+   * support objectKey of type contact or opportunity". There is no third way.
+   *
+   * ⚠️ SO ROUND 93's "label it by the fields inside it" IS NOT A FALLBACK. For
+   * a folder this app did not create, it is the only option there has ever
+   * been. Round 91 labelled runtime folders by `parentName` — a field this
+   * codebase already knew is always empty.
+   *
+   * We can only record a name when WE are told one: at create time, or when an
+   * admin names an existing folder on the Pipelines screen.
+   */
+  folderNames: Record<string, string>;
 }
 
 export const PIPELINE_CONFIG_CUSTOM_VALUE_NAME = "MM Pipeline Folders";
 
+/**
+ * 🔴 SEEDED NAMES. The Website Intent Form exists on this account today and its
+ * four fields are showing as orphans on live records. Item 3 fixes pipelines
+ * created from now on; it does nothing for the five that already exist, so this
+ * folder is named and ticked by the seed.
+ */
+export const SEED_FOLDER_NAMES: Record<string, string> = {
+  "1JFUFsjPXNFzMW18dYSe": "Website Intent Form",
+};
+
 export function emptyPipelineConfig(): StoredPipelineConfig {
-  return { seeded: false, pipelines: {} };
+  return { seeded: false, pipelines: {}, folderNames: {} };
 }
 
 /**
@@ -123,20 +126,24 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
     const folders = Array.isArray(e.folders)
       ? e.folders.map((f) => String(f ?? "").trim()).filter(Boolean)
       : [];
-    const hideWhenEmpty = Array.isArray(e.hideWhenEmpty)
-      ? e.hideWhenEmpty.map((f) => String(f ?? "").trim()).filter(Boolean)
-      : [];
-    // Omitted rather than written as [] so an untouched entry stays byte-clean
-    // and the stored value does not grow for pipelines nobody has configured.
-    pipelines[id] = hideWhenEmpty.length
-      ? { scope, folders, hideWhenEmpty }
-      : { scope, folders };
+    pipelines[id] = { scope, folders };
   }
-  return { seeded: rec.seeded === true, pipelines };
+  const folderNames: Record<string, string> = {};
+  const fn = rec.folderNames;
+  if (fn && typeof fn === "object" && !Array.isArray(fn))
+    for (const [id, v] of Object.entries(fn as Record<string, unknown>)) {
+      const n = String(v ?? "").trim();
+      if (id && n) folderNames[id] = n;
+    }
+  return { seeded: rec.seeded === true, pipelines, folderNames };
 }
 
 export function serialisePipelineConfig(c: StoredPipelineConfig): string {
-  return JSON.stringify({ seeded: c.seeded, pipelines: c.pipelines });
+  return JSON.stringify({
+    seeded: c.seeded,
+    pipelines: c.pipelines,
+    folderNames: c.folderNames || {},
+  });
 }
 
 /** The ids in one scope, in stored order. */

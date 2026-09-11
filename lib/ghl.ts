@@ -30,6 +30,7 @@ import {
   serialisePipelineConfig,
   emptyPipelineConfig,
   idsInScope,
+  SEED_FOLDER_NAMES,
   type StoredPipelineConfig,
   type PipelineScope as StoredScope,
 } from "./pipelineConfig";
@@ -2334,7 +2335,45 @@ export async function createFieldFolder(args: {
       `Reply keys: ${Object.keys(res).join(", ") || "(empty)"}`,
     );
   bustFieldCaches();
+  // ⚠️ RECORD THE NAME NOW — this is the only moment we will ever know it.
+  await rememberFolderName(id, name).catch(() => {});
   return { id, name };
+}
+
+/** Store a folder's name in the config. The only place one can live. */
+export async function rememberFolderName(folderId: string, name: string): Promise<void> {
+  if (!folderId || !name.trim()) return;
+  const cfg = await getPipelineConfig();
+  await savePipelineConfig({
+    ...cfg,
+    folderNames: { ...cfg.folderNames, [folderId]: name.trim() },
+  });
+}
+
+/**
+ * ITEM 4 — MOVE an existing field into a folder.
+ *
+ * 🔴 THIS IS WHAT KEEPS THE ORPHAN BUCKET FILLING. The screen could create a
+ * field INTO a folder but never move one, so a field GoHighLevel dropped into
+ * Additional Info could only be fixed in GHL.
+ *
+ * ⚠️ READ IT BACK. A move that silently does nothing is the same failure class
+ * as the folder create that threw while succeeding.
+ */
+export async function moveFieldToFolder(
+  fieldId: string,
+  parentId: string,
+): Promise<{ ok: boolean; storedParent: string }> {
+  const { locationId } = requireEnv();
+  if (!fieldId || !parentId) throw new GhlError("A field and a section are required.", 400);
+  const res = await ghlSend<Record<string, unknown>>(
+    "PUT",
+    `/custom-fields/${encodeURIComponent(fieldId)}`,
+    { locationId, parentId },
+  );
+  const storedParent = String(pickCreated(res).parentId ?? "");
+  bustFieldCaches();
+  return { ok: !storedParent || storedParent === parentId, storedParent };
 }
 
 /**
@@ -2576,16 +2615,19 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
  */
 export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   const next = emptyPipelineConfig();
+  // 🔴 THE NAMED FOLDERS GO IN, AND THE INTENT FORM IS TICKED ON EVERY CLIENT
+  // PIPELINE. Its four fields are orphaned on live records right now; a fix
+  // that only helps pipelines created from today leaves them orphaned.
+  next.folderNames = { ...SEED_FOLDER_NAMES };
+  const seededFolderIds = Object.keys(SEED_FOLDER_NAMES);
   const add = (ids: string[], scope: StoredScope) => {
     for (const id of ids) {
       const mapped = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, id)
         ? PIPELINE_FOLDERS[id]
         : [FOLDERS.shared]; // never the all-twelve fall-through, even in the seed
-      next.pipelines[id] = {
-        scope,
-        // ids -> keys, so the stored value is readable in GHL's own screen
-        folders: mapped.map((fid) => folderKeyById(fid) || fid),
-      };
+      const folders = mapped.map((fid) => folderKeyById(fid) || fid);
+      if (scope === "client") for (const fid of seededFolderIds) folders.push(fid);
+      next.pipelines[id] = { scope, folders };
     }
   };
   add(pipelineIds(), "client");
