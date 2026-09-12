@@ -2800,11 +2800,28 @@ export async function upsertContact(fields: {
   email?: string;
   phone?: string;
   source?: string;
+  /**
+   * The contact's owner. Used by "+ Add partner", where the owner IS the
+   * answer to "who holds this relationship" and drives whose queue it lands in.
+   *
+   * ⚠️ NOT SENT BY THE REFERRAL PATH. A referral's opportunity is left for the
+   * pipeline's notification workflow to assign — option (b), settled in round
+   * 101. Owning the partner and working the case are different questions.
+   */
+  assignedTo?: string;
   customFields?: { id: string; value: unknown }[];
 }): Promise<{ id: string; isNew: boolean }> {
   const { locationId } = requireEnv();
   const body: Record<string, unknown> = { locationId };
-  for (const k of ["firstName", "lastName", "name", "email", "phone", "source"] as const)
+  for (const k of [
+    "firstName",
+    "lastName",
+    "name",
+    "email",
+    "phone",
+    "source",
+    "assignedTo",
+  ] as const)
     if (fields[k]) body[k] = fields[k];
   if (fields.customFields?.length) body.customFields = fields.customFields;
   const res = await ghlSend<{ contact?: { id?: string }; new?: boolean }>(
@@ -2978,6 +2995,13 @@ export interface ContactByField {
   assignedTo: string;
   /** Custom field values by field id. */
   fields: Record<string, string>;
+  /**
+   * 🔴 GHL's `dateUpdated` — CONTACTS DO NOT HAVE `updatedAt` AT ALL.
+   * Round 94 recorded that (see getContactCustomFields), so `dateUpdated` is
+   * read first here and `updatedAt` only as a tolerated fallback. "" when the
+   * search sends neither, which the caller must treat as "cannot check".
+   */
+  version: string;
 }
 
 export interface ContactSearchResult {
@@ -3098,6 +3122,7 @@ export async function ghlSearchContacts(
         phone: String(rec.phone ?? ""),
         assignedTo: String(rec.assignedTo ?? rec.assignedUserId ?? ""),
         fields: cf || {},
+        version: String(rec.dateUpdated ?? rec.updatedAt ?? ""),
       } as ContactByField,
     };
   });
@@ -3125,7 +3150,8 @@ export async function ghlSearchContacts(
       const fields: Record<string, string> = {};
       for (const [k, v] of Object.entries(s.value.values))
         fields[k] = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
-      out.push({ ...targets[i], fields });
+      // The hydrate read carries a version even when the search did not.
+      out.push({ ...targets[i], fields, version: s.value.version || targets[i].version });
     }
     rows = out;
   }
@@ -3223,6 +3249,17 @@ export async function createOpportunity(o: {
   source?: string;
   status?: string;
   assignedTo?: string; // Add Client — the owner, forced server-side for reps
+  /**
+   * The opportunity's value. On this account it is a MONTHLY RECURRING figure,
+   * which is why every number derived from it is labelled `/mo`.
+   *
+   * 🔴 THIS PARAMETER DID NOT EXIST, AND TYPESCRIPT COULD NOT SAY SO. "Log a
+   * referral" passed it as `...(monthly > 0 ? { monetaryValue: monthly } : {})`,
+   * and a SPREAD bypasses excess-property checking — so the call compiled
+   * cleanly and the rep's estimated value would have been dropped on the floor
+   * with nothing on screen to show it. A green build proves compilation.
+   */
+  monetaryValue?: number;
   customFields?: { id: string; value: unknown }[];
 }): Promise<string> {
   const { locationId } = requireEnv();
@@ -3235,6 +3272,8 @@ export async function createOpportunity(o: {
     status: o.status || "open",
   };
   if (o.assignedTo) body.assignedTo = o.assignedTo;
+  if (typeof o.monetaryValue === "number" && Number.isFinite(o.monetaryValue))
+    body.monetaryValue = o.monetaryValue;
   if (o.source) body.source = o.source;
   if (o.customFields?.length) body.customFields = o.customFields;
   const res = await ghlSend<{ opportunity?: { id?: string }; id?: string }>(

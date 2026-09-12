@@ -37,34 +37,68 @@ export const ATTENDEE_FIELDS = {
 export const PARTNER_RECORD_TYPE = "Referral Partner";
 export const ATTENDEE_RECORD_TYPE = "Event Attendee";
 
-/**
- * 🔴 THE HOLE IN THE DATA MODEL. NOTHING SAYS WHICH EVENT AN ATTENDEE ATTENDED.
- *
- * The brief gives an attendee exactly four things — Record Type, Event Outcome,
- * Attendee Profile and a folder — and not one of them names an event. The same
- * is true of a client opportunity: `Referring Partner` points at a partner, and
- * nothing points at an event. So "who came to this event and what came of it"
- * is not derivable from the fields that exist, and NO id was supplied for one.
- *
- * These are the names the route looks for. Create ONE contact field under
- * "Event Attendance" holding the event opportunity's id — exactly the shape
- * `Referring Partner` already uses — and every per-event number starts working
- * with no code change. Until then the Events tab says so on screen.
- */
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 THE THREE JOINS. THESE ARE THE EXACT NAMES THE ROUTE LOOKS FOR.
+//
+// You asked which names to create so they match. The FIRST entry in each list
+// is canonical — create exactly that and everything below starts working with
+// no code change. The rest are tolerated aliases so a near-miss spelling does
+// not silently produce an empty Events tab.
+//
+//   1. Event Attended   CONTACT      ✅ already exists on the account
+//   2. Event Source     OPPORTUNITY  ← create: which event produced this client
+//   3. Event Host       OPPORTUNITY  ← create: which partner ran this event
+//
+// ⚠️ EVERY ONE IS **TEXT HOLDING AN ID**, exactly like `Referring Partner`.
+// Report 99 (a) settled why, and it pays off three more times here: an
+// opportunity's `cf` already rides along on the search this app makes anyway,
+// so each join costs ZERO extra calls. An association would cost one request
+// per record.
+//
+// ⚠️ `Event Source` IS YOUR SPELLING AND IT WINS. Report 101 proposed "Source
+// Event"; you wrote "Event Source". Yours is canonical — mine is kept below as
+// an alias so whichever exists is found, rather than the two of us each being
+// half right and the tab rendering nothing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Which event this attendee was met at. Holds the event opportunity's id. */
 export const ATTENDEE_EVENT_FIELD_NAMES = [
   "Event Attended",
-  "Event",
   "Attended Event",
+  "Event",
   "Event ID",
 ] as const;
 
-/** The same, on the opportunity: which event produced this client. */
+/** Which event produced this client. Holds the event opportunity's id. */
 export const OPP_EVENT_FIELD_NAMES = [
+  "Event Source",
   "Source Event",
-  "Event",
   "Referring Event",
-  "Event ID",
 ] as const;
+
+/**
+ * Which partner ran this event. Holds the partner CONTACT's id.
+ *
+ * Powers "Run by [ Riddle Hospital ]" on an event card and the whole "Events
+ * worked" section of the partner drawer. Absent → "No organisation linked",
+ * which is the brief's own wording for it.
+ */
+export const EVENT_HOST_FIELD_NAMES = [
+  "Event Host",
+  "Hosted By",
+  "Event Partner",
+  "Host",
+] as const;
+
+/**
+ * A touch's kind.
+ *
+ * ⚠️ The prototype's mock carries only `Visit` and `Call` (TOUCH_LOG:476) and
+ * the brief says "Type and note" without listing values. Fixed list rather than
+ * free text, for the same reason the categories are fixed: free text is how one
+ * channel ends up counted twice.
+ */
+export const TOUCH_TYPES = ["Call", "Visit", "Email", "Event", "Other"] as const;
 
 export const TIERS = ["A", "B", "C", "Prospect"] as const;
 export type Tier = (typeof TIERS)[number];
@@ -96,12 +130,17 @@ export const OUTCOMES = [
 export const LEGIT_LEAD = "Legit lead";
 
 /**
- * The Add-partner category list, from the prototype.
+ * 🔴 A FALLBACK ONLY — THE LIVE FIELD IS THE TRUTH.
  *
- * ⚠️ A SUGGESTION LIST, NOT THE TRUTH. The account's own `Partner Category`
- * options are what actually get written — the route matches by name and SKIPS a
- * value this account has no option for, saying which. Free text was the other
- * option and it is how one channel ends up counted twice.
+ * Settled: the dropdown reads `Partner Category`'s own options from
+ * GoHighLevel, so there is nothing to reconcile and editing the list in GHL
+ * changes the dashboard with no deploy. This array is used ONLY when the field
+ * has no options at all, which on a configured account never happens.
+ *
+ * ⚠️ SO DO NOT "FIX" THIS LIST TO MATCH THE ACCOUNT. It is not meant to match.
+ * Three lists existed (16 in the prototype, 17 in the brief, 19 on the live
+ * field) precisely because each was somebody's copy of another; a fourth copy
+ * kept in sync by hand is the bug, not the cure.
  */
 export const PARTNER_CATEGORIES = [
   "Hospital discharge",
@@ -232,6 +271,15 @@ export interface RawAttendee {
   eventId: string;
   outcome: string;
   profile: string;
+  /**
+   * GoHighLevel's `dateUpdated`, for the outcome dropdown's concurrency check.
+   *
+   * ⚠️ "" WHEN THE SEARCH DID NOT SEND ONE. The check then cannot run and the
+   * write proceeds — the same deliberate choice `OpportunityRecord.version`
+   * documents. Refusing every triage because a timestamp is missing would be
+   * worse than the last-write-wins behaviour we already have.
+   */
+  version: string;
 }
 
 export interface RawEvent {
@@ -242,6 +290,8 @@ export interface RawEvent {
   cost: number;
   venue: string;
   division: string;
+  /** Partner contact id from `Event Host`. "" = no organisation linked. */
+  host: string;
 }
 
 /**
@@ -329,6 +379,40 @@ export function eventKpis(events: RawEvent[], attendees: RawAttendee[]) {
     awaitingReview: attendees.filter((c) => !c.outcome).length,
     partnerProspects: attendees.filter((c) => c.outcome === "Referral partner prospect")
       .length,
+  };
+}
+
+/**
+ * THE DRAWER'S "EVENTS WORKED" — every event this partner ran, aggregated.
+ *
+ * ⚠️ NEEDS `Event Host`. With no host field the list is empty and the section
+ * does not render at all, which is the brief's own rule ("only when there are
+ * any") rather than a screen full of zeros.
+ */
+export function partnerEvents(
+  partnerId: string,
+  events: RawEvent[],
+  attendees: RawAttendee[],
+  referrals: RawReferral[],
+) {
+  const mine = events.filter((e) => e.host && e.host === partnerId);
+  const rows = mine.map((e) => ({ event: e, st: eventStats(e, attendees, referrals) }));
+  const met = rows.reduce((a, r) => a + r.st.met, 0);
+  const legit = rows.reduce((a, r) => a + r.st.legit, 0);
+  const clients = rows.reduce((a, r) => a + r.st.clients, 0);
+  const cost = mine.reduce((a, e) => a + e.cost, 0);
+  const revenue = rows.reduce((a, r) => a + r.st.revenue, 0);
+  return {
+    rows,
+    count: mine.length,
+    met,
+    legit,
+    clients,
+    cost,
+    revenue,
+    // Same null-not-zero rule as the per-event cpl: no legit leads means we
+    // cannot divide, not that the leads were free.
+    cpl: legit ? Math.round(cost / legit) : null,
   };
 }
 
