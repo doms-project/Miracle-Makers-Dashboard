@@ -106,6 +106,14 @@ const fake = http.createServer((req, res) => {
       if (MODE === "reject")
         return send(422, { message: "filters[0].field is not supported", traceId: "tr-1" });
       const want = j?.filters?.[0]?.value;
+      if (MODE === "unassigned" && want === "Referral Partner")
+        return send(200, {
+          contacts: [
+            { id: "p1", contactName: "Riddle Hospital", customFields: [{ id: RT, value: "Referral Partner" }] },
+            { id: "p2", contactName: "Main Line Chamber", customFields: [{ id: RT, value: "Referral Partner" }] },
+          ],
+          total: 2,
+        });
       if (MODE === "ignored")
         return send(200, { contacts: [{ id: "cX", contactName: "A Client", customFields: [{ id: RT, value: "Client" }] }], total: 1 });
       const rows =
@@ -235,7 +243,7 @@ await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const fakePort = fake.address().port;
 console.log(`fake GoHighLevel on :${fakePort}`);
 
-const PORT = 3502;
+const PORT = 3517;
 const dev = spawn("npx", ["next", "dev", "-p", String(PORT)], {
   env: {
     ...process.env,
@@ -485,6 +493,23 @@ console.log(
 );
 const cs = await call("?only=contacts&q=rid");
 console.log(`  only=contacts&q=rid → ${(cs.body.contacts || []).length} hit(s)`);
+
+console.log("\n─── 10 · THE LIVE SHAPE — TWO UNASSIGNED PARTNERS, NO REFERRALS ──");
+// Reproduces the reported account: 2 partners, BOTH unassigned, nothing
+// attributed. The question is whether the route withholds them.
+MODE = "unassigned";
+const live = await call("?touch=auto");
+console.log(`  HTTP ${live.status}`);
+console.log(`  viewer:   ${JSON.stringify(live.body.viewer)}`);
+console.log(
+  `  partners: ${JSON.stringify((live.body.partners || []).map((p) => [p.org, p.ownerId]))}`,
+);
+console.log(
+  `  ${(live.body.partners || []).length === 2 ? "ok  " : "FAIL"} BOTH unassigned partners are returned — the route withholds neither`,
+);
+console.log(
+  `  ${(live.body.partners || []).every((p) => p.ownerId === "") ? "ok  " : "FAIL"} both carry ownerId "" (unassigned), which "Mine" INCLUDES`,
+);
 
 dev.kill("SIGTERM");
 fake.close();

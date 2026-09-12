@@ -439,6 +439,37 @@ export default function ReferralsSection({
     (p) => !p.unknownTouch && !p.isOverdue && (p.overdueBy as number) < -DUE_SOON_DAYS,
   );
 
+  /**
+   * 🔴 WHICH FILTER IS HIDING THEM — BY NAME.
+   *
+   * "Showing 0 of 2 · Clear a filter, or widen the division above" is a guess
+   * dressed as an explanation. It reads like a filter the user set even when
+   * none is, so a rep seeing it concludes they have no partners — the exact
+   * silent-and-plausible failure this project keeps hunting.
+   *
+   * ⚠️ AND IF NOTHING IS ACTIVE, THAT IS A FAULT, NOT A FILTER. `rows` derives
+   * from `all` through these four tests and nothing else, so
+   * `all.length > 0 && rows.length === 0 && no active filter` is impossible by
+   * construction — which is precisely why it must be reported loudly rather
+   * than rendered as an ordinary empty state.
+   */
+  const activeFilters = useMemo(
+    () =>
+      [
+        tier !== "all" ? (tier === "Prospect" ? "Prospect only" : `Tier ${tier}`) : "",
+        cat !== "all" ? `Category “${cat}”` : "",
+        overdueOnly ? "Overdue only" : "",
+        search.trim() ? `Search “${search.trim()}”` : "",
+      ].filter(Boolean),
+    [tier, cat, overdueOnly, search],
+  );
+  const clearFilters = useCallback(() => {
+    setTier("all");
+    setCat("all");
+    setOverdueOnly(false);
+    setSearch("");
+  }, []);
+
   const cats = useMemo(() => {
     const s = new Set<string>();
     all.forEach((p) => p.cat && s.add(p.cat));
@@ -763,15 +794,53 @@ export default function ReferralsSection({
                       <tr>
                         <td colSpan={8}>
                           <div className="empty">
-                            <b>
-                              {all.length
-                                ? "No sources match"
-                                : "No referral partners yet"}
-                            </b>
-                            <br />
-                            {all.length
-                              ? "Clear a filter, or widen the division above."
-                              : 'A partner is a contact whose Record Type is "Referral Partner". Add one to start tracking it.'}
+                            {!all.length ? (
+                              <>
+                                <b>
+                                  {data?.partners.length
+                                    ? `No referral partners in ${divLabel(division)}`
+                                    : "No referral partners yet"}
+                                </b>
+                                <br />
+                                {data?.partners.length
+                                  ? `${data.partners.length} partner${data.partners.length === 1 ? " is" : "s are"} tracked, but none is in this division. Switch the heading above to All divisions.`
+                                  : 'A partner is a contact whose Record Type is "Referral Partner". Add one to start tracking it.'}
+                              </>
+                            ) : activeFilters.length ? (
+                              <>
+                                <b>
+                                  {all.length} partner
+                                  {all.length === 1 ? " is" : "s are"} hidden by{" "}
+                                  {activeFilters.length === 1 ? "a filter" : "filters"}
+                                </b>
+                                <br />
+                                {activeFilters.join(" · ")}
+                                <br />
+                                <button
+                                  type="button"
+                                  className="ibtn"
+                                  style={{ marginTop: 9 }}
+                                  onClick={clearFilters}
+                                >
+                                  Clear {activeFilters.length === 1 ? "it" : "them"}
+                                </button>
+                              </>
+                            ) : (
+                              // 🔴 IMPOSSIBLE BY CONSTRUCTION — so say so, loudly,
+                              // rather than blaming a filter the user did not set.
+                              <>
+                                <b>
+                                  Something is wrong — {all.length} partner
+                                  {all.length === 1 ? "" : "s"} loaded and none
+                                  rendered
+                                </b>
+                                <br />
+                                No filter is active, so this is a fault rather
+                                than a filter. Press Refresh; if it persists,
+                                report it — the partners were fetched, so nothing
+                                is lost.
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -832,6 +901,15 @@ export default function ReferralsSection({
               Revenue is the monthly recurring value of won opportunities
               attributed to the source. Showing {rows.length} of {all.length} ·
               total {moneyMo(rows.reduce((a, p) => a + p.revenue, 0))}
+              {activeFilters.length ? (
+                <>
+                  {" · filtered by "}
+                  {activeFilters.join(" · ")}{" "}
+                  <button type="button" className="linkbtn" onClick={clearFilters}>
+                    clear
+                  </button>
+                </>
+              ) : null}
             </p>
           </>
         ) : null}
