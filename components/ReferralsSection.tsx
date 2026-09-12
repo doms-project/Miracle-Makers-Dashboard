@@ -8,13 +8,16 @@ import {
   DUE_SOON_DAYS,
   DIVISIONS,
   TIERS,
+  OUTCOMES,
   PARTNER_CATEGORIES,
   inDivision,
   enrichPartner,
   eventStats,
   partnerKpis,
   eventKpis,
+  partnerEvents,
   danglingReferrals,
+  TOUCH_TYPES,
   type Division,
   type EnrichedPartner,
   type RawPartner,
@@ -39,12 +42,35 @@ import {
 
 type Tab = "sources" | "queue" | "events" | "overview";
 
+interface Owner {
+  id: string;
+  name: string;
+}
+interface PipelineChoice {
+  id: string;
+  name: string;
+  division: string;
+  stage: string;
+  stageId: string;
+}
+
 interface Payload {
   partners: RawPartner[];
   referrals: RawReferral[];
   events: RawEvent[];
   attendees: RawAttendee[];
+  // 🔴 EVERY OPTION LIST COMES FROM GOHIGHLEVEL. The dialogs used to hold their
+  // own copies; a dropdown offering a value the account has no option for
+  // produces a save that silently drops it.
+  owners: Owner[];
+  categoryOptions: string[];
+  tierOptions: string[];
+  divisionOptions: string[];
+  outcomeOptions: string[];
+  clientPipelines: PipelineChoice[];
   meta: {
+    eventHostField: string;
+    outcomeField: string;
     eventsPipelineConfigured: boolean;
     eventsPipelineName: string;
     attendeeEventField: string;
@@ -66,6 +92,21 @@ interface Payload {
 const NEVER = Number.MAX_SAFE_INTEGER;
 
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+
+/**
+ * 🔴 MONTHLY RECURRING, AND IT HAS TO SAY SO.
+ *
+ * `monetaryValue` on this account is a monthly figure — the rep types it at
+ * referral time. So a partner's "revenue" is the monthly recurring revenue from
+ * the cases they sent, NOT a lifetime total. Round 100's footnote said
+ * "lifetime won opportunity value", which was a plain misstatement of the unit:
+ * the same number labelled two different ways is how a forecast goes wrong by
+ * a factor of twelve.
+ *
+ * ⚠️ Event COST is a one-off — a booth is paid once — so it is never /mo, and
+ * neither is cost per lead. Only opportunity value carries the suffix.
+ */
+const moneyMo = (n: number) => `${money(n)}/mo`;
 const CADENCE_WORD: Record<string, string> = {
   A: "biweekly",
   B: "monthly",
@@ -127,6 +168,18 @@ export default function ReferralsSection({
   const [openId, setOpenId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [logFor, setLogFor] = useState<EnrichedPartner | null>(null);
+  const [refFor, setRefFor] = useState<{ partner: EnrichedPartner; eventId?: string } | null>(null);
+  const [metFor, setMetFor] = useState<RawEvent | null>(null);
+  /**
+   * 🔴 THE OUTCOME DROPDOWN'S FAILURE STATE, PER ATTENDEE.
+   *
+   * A `<select>` that writes on change shows the new value the instant you pick
+   * it, whether or not the write landed. So each row carries its own busy flag
+   * and its own error, and on failure the value is PUT BACK — never left on
+   * screen claiming something GoHighLevel does not have.
+   */
+  const [outBusy, setOutBusy] = useState<Record<string, boolean>>({});
+  const [outErr, setOutErr] = useState<Record<string, string>>({});
   const [moreBusy, setMoreBusy] = useState(false);
   const [moreNote, setMoreNote] = useState("");
 
@@ -209,6 +262,90 @@ export default function ReferralsSection({
       setMoreBusy(false);
     }
   }, [data, ssoBlob]);
+
+  /**
+   * Set one attendee's outcome. One PATCH, and it reverts itself if it fails.
+   *
+   * ⚠️ NO NEW WRITE PATH. /api/contacts/[id]/fields already exists, already
+   * re-derives the session server-side, and already carries `versionGuard` — so
+   * two people triaging the same event get a 409 instead of one silently
+   * overwriting the other. `updateContactCustomFields` sends ONLY the changed
+   * field (a partial customFields array UPDATES rather than replaces — verified
+   * live), so there is no read-modify-write that could blank a neighbouring
+   * field.
+   *
+   * Cost: 2 calls per change (the version read, then the write). Thirty
+   * attendees triaged is 60 requests against a budget of 100 per 10 seconds,
+   * spread over however many minutes a person takes — the rate limit is not the
+   * risk here. The silent failure was.
+   */
+  const setOutcome = useCallback(
+    async (a: RawAttendee, value: string) => {
+      const field = data?.meta.outcomeField;
+      if (!field) return;
+      const before = a.outcome;
+      setOutBusy((m) => ({ ...m, [a.id]: true }));
+      setOutErr((m) => ({ ...m, [a.id]: "" }));
+      // Optimistic, because a dropdown that does not move when you move it
+      // feels broken — but every path below either keeps it or puts it back.
+      setData((d) =>
+        d
+          ? {
+              ...d,
+              attendees: d.attendees.map((x) =>
+                x.id === a.id ? { ...x, outcome: value } : x,
+              ),
+            }
+          : d,
+      );
+      try {
+        const j = await apiFetch<{ version?: string }>(
+          `/api/contacts/${encodeURIComponent(a.id)}/fields`,
+          {
+            method: "PATCH",
+            ssoBlob,
+            body: JSON.stringify({
+              ssoKey: ssoBlob ?? undefined,
+              ...(a.version ? { expectedVersion: a.version } : {}),
+              fields: [{ id: field, value }],
+            }),
+          },
+        );
+        // Carry the new version forward, or the NEXT change on this row would
+        // send a stale one and 409 against itself.
+        setData((d) =>
+          d
+            ? {
+                ...d,
+                attendees: d.attendees.map((x) =>
+                  x.id === a.id ? { ...x, version: j.version || "" } : x,
+                ),
+              }
+            : d,
+        );
+      } catch (e) {
+        // 🔴 REVERT, AND NAME WHICH ONE. An error banner at the top of a list of
+        // thirty says something failed and not which person it was.
+        setData((d) =>
+          d
+            ? {
+                ...d,
+                attendees: d.attendees.map((x) =>
+                  x.id === a.id ? { ...x, outcome: before } : x,
+                ),
+              }
+            : d,
+        );
+        setOutErr((m) => ({
+          ...m,
+          [a.id]: e instanceof Error ? e.message : String(e),
+        }));
+      } finally {
+        setOutBusy((m) => ({ ...m, [a.id]: false }));
+      }
+    },
+    [data?.meta.outcomeField, ssoBlob],
+  );
 
   // ── the division cut. Everything below reads from here ───────────────────
   const all = useMemo<EnrichedPartner[]>(() => {
@@ -544,9 +681,20 @@ export default function ReferralsSection({
               <div className="rftw">
                 <table className="rftable">
                   <thead>
+                    {/* 🔴 EIGHT COLUMNS, DELIBERATELY — AND NOT THE PROTOTYPE'S
+                        SIX. The prototype squashes Category and Owner into a
+                        subtitle under the organisation name; §6 of the brief
+                        names that as a fault and says why. "Prototype wins" is
+                        for resolving silence, not for overriding a screen you
+                        have looked at and judged. Owner especially has to be a
+                        column: it is the answer to "who gets credit for this
+                        partner's business", which is the whole of question (a).
+                    */}
                     <tr>
                       <th onClick={() => sortBy("org")}>Organisation{caret("org")}</th>
+                      <th onClick={() => sortBy("cat")}>Category{caret("cat")}</th>
                       <th onClick={() => sortBy("tier")}>Tier{caret("tier")}</th>
+                      <th onClick={() => sortBy("owner")}>Owner{caret("owner")}</th>
                       <th className="num" onClick={() => sortBy("priority")}>
                         Last touch{caret("priority")}
                       </th>
@@ -557,14 +705,14 @@ export default function ReferralsSection({
                         Clients{caret("won")}
                       </th>
                       <th className="num" onClick={() => sortBy("revenue")}>
-                        Revenue{caret("revenue")}
+                        Revenue /mo{caret("revenue")}
                       </th>
                     </tr>
                   </thead>
                   <tbody>
                     {!rows.length ? (
                       <tr>
-                        <td colSpan={6}>
+                        <td colSpan={8}>
                           <div className="empty">
                             <b>
                               {all.length
@@ -583,14 +731,18 @@ export default function ReferralsSection({
                         <tr key={p.id} onClick={() => setOpenId(p.id)}>
                           <td>
                             <div className="rforg">{p.org}</div>
-                            <div className="rfsub2">
-                              {[p.cat, p.owner || "unassigned"]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </div>
+                            {p.email || p.phone ? (
+                              <div className="rfsub2">
+                                {[p.email, p.phone].filter(Boolean).join(" · ")}
+                              </div>
+                            ) : null}
                           </td>
+                          <td className="rfsub2">{p.cat || "—"}</td>
                           <td>
                             <TierBadge t={p.tier} />
+                          </td>
+                          <td className={p.owner ? "" : "rfunk"}>
+                            {p.owner || "unassigned"}
                           </td>
                           <td className="num">
                             {p.unknownTouch ? (
@@ -615,6 +767,7 @@ export default function ReferralsSection({
                           <td className="num">{p.won}</td>
                           <td className="num rfmoney">{money(p.revenue)}</td>
                         </tr>
+
                       ))
                     )}
                   </tbody>
@@ -622,9 +775,14 @@ export default function ReferralsSection({
               </div>
             </div>
             <p className="rffoot">
-              Revenue is lifetime won opportunity value attributed to the source.
-              Showing {rows.length} of {all.length} · total{" "}
-              {money(rows.reduce((a, p) => a + p.revenue, 0))}
+              {/* 🔴 THE UNIT WAS WRONG, NOT JUST VAGUE. This said "lifetime won
+                  opportunity value". `monetaryValue` is what the rep types as
+                  the estimated MONTHLY value, so the column is monthly
+                  recurring revenue — the same number described two ways is how
+                  a forecast ends up wrong by a factor of twelve. */}
+              Revenue is the monthly recurring value of won opportunities
+              attributed to the source. Showing {rows.length} of {all.length} ·
+              total {moneyMo(rows.reduce((a, p) => a + p.revenue, 0))}
             </p>
           </>
         ) : null}
@@ -773,11 +931,34 @@ export default function ReferralsSection({
                 {events.map((e) => {
                   const st = eventStats(e, data?.attendees || [], data?.referrals || []);
                   const good = st.cpl !== null && st.cpl <= 120;
+                  const host = e.host ? all.find((x) => x.id === e.host) : undefined;
                   return (
                     <div key={e.id} className="rfev">
                       <div className="hd">
                         <div>
                           <div className="nm">{e.name}</div>
+                          {/* ⚠️ "No organisation linked" IS THE BRIEF'S OWN
+                              WORDING, and it is also the honest one when the
+                              host field does not exist at all: a button naming
+                              a partner we cannot know would be an invention. */}
+                          {host ? (
+                            <div className="rfevhost">
+                              Run by{" "}
+                              <button
+                                type="button"
+                                className="rfhostbtn"
+                                onClick={() => setOpenId(host.id)}
+                              >
+                                {host.org}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="rfevnohost">
+                              {data?.meta.eventHostField
+                                ? "No organisation linked"
+                                : "No organisation linked — no Event Host field on this account"}
+                            </div>
+                          )}
                           <div className="rfevsub">
                             {[e.venue, e.stage, e.division || "no division"]
                               .filter(Boolean)
@@ -813,11 +994,73 @@ export default function ReferralsSection({
                           </div>
                         </div>
                         <div className="rfstat">
-                          <div className="l">Revenue</div>
+                          <div className="l">Revenue /mo</div>
                           <div className="v">
-                            {data?.meta.oppEventField ? money(st.revenue) : "—"}
+                            {data?.meta.oppEventField ? moneyMo(st.revenue) : "—"}
                           </div>
                         </div>
+                      </div>
+
+                      {/* 🔴 PEOPLE MET · SET AN OUTCOME. The dropdown writes
+                          immediately — no save button, because a rep triaging
+                          thirty people should not press save thirty times. */}
+                      <div className="rfmet">
+                        <div className="rfmethd">
+                          <span className="rfmetlbl">People met · set an outcome</span>
+                          <button
+                            type="button"
+                            className="ighost"
+                            onClick={() => setMetFor(e)}
+                          >
+                            Add person met
+                          </button>
+                        </div>
+                        {!data?.meta.attendeeEventField ? (
+                          <div className="rfdhint">
+                            Nobody can be attributed to this event until an{" "}
+                            <b>Event Attended</b> field exists on the contact —
+                            see above. Anyone added here is still created; they
+                            just cannot be counted against this event yet.
+                          </div>
+                        ) : !st.contacts.length ? (
+                          <div className="rfdhint">
+                            No one recorded for this event yet.
+                          </div>
+                        ) : (
+                          st.contacts.map((c) => (
+                            <div className="rfoc" key={c.id}>
+                              <div className="n">
+                                <span className="rfocname">{c.name}</span>
+                                {c.profile ? (
+                                  <div className="pf">{c.profile}</div>
+                                ) : null}
+                                {outErr[c.id] ? (
+                                  // ⚠️ ON THE ROW, NAMING THE PERSON. A banner
+                                  // at the top of thirty rows says something
+                                  // failed and not which one.
+                                  <div className="rfocerr">
+                                    Not saved for {c.name} — {outErr[c.id]}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <select
+                                value={c.outcome}
+                                disabled={!!outBusy[c.id]}
+                                onChange={(ev) => void setOutcome(c, ev.target.value)}
+                              >
+                                <option value="">Not set</option>
+                                {(data?.outcomeOptions.length
+                                  ? data.outcomeOptions
+                                  : [...OUTCOMES]
+                                ).map((o) => (
+                                  <option key={o} value={o}>
+                                    {o}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ))
+                        )}
                       </div>
                     </div>
                   );
@@ -890,7 +1133,11 @@ export default function ReferralsSection({
                 value={kpis.totalSources}
                 desc={`${kpis.activeSources} referred in 90 days`}
               />
-              <Kpi label="Revenue attributed" value={money(kpis.revenue)} desc="lifetime won" />
+              <Kpi
+                label="Revenue attributed"
+                value={moneyMo(kpis.revenue)}
+                desc="monthly recurring, from won cases"
+              />
               <Kpi
                 label="Touches overdue"
                 value={kpis.overdue}
@@ -919,14 +1166,14 @@ export default function ReferralsSection({
               </div>
               <div className="rfbox">
                 <h3>Top sources by revenue</h3>
-                <p className="rfcap">Lifetime won value.</p>
+                <p className="rfcap">Monthly recurring value of won cases.</p>
                 <Bars
                   rows={[...all]
                     .sort((a, b) => b.revenue - a.revenue)
                     .slice(0, 8)
                     .map((p) => ({ k: p.org, v: p.revenue }))
                     .filter((r) => r.v > 0)}
-                  fmt={money}
+                  fmt={moneyMo}
                   emptyText="No won revenue attributed yet."
                 />
               </div>
@@ -955,7 +1202,7 @@ export default function ReferralsSection({
                       <div className="nm">{p.org}</div>
                       <div className="dd">
                         {p.won} client{p.won === 1 ? "" : "s"} won ·{" "}
-                        {money(p.revenue)} lifetime · owner{" "}
+                        {moneyMo(p.revenue)} · owner{" "}
                         {p.owner || "unassigned"}
                       </div>
                     </div>
@@ -976,8 +1223,34 @@ export default function ReferralsSection({
           p={open}
           ssoBlob={ssoBlob}
           referrals={data?.referrals || []}
+          events={data?.events || []}
+          attendees={data?.attendees || []}
+          hostField={data?.meta.eventHostField || ""}
           onClose={() => setOpenId(null)}
           onLog={() => setLogFor(open)}
+          onLogReferral={() => setRefFor({ partner: open })}
+        />
+      ) : null}
+
+      {refFor ? (
+        <LogReferralDialog
+          ssoBlob={ssoBlob}
+          partner={refFor.partner}
+          eventId={refFor.eventId}
+          pipelines={data?.clientPipelines || []}
+          onClose={() => setRefFor(null)}
+          onLogged={() => void load()}
+        />
+      ) : null}
+
+      {metFor ? (
+        <AddAttendeeDialog
+          ssoBlob={ssoBlob}
+          event={metFor}
+          outcomes={data?.outcomeOptions.length ? data.outcomeOptions : [...OUTCOMES]}
+          linkable={!!data?.meta.attendeeEventField}
+          onClose={() => setMetFor(null)}
+          onAdded={() => void load()}
         />
       ) : null}
 
@@ -985,6 +1258,10 @@ export default function ReferralsSection({
         <AddPartnerDialog
           ssoBlob={ssoBlob}
           division={division}
+          owners={data?.owners || []}
+          categories={data?.categoryOptions.length ? data.categoryOptions : [...PARTNER_CATEGORIES]}
+          tiers={data?.tierOptions.length ? data.tierOptions : [...TIERS]}
+          divisions={data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]}
           onClose={() => setAddOpen(false)}
           onAdded={() => void load()}
         />
@@ -1057,14 +1334,23 @@ function PartnerDrawer({
   p,
   ssoBlob,
   referrals,
+  events,
+  attendees,
+  hostField,
   onClose,
   onLog,
+  onLogReferral,
 }: {
   p: EnrichedPartner;
   ssoBlob: string | null;
   referrals: RawReferral[];
+  events: RawEvent[];
+  attendees: RawAttendee[];
+  /** "" when no Event Host field exists — "Events worked" then cannot exist. */
+  hostField: string;
   onClose: () => void;
   onLog: () => void;
+  onLogReferral: () => void;
 }) {
   const [notes, setNotes] = useState<
     { id: string; when: string; who: string; txt: string }[] | null
@@ -1114,6 +1400,21 @@ function PartnerDrawer({
           ) : null}
         </div>
         <div className="rfdbd">
+          {/* 🔴 KEPT VERBATIM FROM THE PROTOTYPE, AND IT GOES FIRST.
+              It states where PHI lives, and this dashboard's whole design rests
+              on it: nothing here is a copy of a care record. It is also true of
+              the code — the partner's name, email and phone on this panel came
+              from GoHighLevel on this request and are not stored anywhere by
+              this application. */}
+          <div className="rfdsec">
+            <div className="rflive">
+              <b>Contact details load live from GoHighLevel.</b> Names, phone
+              numbers and care notes are never written to this
+              application&apos;s database. This panel is where that boundary
+              sits.
+            </div>
+          </div>
+
           <div className="rfdsec">
             <h4>Performance</h4>
             <dl className="rfkv">
@@ -1129,7 +1430,7 @@ function PartnerDrawer({
               <dt>Win rate</dt>
               <dd>{p.refs ? `${p.winRate}%` : "—"}</dd>
               <dt>Revenue attributed</dt>
-              <dd>{money(p.revenue)}</dd>
+              <dd>{moneyMo(p.revenue)}</dd>
               <dt>Last referral</dt>
               <dd>{p.lastRefAgo === null ? "never" : `${p.lastRefAgo} days ago`}</dd>
             </dl>
@@ -1160,15 +1461,22 @@ function PartnerDrawer({
               </dd>
             </dl>
             <div className="rfdacts">
-              <button type="button" className="ibtn" onClick={onLog}>
+              {/* 🔴 "Log a referral" FIRST — it is the one that moves revenue.
+                  Round 100 had only "Log a touch", which made the drawer a
+                  place to record effort and never result. */}
+              <button type="button" className="cgsave" onClick={onLogReferral}>
+                Log a referral
+              </button>
+              <button type="button" className="ighost" onClick={onLog}>
                 Log a touch
               </button>
             </div>
+            {/* ⚠️ THE SENTENCE STAYS, WORD FOR WORD. It is the distinction the
+                whole screen turns on, and with two buttons side by side it is
+                now doing real work rather than explaining an absence. */}
             <div className="rfdhint">
               A touch is outreach you did. A referral is business they sent. Only
-              the second one moves the revenue column — and a referral is
-              recorded by setting <b>Referring Partner</b> on the client&apos;s
-              opportunity, not here.
+              the second one moves the revenue column.
             </div>
           </div>
 
@@ -1195,6 +1503,60 @@ function PartnerDrawer({
             )}
           </div>
 
+          {/* ⚠️ ONLY WHEN THERE ARE ANY — the brief's own rule. With no
+              `Event Host` field on the account there can be none, so the
+              section does not render at all rather than showing six zeros. */}
+          {(() => {
+            const ev = partnerEvents(p.id, events, attendees, referrals);
+            // ⚠️ NOTHING, RATHER THAN SIX ZEROS — the brief's "only when there
+            // are any". But say WHY when the reason is structural: an admin
+            // wondering where this section went deserves better than silence.
+            if (!ev.count)
+              return hostField ? null : (
+                <div className="rfdsec">
+                  <h4>Events worked</h4>
+                  <div className="rfdhint">
+                    Not available: no <b>Event Host</b> field exists on the
+                    opportunity, so nothing records which partner ran an event.
+                  </div>
+                </div>
+              );
+            const cplGood = ev.cpl !== null && ev.cpl <= 120;
+            return (
+              <div className="rfdsec">
+                <h4>Events worked</h4>
+                <dl className="rfkv">
+                  <dt>Events attended</dt>
+                  <dd>{ev.count}</dd>
+                  <dt>People met</dt>
+                  <dd>{ev.met}</dd>
+                  <dt>Legitimate leads</dt>
+                  <dd>{ev.legit}</dd>
+                  <dt>Clients won</dt>
+                  <dd>{ev.clients}</dd>
+                  <dt>Spent on these events</dt>
+                  <dd>{money(ev.cost)}</dd>
+                  <dt>Cost per legit lead</dt>
+                  <dd className={ev.cpl === null ? "" : cplGood ? "rfgreen" : "rfred"}>
+                    {ev.cpl === null ? "—" : money(ev.cpl)}
+                  </dd>
+                </dl>
+                <div className="rftl" style={{ marginTop: 13 }}>
+                  {ev.rows.map(({ event, st }) => (
+                    <div className="rftli" key={event.id}>
+                      <div className="d">{event.date || "no date"}</div>
+                      <div className="t">{event.name}</div>
+                      <div className="n">
+                        {st.met} met · {st.legit} legit · {st.clients} client
+                        {st.clients === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="rfdsec">
             <h4>Attributed opportunities</h4>
             {!mine.length ? (
@@ -1214,7 +1576,7 @@ function PartnerDrawer({
                       }
                     >
                       {o.status}
-                      {o.value ? ` · ${money(o.value)}` : ""}
+                      {o.value ? ` · ${moneyMo(o.value)}` : ""}
                     </dd>
                   </div>
                 ))}
@@ -1249,6 +1611,7 @@ function LogTouchDialog({
   onLogged: (days: number) => void;
 }) {
   const [text, setText] = useState("");
+  const [touchType, setTouchType] = useState<string>(TOUCH_TYPES[0]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState("");
@@ -1263,6 +1626,7 @@ function LogTouchDialog({
           ssoKey: ssoBlob ?? undefined,
           action: "log-touch",
           contactId: partner.id,
+          touchType,
           text: text.trim(),
         }),
       });
@@ -1286,6 +1650,20 @@ function LogTouchDialog({
           </button>
         </div>
         <div className="movebody">
+          <div className="irow">
+            <label htmlFor="rf-ttype">Type</label>
+            <select
+              id="rf-ttype"
+              value={touchType}
+              onChange={(e) => setTouchType(e.target.value)}
+            >
+              {TOUCH_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="irow">
             <label htmlFor="rf-touch">What happened</label>
             <textarea
@@ -1334,12 +1712,21 @@ function LogTouchDialog({
 function AddPartnerDialog({
   ssoBlob,
   division,
+  owners,
+  categories,
+  tiers,
+  divisions,
   onClose,
   onAdded,
 }: {
   ssoBlob: string | null;
   /** Pre-filled from the heading, because that is the division you are in. */
   division: Division;
+  owners: Owner[];
+  /** 🔴 THE LIVE FIELD'S OWN OPTIONS. See lib/referrals.ts PARTNER_CATEGORIES. */
+  categories: string[];
+  tiers: string[];
+  divisions: string[];
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -1351,6 +1738,7 @@ function AddPartnerDialog({
   const [cat, setCat] = useState("");
   const [tier, setTier] = useState<string>("Prospect");
   const [div, setDiv] = useState<string>(division);
+  const [owner, setOwner] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -1376,6 +1764,7 @@ function AddPartnerDialog({
             category: cat,
             tier,
             division: div,
+            owner,
             notes: notes.trim(),
           }),
         },
@@ -1414,8 +1803,9 @@ function AddPartnerDialog({
             />
           </div>
           <div className="rfdhint">
-            The organisation is the partner. A named person is optional — it goes
-            on the same contact, so the row still reads as the organisation.
+            The organisation, not the individual. Individuals move jobs; the
+            relationship usually stays. A named contact is optional and goes on
+            the same record, so the row still reads as the organisation.
           </div>
           <div className="irow">
             <label htmlFor="rf-first">Contact first name</label>
@@ -1443,7 +1833,7 @@ function AddPartnerDialog({
             <label htmlFor="rf-cat">Category</label>
             <select id="rf-cat" value={cat} onChange={(e) => setCat(e.target.value)}>
               <option value="">Not set</option>
-              {PARTNER_CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -1451,9 +1841,10 @@ function AddPartnerDialog({
             </select>
             <label htmlFor="rf-tier">Tier</label>
             <select id="rf-tier" value={tier} onChange={(e) => setTier(e.target.value)}>
-              {TIERS.map((t) => (
+              {tiers.map((t) => (
                 <option key={t} value={t}>
-                  {t} · every {CADENCE[t]} days
+                  {t}
+                  {CADENCE[t] ? ` · every ${CADENCE[t]} days` : ""}
                 </option>
               ))}
             </select>
@@ -1461,12 +1852,33 @@ function AddPartnerDialog({
           <div className="irow">
             <label htmlFor="rf-div">Division</label>
             <select id="rf-div" value={div} onChange={(e) => setDiv(e.target.value)}>
-              {DIVISIONS.map((d) => (
+              {divisions.map((d) => (
                 <option key={d} value={d}>
                   {d === "All" ? "All — appears under every division" : d}
                 </option>
               ))}
             </select>
+            <label htmlFor="rf-owner">Owner</label>
+            <select
+              id="rf-owner"
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+            >
+              <option value="">Unassigned</option>
+              {owners.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* ⚠️ THE BRIEF'S OWN HINTS, KEPT. Each one answers a question the
+              field otherwise invites: why an organisation and not a person, what
+              a tier actually does, and what an owner controls. */}
+          <div className="rfdhint">
+            <b>Tier sets the contact cadence.</b> A is every 14 days, B monthly,
+            C quarterly, prospect every 21. <b>Owner</b> is who holds this
+            relationship — it drives who sees it and whose queue it lands in.
           </div>
           <div className="irow">
             <label htmlFor="rf-notes">Notes</label>
@@ -1497,6 +1909,402 @@ function AddPartnerDialog({
             disabled={busy || !org.trim()}
           >
             {busy ? "Saving…" : "Add partner"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LOG A REFERRAL — 🔴 THIS ONE CREATES AN OPPORTUNITY.
+//
+// TWO WRITES, not three: `createOpportunity` accepts `customFields`, so the
+// attribution is in the SAME request that creates the case. There is no state
+// in which an opportunity exists unattributed.
+//
+// ⚠️ PASS-THROUGH ONLY. The name and phone go straight to GoHighLevel and are
+// never written to this dashboard's database. Only the returned record id and
+// the attribution are kept here — the same boundary the drawer states.
+// ---------------------------------------------------------------------------
+function LogReferralDialog({
+  ssoBlob,
+  partner,
+  eventId,
+  pipelines,
+  onClose,
+  onLogged,
+}: {
+  ssoBlob: string | null;
+  partner: EnrichedPartner;
+  /** Set when the referral came from an event card. */
+  eventId?: string;
+  pipelines: PipelineChoice[];
+  onClose: () => void;
+  onLogged: () => void;
+}) {
+  const [firstName, setFirst] = useState("");
+  const [lastName, setLast] = useState("");
+  const [phone, setPhone] = useState("");
+  const [monthly, setMonthly] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [done, setDone] = useState("");
+
+  // 🔴 THE DESTINATION IS RESOLVED, NOT HARDCODED, AND IT IS SHOWN BEFORE IT IS
+  // COMMITTED. The brief says "creates an opportunity in Private Pay"; §9
+  // forbids hardcoded pipeline ids. So the default is matched from the
+  // PARTNER'S OWN DIVISION — an ODP partner's referral defaulting into Private
+  // Pay is either deliberate or a mis-file, and nothing on screen would say
+  // which — falling back to Private Pay by name when there is no match.
+  const suggested = useMemo(() => {
+    const byDivision = pipelines.find(
+      (p) => p.division.toLowerCase() === (partner.division || "").toLowerCase(),
+    );
+    return (
+      byDivision || pipelines.find((p) => /private\s*pay/i.test(p.name)) || pipelines[0]
+    );
+  }, [pipelines, partner.division]);
+  const [pipelineId, setPipelineId] = useState(suggested?.id || "");
+  const dest = pipelines.find((p) => p.id === pipelineId) || suggested;
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    setDone("");
+    try {
+      const j = await apiFetch<{ pipelineName: string; stageName: string; noteSaved: boolean }>(
+        "/api/referrals",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ssoKey: ssoBlob ?? undefined,
+            action: "log-referral",
+            partnerId: partner.id,
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: phone.trim(),
+            monthlyValue: Number(monthly) || 0,
+            pipelineId,
+            division: partner.division,
+            ...(eventId ? { eventId } : {}),
+            text: text.trim(),
+          }),
+        },
+      );
+      setDone(
+        `Filed in ${j.pipelineName}${j.stageName ? ` · ${j.stageName}` : ""}, attributed to ${partner.org}.` +
+          (j.noteSaved === false ? " The note could not be saved — add it on the record." : ""),
+      );
+      onLogged();
+      setTimeout(onClose, 1800);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="previewmodal" onClick={onClose}>
+      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+        <div className="previewhead">
+          <span className="previewname">Log a referral · from {partner.org}</span>
+          <button className="x" type="button" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="movebody">
+          <div className="rflive">
+            <b>Pass-through only.</b> The name and phone go straight to
+            GoHighLevel and are never written to this dashboard&apos;s database.
+            Only the returned record id and the attribution are kept here.
+          </div>
+
+          <div className="irow">
+            <label htmlFor="rr-first">Client or family name</label>
+            <input id="rr-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+            <label htmlFor="rr-last">Last name</label>
+            <input id="rr-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+          </div>
+          <div className="irow">
+            <label htmlFor="rr-phone">Phone</label>
+            <input
+              id="rr-phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="(484) 555-0142"
+            />
+          </div>
+
+          {/* 🔴 A REP INPUT, NOT A READ-OUT — AND IT IS GIVEN WEIGHT.
+              The brief is explicit: the rep types the estimated monthly value at
+              referral time, and it must not be presented as a read-only system
+              number. It is stored in the native monetaryValue, which is why
+              every figure in this view is labelled /mo. */}
+          <div className="rfvalue">
+            <label htmlFor="rr-value">Estimated monthly value</label>
+            <div className="rfvaluebox">
+              <span className="rfvaluecur">$</span>
+              <input
+                id="rr-value"
+                type="number"
+                min={0}
+                step={100}
+                value={monthly}
+                onChange={(e) => setMonthly(e.target.value)}
+                placeholder="6000"
+              />
+              <span className="rfvaluemo">/mo</span>
+            </div>
+            <div className="rfdhint">
+              A rough figure is fine. It can be corrected when the assessment is
+              done.
+            </div>
+          </div>
+
+          <div className="irow">
+            <label htmlFor="rr-note">What was said</label>
+            <textarea
+              id="rr-note"
+              rows={3}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Discharge planner called. Mother post-fall, needs 20h a week starting next Monday."
+            />
+          </div>
+
+          <div className="irow">
+            <label htmlFor="rr-pipe">File in</label>
+            <select
+              id="rr-pipe"
+              value={pipelineId}
+              onChange={(e) => setPipelineId(e.target.value)}
+            >
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.stage ? ` · ${p.stage}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="rfdhint">
+            {dest ? (
+              <>
+                Creates an opportunity in <b>{dest.name}</b>
+                {dest.stage ? ` at ${dest.stage}` : ""}, with {partner.org}{" "}
+                attributed as the source.{" "}
+                {partner.division
+                  ? `Defaulted from this partner's division (${partner.division}).`
+                  : "This partner has no division set, so the default is Private Pay."}
+              </>
+            ) : (
+              "There is no client pipeline configured to file this in."
+            )}
+          </div>
+          {/* ⚠️ WHO WORKS IT IS NOT ASKED, AND THAT IS THE ANSWER TO (a).
+              Option (b): the pipeline's notification workflow decides. One place
+              owns that decision and it already works, so this form sends no
+              owner at all. Credit for the business is a different question, and
+              it is already answered by the partner's own Owner column. */}
+          <div className="rfdhint">
+            Who works the case is decided by the pipeline&apos;s notification
+            workflow in GoHighLevel, not here. {partner.org} is credited as the
+            source either way.
+          </div>
+
+          {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
+          {done ? <div className="savemsg ok">{done}</div> : null}
+        </div>
+        <div className="moveacts">
+          <button type="button" className="ighost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="cgsave"
+            onClick={() => void save()}
+            disabled={busy || !firstName.trim() || !dest}
+          >
+            {busy ? "Saving…" : "Log referral"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ADD SOMEONE YOU MET
+//
+// 🔴 A FIRST NAME OR A PHONE IS REQUIRED. The brief's three fields (profile,
+// outcome, note) would have created a contact with no identifying detail:
+// GoHighLevel may refuse it, and if it does not, the record is UNDEDUPABLE —
+// the same person met at two events becomes two contacts for ever.
+//
+// ⚠️ BULK IMPORT IS THE REAL ANSWER for an expo where 34 people were met. This
+// form is for the one you remember afterwards, and it says so.
+// ---------------------------------------------------------------------------
+function AddAttendeeDialog({
+  ssoBlob,
+  event,
+  outcomes,
+  linkable,
+  onClose,
+  onAdded,
+}: {
+  ssoBlob: string | null;
+  event: RawEvent;
+  outcomes: string[];
+  /** False when no Event Attended field exists — they cannot be attributed. */
+  linkable: boolean;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [firstName, setFirst] = useState("");
+  const [lastName, setLast] = useState("");
+  const [phone, setPhone] = useState("");
+  const [profile, setProfile] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [done, setDone] = useState("");
+
+  const canSave = !!(firstName.trim() || phone.trim()) && !busy;
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    setDone("");
+    try {
+      const j = await apiFetch<{ skipped?: string[]; noteSaved: boolean }>("/api/referrals", {
+        method: "POST",
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          action: "add-attendee",
+          eventId: event.id,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim(),
+          profile: profile.trim(),
+          outcome,
+          text: text.trim(),
+        }),
+      });
+      setDone(
+        j.skipped?.length
+          ? `Added. Not saved on this account: ${j.skipped.join("; ")}.`
+          : "Added.",
+      );
+      onAdded();
+      setTimeout(onClose, j.skipped?.length ? 3200 : 1200);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="previewmodal" onClick={onClose}>
+      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+        <div className="previewhead">
+          <span className="previewname">Add someone you met · {event.name}</span>
+          <button className="x" type="button" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="movebody">
+          <div className="rfdhint">
+            <b>Bulk import is the real answer here.</b> For an expo where thirty
+            people were met, import the list. This form is for the one you
+            remember afterwards.
+          </div>
+
+          {/* 🔴 THE IDENTITY REQUIREMENT, AND WHY IT IS NOT OPTIONAL. */}
+          <div className="irow">
+            <label htmlFor="ra-first">First name</label>
+            <input id="ra-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+            <label htmlFor="ra-last">Last name</label>
+            <input id="ra-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+          </div>
+          <div className="irow">
+            <label htmlFor="ra-phone">Phone</label>
+            <input
+              id="ra-phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+          </div>
+          <div className="rfdhint">
+            A first name <b>or</b> a phone number is required. Without one there
+            is no way to recognise this person the next time they are met, and
+            they would be added a second time instead.
+          </div>
+
+          <div className="irow">
+            <label htmlFor="ra-prof">Who they were</label>
+            <input
+              id="ra-prof"
+              value={profile}
+              onChange={(e) => setProfile(e.target.value)}
+              placeholder="Adult daughter, mother in Springfield"
+            />
+          </div>
+          <div className="irow">
+            <label htmlFor="ra-out">Outcome</label>
+            <select id="ra-out" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+              <option value="">Not set</option>
+              {outcomes.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="rfdhint">
+            This is the countable field. Set it now while you remember, or the
+            event can never be scored.
+          </div>
+
+          <div className="irow">
+            <label htmlFor="ra-note">Note</label>
+            <textarea
+              id="ra-note"
+              rows={4}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={"MET:\nSITUATION:\nNEXT STEP:"}
+            />
+          </div>
+
+          {!linkable ? (
+            <div className="rfdhint">
+              ⚠️ They will be created, but <b>not linked to this event</b>: no{" "}
+              <b>Event Attended</b> field exists on the contact yet, so nothing
+              can record which event they were met at.
+            </div>
+          ) : null}
+
+          {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
+          {done ? <div className="savemsg ok">{done}</div> : null}
+        </div>
+        <div className="moveacts">
+          <button type="button" className="ighost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="cgsave"
+            onClick={() => void save()}
+            disabled={!canSave}
+          >
+            {busy ? "Saving…" : "Add person"}
           </button>
         </div>
       </div>

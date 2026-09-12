@@ -1263,3 +1263,52 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    that actually needs an answer. */
 .pfinert{margin:-6px 0 14px;font-size:11.5px;line-height:1.6;color:var(--ink-3);}
 .pfinertwhich{color:var(--ink-2);}
+
+/* ── Referrals, round 103 — the drawer's boundary note, the event host button,
+   the per-attendee outcome control, and the referral value input. ── */
+
+/* The PHI boundary. Stated, not styled as a warning: it is how the system is
+   designed, not a problem with it. */
+.rflive{background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:8px;
+  padding:10px 12px;font-size:12px;line-height:1.6;color:var(--ink-2)}
+.rflive b{color:var(--plum-deep)}
+.movebody .rflive{margin-bottom:13px}
+
+.rfevhost{font-size:12px;color:var(--ink-2);margin-top:3px}
+.rfevnohost{font-size:12px;color:var(--ink-3);margin-top:3px}
+/* A partner's name inside an event card is a WAY IN, so it looks like one. */
+.rfhostbtn{background:none;border:0;padding:0;font:inherit;font-size:12px;font-weight:600;
+  color:var(--plum);cursor:pointer;text-decoration:underline;
+  text-decoration-color:var(--plum-line);text-underline-offset:3px}
+.rfhostbtn:hover{text-decoration-color:var(--plum)}
+
+.rfmet{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.rfmethd{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-bottom:9px}
+.rfmetlbl{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3)}
+.rfoc{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding:8px 0;border-bottom:1px solid var(--line-soft)}
+.rfoc:last-child{border-bottom:0}
+.rfoc .n{flex:1;min-width:0}
+.rfocname{font-size:12.5px;font-weight:600;color:var(--ink)}
+.rfoc .pf{font-size:11.5px;color:var(--ink-3);margin-top:2px;line-height:1.5}
+/* ⚠️ ON THE ROW, NAMING THE PERSON — a banner above thirty rows says something
+   failed and not which one. */
+.rfocerr{font-size:11.5px;color:var(--blk);margin-top:4px;line-height:1.5}
+.rfoc select{flex:0 0 auto;max-width:190px;padding:5px 8px;border:1px solid var(--line);
+  border-radius:7px;background:var(--bg);font:inherit;font-size:12px;color:var(--ink)}
+.rfoc select:disabled{opacity:.55;cursor:progress}
+
+/* 🔴 A REP INPUT WITH WEIGHT, NOT A THIN BOX AMONG FOUR OTHERS. The brief is
+   explicit that the estimated monthly value is typed by the rep and must not
+   read as a system number. */
+.rfvalue{margin:13px 0;padding:12px 13px;background:var(--canvas);border-radius:9px}
+.rfvalue > label{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-2);margin-bottom:7px}
+.rfvaluebox{display:flex;align-items:center;gap:7px}
+.rfvaluecur{font-size:22px;font-weight:700;color:var(--ink-3)}
+.rfvaluebox input{flex:0 1 170px;min-width:0;padding:8px 11px;border:1px solid var(--line);
+  border-radius:8px;background:var(--bg);font:inherit;font-size:22px;font-weight:800;
+  letter-spacing:-.02em;color:var(--ink)}
+.rfvaluemo{font-size:14px;font-weight:700;color:var(--ink-3)}
+.rfvalue .rfdhint{margin-top:7px}

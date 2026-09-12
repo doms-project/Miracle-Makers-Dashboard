@@ -4,6 +4,7 @@ import {
   getEditableFieldDefs,
   getOltlOpportunities,
   upsertContact,
+  createOpportunity,
   latestContactNoteAt,
   listContactNotes,
   addContactNote,
@@ -14,6 +15,8 @@ import {
   GhlError,
 } from "@/lib/ghl";
 import { mapLimit } from "@/lib/concurrency";
+import { divisionLabel } from "@/lib/division";
+import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
 import type { ApiError } from "@/lib/types";
@@ -26,6 +29,7 @@ import {
   REFERRING_PARTNER_FIELD,
   ATTENDEE_EVENT_FIELD_NAMES,
   OPP_EVENT_FIELD_NAMES,
+  EVENT_HOST_FIELD_NAMES,
   type RawPartner,
   type RawReferral,
   type RawEvent,
@@ -94,7 +98,7 @@ async function resolveTouches(
 
 interface Body {
   ssoKey?: string;
-  action?: "add-partner" | "log-touch";
+  action?: "add-partner" | "log-touch" | "log-referral" | "add-attendee";
   contactId?: string;
   firstName?: string;
   lastName?: string;
@@ -105,8 +109,20 @@ interface Body {
   tier?: string;
   division?: string;
   notes?: string;
-  /** log-touch */
+  /** add-partner: the contact's owner — who holds this relationship. */
+  owner?: string;
+  /** log-touch: Call · Visit · Email · Event · Other, plus the note. */
+  touchType?: string;
   text?: string;
+  /** log-referral */
+  partnerId?: string;
+  pipelineId?: string;
+  monthlyValue?: number;
+  /** log-referral · add-attendee — the event this came from, when known. */
+  eventId?: string;
+  /** add-attendee */
+  profile?: string;
+  outcome?: string;
 }
 
 /**
@@ -206,6 +222,17 @@ export async function GET(request: Request) {
       // Until then the Events tab says what is missing and shows what it can.
       const attendeeEventField = anyOf(contactDefs, ATTENDEE_EVENT_FIELD_NAMES);
       const oppEventField = anyOf(oppDefs, OPP_EVENT_FIELD_NAMES);
+      const eventHostField = anyOf(oppDefs, EVENT_HOST_FIELD_NAMES);
+
+      // 🔴 THE OPTION LISTS COME FROM GOHIGHLEVEL, NOT FROM THIS CODEBASE.
+      // Settled in round 101: three copies of the category list existed (16 in
+      // the prototype, 17 in the brief, 19 on the live field) because each was
+      // somebody's transcription of another. Reading the field's own options
+      // removes the reconciliation problem rather than solving it once.
+      const optionsOf = (
+        defs: { id: string; name: string; options?: string[] }[],
+        name: string,
+      ) => defs.find((d) => norm(d.name) === norm(name))?.options || [];
 
       // ── one partner's touch history, for the drawer ────────────────────────
       // ⚠️ TWO PROVEN CALLS AND NOT THE UNVERIFIED ONE. Checking the id against
@@ -325,6 +352,7 @@ export async function GET(request: Request) {
               cost: Number(r.cf?.[evCost] ?? 0) || 0,
               venue: String(r.cf?.[evVenue] ?? ""),
               division: String(r.cf?.[evDiv] ?? ""),
+              host: eventHostField ? String(r.cf?.[eventHostField] ?? "").trim() : "",
             }))
         : [];
 
@@ -334,6 +362,7 @@ export async function GET(request: Request) {
         eventId: attendeeEventField ? c.fields[attendeeEventField] || "" : "",
         outcome: c.fields[F.outcome] || "",
         profile: c.fields[F.profile] || "",
+        version: c.version,
       }));
 
       return NextResponse.json(
@@ -342,6 +371,28 @@ export async function GET(request: Request) {
           referrals,
           events,
           attendees,
+          // ── everything the WRITE forms need, resolved once, server-side ────
+          // ⚠️ The dialogs used to carry their own copies of these lists. A
+          // dropdown offering a value the account has no option for produces a
+          // save that silently drops it, which is how a partner ends up with no
+          // category and nobody notices.
+          owners: [...users.entries()].map(([id, name]) => ({ id, name })),
+          categoryOptions: optionsOf(contactDefs, PARTNER_FIELDS.category.name),
+          tierOptions: optionsOf(contactDefs, PARTNER_FIELDS.tier.name),
+          divisionOptions: optionsOf(contactDefs, PARTNER_FIELDS.division.name),
+          outcomeOptions: optionsOf(contactDefs, ATTENDEE_FIELDS.outcome.name),
+          // Where "Log a referral" may file a case. 🔴 The Events pipeline is
+          // EXCLUDED: an event is not a client, and offering it would let a
+          // referral be filed as one.
+          clientPipelines: (await getSelectedPipelines("client"))
+            .filter((p) => p.id !== evPipe?.id)
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              division: divisionLabel(p.name),
+              stage: p.stages?.[0]?.name || "",
+              stageId: p.stages?.[0]?.id || "",
+            })),
           // ── what this answer does NOT know, said out loud ──────────────────
           meta: {
             eventsPipelineConfigured: !!evPipe,
@@ -349,6 +400,9 @@ export async function GET(request: Request) {
             /** "" when no field links an attendee to an event — see above. */
             attendeeEventField,
             oppEventField,
+            eventHostField,
+            /** The contact field id the outcome dropdown PATCHes. */
+            outcomeField: F.outcome,
             // ⚠️ `want`, NOT `asked`. The route-proof run reported
             // "touchAsked: 0, touchResolved: 2" on a touch=auto load, because
             // `asked` is only the EXPLICIT touchFor list and auto fills none of
@@ -435,6 +489,246 @@ export async function POST(request: Request) {
         });
       }
 
+      // ── log a referral ─────────────────────────────────────────────────────
+      // 🔴 TWO WRITES, NOT THREE — and that is what removes the failure window
+      // the brief asked about. `createOpportunity` already accepts
+      // `customFields`, so the attribution rides on the SAME request that
+      // creates the opportunity. There is no state in which an opportunity
+      // exists unattributed, because there is no separate attribution write.
+      //
+      // ⚠️ NO `assignedTo`. Option (b), settled: the pipeline's notification
+      // workflow decides who works it, one place owns that, and it already
+      // works. Owning the partner and working the case are different questions.
+      if (body.action === "log-referral") {
+        const partnerId = (body.partnerId || "").trim();
+        const who = `${(body.firstName || "").trim()} ${(body.lastName || "").trim()}`.trim();
+        if (!partnerId)
+          return NextResponse.json(
+            { error: "A referral needs the partner who sent it.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        if (!who)
+          return NextResponse.json(
+            { error: "A referral needs the client or family's name.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+
+        const pipelines = await getSelectedPipelines("client");
+        const evPipe = await eventsPipeline();
+        const choices = pipelines.filter((p) => p.id !== evPipe?.id);
+        // 🔴 RESOLVED, NEVER HARDCODED. The brief says "creates an opportunity
+        // in Private Pay"; section 9 forbids hardcoded pipeline ids. So the
+        // destination is the one the CALLER picked, and the fallback is matched
+        // by divisionLabel() — the same derivation the whole app uses.
+        const dest =
+          choices.find((p) => p.id === (body.pipelineId || "").trim()) ||
+          choices.find(
+            (p) => norm(divisionLabel(p.name)) === norm((body.division || "Private Pay").trim()),
+          ) ||
+          choices.find((p) => /private\s*pay/i.test(p.name));
+        // 🔴 TWO DIFFERENT FAILURES, AND ONE MESSAGE WAS LYING ABOUT BOTH.
+        //
+        // This said "There is no client pipeline to file this referral in" for
+        // BOTH cases. The route-proof run hit it with an account that had an
+        // OLTL pipeline and no Private Pay one — so the dashboard refused the
+        // referral while telling the user there was nowhere to put it, with a
+        // perfectly good pipeline sitting right there. Say which it is.
+        if (!dest)
+          return NextResponse.json(
+            choices.length
+              ? {
+                  error: "Choose where to file this referral.",
+                  detail: `Nothing was created. No client pipeline matches ${body.division ? `the partner's division (${body.division})` : "Private Pay"}, so the destination has to be picked: ${choices.map((p) => p.name).join(", ")}.`,
+                  status: 409,
+                }
+              : {
+                  error: "There is no client pipeline to file this referral in.",
+                  detail:
+                    "Nothing was created. Give a pipeline client scope in Admin → Pipelines, then log the referral.",
+                  status: 409,
+                },
+            { status: 409 },
+          );
+        const stageId = dest.stages?.[0]?.id || "";
+        if (!stageId)
+          return NextResponse.json(
+            {
+              error: `"${dest.name}" has no stages.`,
+              detail: "Nothing was created. Add a stage in GoHighLevel, then log the referral.",
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+
+        // WRITE 1 — the client's contact.
+        const contact = await upsertContact({
+          firstName: (body.firstName || "").trim(),
+          lastName: (body.lastName || "").trim(),
+          name: who,
+          ...(body.phone ? { phone: body.phone.trim() } : {}),
+          ...(body.email ? { email: body.email.trim() } : {}),
+        });
+        if (!contact.id)
+          return NextResponse.json(
+            {
+              error: "Could not create the client's contact.",
+              detail: "GoHighLevel returned no contact id. Nothing else was created.",
+              status: 502,
+            } as ApiError,
+            { status: 502 },
+          );
+
+        // WRITE 2 — the opportunity, WITH the attribution in the same request.
+        const oppDefs = await getEditableFieldDefs("opportunity");
+        const refId =
+          oppDefs.find((d) => norm(d.name) === norm("Referring Partner"))?.id ||
+          REFERRING_PARTNER_FIELD;
+        const cf: { id: string; value: unknown }[] = [{ id: refId, value: partnerId }];
+        // The event that produced this client, when the form was opened from one.
+        const evField = oppDefs.find((d) =>
+          OPP_EVENT_FIELD_NAMES.some((n) => norm(d.name) === norm(n)),
+        )?.id;
+        if (evField && (body.eventId || "").trim())
+          cf.push({ id: evField, value: (body.eventId || "").trim() });
+
+        // ⚠️ MONTHLY RECURRING, AND IT IS A REP'S INPUT. The brief is explicit:
+        // the rep types the estimated monthly value at referral time. Stored in
+        // the native monetaryValue, which every figure in this view labels /mo.
+        const monthly = Number(body.monthlyValue ?? 0) || 0;
+        let oppId = "";
+        try {
+          oppId = await createOpportunity({
+            pipelineId: dest.id,
+            stageId,
+            contactId: contact.id,
+            name: who,
+            ...(monthly > 0 ? { monetaryValue: monthly } : {}),
+            customFields: cf,
+          });
+        } catch (e) {
+          // 🔴 SAY WHAT SURVIVED — round 94's rule, and the partner's stake in
+          // it is the part a generic message would lose.
+          const detail = e instanceof GhlError ? await explainGhlError(e) : String(e);
+          return NextResponse.json(
+            {
+              error: "The referral was not recorded.",
+              detail: `${detail} — The client's contact WAS created, so nothing is lost and they are not a duplicate. But the referral is not recorded, and this partner will not be credited for it until it is. Check "${dest.name}" in GoHighLevel before retrying, so you don't create a second contact.`,
+              survived: "The client's contact was created.",
+              status: 502,
+            } as ApiError & { survived: string },
+            { status: 502 },
+          );
+        }
+        if (!oppId)
+          return NextResponse.json(
+            {
+              error: "The referral was not recorded.",
+              detail: `GoHighLevel returned no opportunity id. The client's contact WAS created — they are not a duplicate — but the referral is not recorded and this partner will not be credited for it. Check "${dest.name}" in GoHighLevel before retrying.`,
+              survived: "The client's contact was created.",
+              status: 502,
+            } as ApiError & { survived: string },
+            { status: 502 },
+          );
+
+        // The note is a third write, and it is DELIBERATELY last and optional:
+        // losing "what was said" must never lose the referral itself.
+        let noteSaved = true;
+        if ((body.text || "").trim())
+          try {
+            await addContactNote(contact.id, (body.text || "").trim(), session?.userId || "");
+          } catch {
+            noteSaved = false;
+          }
+
+        await emit(
+          "opportunity.created",
+          { actor: { userId: session?.userId || "" }, opportunityId: oppId, contactId: contact.id },
+          { pipelineId: dest.id, pipelineName: dest.name, stageId, name: who, source: "Referral" },
+        );
+        return NextResponse.json({
+          ok: true,
+          contactId: contact.id,
+          opportunityId: oppId,
+          pipelineName: dest.name,
+          stageName: dest.stages?.[0]?.name || "",
+          monthly,
+          noteSaved,
+        });
+      }
+
+      // ── add someone met at an event ────────────────────────────────────────
+      // 🔴 A FIRST NAME OR A PHONE IS REQUIRED, AND THAT IS YOUR CALL, NOT MINE
+      // TO SOFTEN. The brief's three fields (profile, outcome, note) would have
+      // created a contact with no identifying detail at all: GoHighLevel may
+      // refuse it outright, and if it does not, the record is UNDEDUPABLE — the
+      // same person met at two events becomes two contacts for ever, and bulk
+      // import multiplies that by however many were met.
+      if (body.action === "add-attendee") {
+        const firstName = (body.firstName || "").trim();
+        const phone = (body.phone || "").trim();
+        if (!firstName && !phone)
+          return NextResponse.json(
+            {
+              error: "An attendee needs a first name or a phone number.",
+              detail:
+                "Without one there is no way to recognise this person the next time they are met, and they would be added a second time instead.",
+              status: 400,
+            } as ApiError,
+            { status: 400 },
+          );
+        const defs = await getEditableFieldDefs("contact");
+        const cf: { id: string; value: unknown }[] = [];
+        const missing: string[] = [];
+        const put = (name: string, fallbackId: string, value: string) => {
+          if (!value) return;
+          const def =
+            defs.find((d) => norm(d.name) === norm(name)) ||
+            defs.find((d) => d.id === fallbackId);
+          if (!def) {
+            missing.push(name);
+            return;
+          }
+          const opts = def.options || [];
+          const m = opts.length ? opts.find((o) => norm(o) === norm(value)) : value;
+          if (m) cf.push({ id: def.id, value: m });
+          else missing.push(`${name} has no option "${value}"`);
+        };
+        put(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id, ATTENDEE_RECORD_TYPE);
+        put(ATTENDEE_FIELDS.profile.name, ATTENDEE_FIELDS.profile.id, (body.profile || "").trim());
+        put(ATTENDEE_FIELDS.outcome.name, ATTENDEE_FIELDS.outcome.id, (body.outcome || "").trim());
+        // The join. Without the field the attendee is still created — they are
+        // simply not attributable to the event, which the Events tab already
+        // says out loud rather than implying nobody came.
+        const evDef = defs.find((d) =>
+          ATTENDEE_EVENT_FIELD_NAMES.some((n) => norm(d.name) === norm(n)),
+        );
+        if (evDef && (body.eventId || "").trim())
+          cf.push({ id: evDef.id, value: (body.eventId || "").trim() });
+        else if (!evDef) missing.push("the field linking an attendee to an event");
+
+        const c = await upsertContact({
+          firstName,
+          lastName: (body.lastName || "").trim(),
+          name: `${firstName} ${(body.lastName || "").trim()}`.trim() || phone,
+          ...(phone ? { phone } : {}),
+          ...(body.email ? { email: body.email.trim() } : {}),
+          ...(cf.length ? { customFields: cf } : {}),
+        });
+        if (!c.id)
+          return NextResponse.json(
+            { error: "GoHighLevel returned no contact id.", status: 502 } as ApiError,
+            { status: 502 },
+          );
+        let noteSaved = true;
+        if ((body.text || "").trim())
+          try {
+            await addContactNote(c.id, (body.text || "").trim(), session?.userId || "");
+          } catch {
+            noteSaved = false;
+          }
+        return NextResponse.json({ ok: true, contactId: c.id, skipped: missing, noteSaved });
+      }
+
       // ── add a partner ──────────────────────────────────────────────────────
       if (body.action === "add-partner") {
         const org = (body.org || "").trim();
@@ -487,6 +781,9 @@ export async function POST(request: Request) {
           name: org,
           ...(body.email ? { email: body.email.trim() } : {}),
           ...(body.phone ? { phone: body.phone.trim() } : {}),
+          // 🔴 THE OWNER IS THE POINT OF THE FIELD, per the brief: "who holds
+          // this relationship. Drives who sees it and whose queue it lands in."
+          ...(body.owner ? { assignedTo: body.owner.trim() } : {}),
           ...(cf.length ? { customFields: cf } : {}),
         });
         if (!c.id)

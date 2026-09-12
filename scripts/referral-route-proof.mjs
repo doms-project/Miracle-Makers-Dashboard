@@ -27,6 +27,7 @@ const EVDATE = "F_EVDATE";
 const EVCOST = "F_EVCOST";
 
 let MODE = "good";
+let FAIL_OPP = false;
 const sent = [];
 
 const now = Date.now();
@@ -53,12 +54,16 @@ const fake = http.createServer((req, res) => {
               { id: REF, name: "Referring Partner", dataType: "TEXT" },
               { id: EVDATE, name: "Event Date", dataType: "DATE" },
               { id: EVCOST, name: "Event Cost", dataType: "MONETORY" },
+              { id: "F_EVHOST", name: "Event Host", dataType: "TEXT" },
             ]
           : [
               { id: RT, name: "Record Type", dataType: "SINGLE_OPTIONS", picklistOptions: ["Referral Partner", "Event Attendee", "Client"] },
               { id: CAT, name: "Partner Category", dataType: "SINGLE_OPTIONS", picklistOptions: ["Hospital discharge"] },
               { id: TIER, name: "Partner Tier", dataType: "SINGLE_OPTIONS", picklistOptions: ["A", "B", "C", "Prospect"] },
               { id: DIV, name: "Partner Division", dataType: "SINGLE_OPTIONS", picklistOptions: ["Private Pay", "OLTL", "ODP", "All"] },
+              { id: "F_PROF", name: "Attendee Profile", dataType: "TEXT" },
+              { id: "F_OUT", name: "Event Outcome", dataType: "SINGLE_OPTIONS", picklistOptions: ["Legit lead", "Warm interest", "Referral partner prospect", "Not qualified", "Noise"] },
+              { id: "F_EVATT", name: "Event Attended", dataType: "TEXT" },
             ],
       });
     }
@@ -159,6 +164,7 @@ const fake = http.createServer((req, res) => {
               customFields: [
                 { id: EVDATE, fieldValue: "2026-05-04" },
                 { id: EVCOST, fieldValue: 1800 },
+                { id: "F_EVHOST", fieldValue: "p1" },
               ],
             },
           ],
@@ -202,8 +208,18 @@ const fake = http.createServer((req, res) => {
       });
     }
 
+    // ── the write paths ──────────────────────────────────────────────────
+    if (u === "/contacts/upsert")
+      return send(200, { contact: { id: "newc1" }, new: true });
+    if (u === "/opportunities/" || u === "/opportunities") {
+      if (FAIL_OPP) return send(422, { message: "pipeline is archived" });
+      return send(200, { opportunity: { id: "newo1" } });
+    }
+
     // ── notes: p1 was touched 40 days ago; p2 has NEVER been touched ──────
     if (/^\/contacts\/[^/]+\/notes/.test(u)) {
+      if (req.method === "POST")
+        return send(200, { note: { id: "nn1", dateAdded: new Date().toISOString() } });
       const id = u.split("/")[2];
       return send(200, {
         notes: id === "p1" ? [{ id: "n1", body: "Called", userId: "u1", dateAdded: iso(40) }] : [],
@@ -218,7 +234,7 @@ await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const fakePort = fake.address().port;
 console.log(`fake GoHighLevel on :${fakePort}`);
 
-const PORT = 3412;
+const PORT = 3471;
 const dev = spawn("npx", ["next", "dev", "-p", String(PORT)], {
   env: {
     ...process.env,
@@ -298,6 +314,91 @@ console.log(`HTTP ${ign.status}`);
 console.log(`  error:  ${ign.body.error}`);
 console.log(`  detail: ${String(ign.body.detail).slice(0, 300)}`);
 console.log(`  partners returned: ${ign.body.partners ? ign.body.partners.length : "none — it refused rather than showing a wrong list"}`);
+
+console.log("\n─── 4 · LOG A REFERRAL — TWO WRITES, ATTRIBUTION ON THE CREATE ───");
+MODE = "good";
+sent.length = 0;
+const post = async (body) => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/referrals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(50000),
+  });
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+};
+const ref = await post({
+  action: "log-referral",
+  partnerId: "p1",
+  firstName: "Ada",
+  lastName: "Smith",
+  phone: "4845550142",
+  monthlyValue: 6000,
+  division: "OLTL",
+  text: "Discharge planner called.",
+});
+console.log(`HTTP ${ref.status} · ${JSON.stringify(ref.body)}`);
+const oppPost = sent.filter((x) => x.url === "/opportunities/" || x.url === "/opportunities");
+const upserts = sent.filter((x) => x.url === "/contacts/upsert");
+console.log(`  writes: ${upserts.length} contact upsert · ${oppPost.length} opportunity create`);
+console.log(`  the opportunity body actually sent:\n  ${JSON.stringify(oppPost[0]?.body)}`);
+const ob = oppPost[0]?.body || {};
+console.log(
+  `  ${ob.monetaryValue === 6000 ? "ok  " : "FAIL"} monetaryValue reached GoHighLevel (the spread bug)`,
+);
+console.log(
+  `  ${(ob.customFields || []).some((f) => f.value === "p1") ? "ok  " : "FAIL"} Referring Partner is in the SAME request`,
+);
+console.log(
+  `  ${oppPost.length === 1 && upserts.length === 1 ? "ok  " : "FAIL"} exactly two writes, not three`,
+);
+
+console.log("\n─── 5 · THE SECOND WRITE FAILS — SAY WHAT SURVIVED ───────────");
+FAIL_OPP = true;
+const bad2 = await post({
+  action: "log-referral",
+  partnerId: "p1",
+  firstName: "Bob",
+  monthlyValue: 3000,
+  division: "OLTL", // so a destination RESOLVES and write 2 is the one that fails
+});
+console.log(`HTTP ${bad2.status}`);
+console.log(`  error:    ${bad2.body.error}`);
+console.log(`  survived: ${bad2.body.survived}`);
+console.log(`  detail:   ${String(bad2.body.detail).slice(0, 220)}`);
+FAIL_OPP = false;
+
+console.log("\n─── 5b · NO PIPELINE MATCHES — AND THE OLD MESSAGE WAS FALSE ──");
+const nomatch = await post({
+  action: "log-referral",
+  partnerId: "p1",
+  firstName: "Cara",
+  division: "Private Pay", // the fake account has only an OLTL pipeline
+});
+console.log(`HTTP ${nomatch.status}`);
+console.log(`  error:  ${nomatch.body.error}`);
+console.log(`  detail: ${String(nomatch.body.detail).slice(0, 200)}`);
+
+console.log("\n─── 6 · ADD PERSON MET — NAMELESS IS REFUSED ─────────────────");
+const nameless = await post({ action: "add-attendee", eventId: "ev1", profile: "Adult daughter" });
+console.log(`HTTP ${nameless.status} · ${nameless.body.error}`);
+console.log(`  detail: ${String(nameless.body.detail).slice(0, 180)}`);
+const named = await post({
+  action: "add-attendee",
+  eventId: "ev1",
+  firstName: "Dana",
+  profile: "Adult daughter, mother in Springfield",
+  outcome: "Legit lead",
+});
+console.log(`  with a first name → HTTP ${named.status} · ${JSON.stringify(named.body)}`);
+
+console.log("\n─── 7 · THE EVENT HOST JOIN ──────────────────────────────────");
+const ev = await call("?touch=auto");
+const e0 = (ev.body.events || [])[0] || {};
+console.log(`  event "${e0.name}" host=${JSON.stringify(e0.host)} (expects "p1")`);
+console.log(`  meta.eventHostField=${JSON.stringify(ev.body.meta?.eventHostField)}`);
+console.log(`  categoryOptions from the live field: ${JSON.stringify(ev.body.categoryOptions)}`);
+console.log(`  clientPipelines offered: ${JSON.stringify((ev.body.clientPipelines || []).map((p) => p.name))}`);
 
 dev.kill("SIGTERM");
 fake.close();
