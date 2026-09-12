@@ -234,7 +234,7 @@ await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const fakePort = fake.address().port;
 console.log(`fake GoHighLevel on :${fakePort}`);
 
-const PORT = 3471;
+const PORT = 3488;
 const dev = spawn("npx", ["next", "dev", "-p", String(PORT)], {
   env: {
     ...process.env,
@@ -399,6 +399,31 @@ console.log(`  event "${e0.name}" host=${JSON.stringify(e0.host)} (expects "p1")
 console.log(`  meta.eventHostField=${JSON.stringify(ev.body.meta?.eventHostField)}`);
 console.log(`  categoryOptions from the live field: ${JSON.stringify(ev.body.categoryOptions)}`);
 console.log(`  clientPipelines offered: ${JSON.stringify((ev.body.clientPipelines || []).map((p) => p.name))}`);
+
+console.log("\n─── 8 · WHOLE TOTALS, FILTERED DRILL-DOWN (tagging wired) ────");
+MODE = "good";
+const vis = await call("?touch=auto");
+const rr = vis.body.referrals || [];
+console.log(`  viewer: ${JSON.stringify(vis.body.viewer)}`);
+console.log(`  referrals: ${rr.map((o) => `${o.id}:${o.visible}`).join(" · ")}`);
+console.log(
+  `  ${rr.length && rr.every((o) => typeof o.visible === "boolean") ? "ok  " : "FAIL"} every referral carries a visible flag`,
+);
+// ⚠️ NO SSO SECRET IN THIS ENVIRONMENT, so ssoConfigured() is false, there is no
+// viewer to scope to, and the documented posture is "everything visible". That
+// is what this asserts. The NON-ADMIN filtered branch is applyAccess itself —
+// existing, unchanged code, quoted in analysis 105 — and it cannot be exercised
+// here without a real encrypted SSO blob.
+console.log(
+  `  ${vis.body.viewer?.isAdmin === true ? "ok  " : "FAIL"} no SSO configured → isAdmin, nothing withheld (documented posture)`,
+);
+console.log(
+  `  ${rr.every((o) => o.visible === true) ? "ok  " : "FAIL"} so every referral is visible`,
+);
+const p1 = (vis.body.partners || []).find((x) => x.id === "p1");
+console.log(
+  `  ${p1 && p1.ownerId === "u1" ? "ok  " : "FAIL"} partner carries ownerId for the Mine/All filter (got ${JSON.stringify(p1?.ownerId)})`,
+);
 
 dev.kill("SIGTERM");
 fake.close();

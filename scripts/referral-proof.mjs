@@ -119,6 +119,54 @@ console.log("\nA · THE ARITHMETIC");
   ok("one referral points at a deleted partner", n === 1, n);
 }
 
+// ── A2 · WHOLE NUMBERS, FILTERED DETAIL ────────────────────────────────────
+//
+// 🔴 THE POINT OF THE `visible` FLAG IS THAT THE ARITHMETIC IGNORES IT. If any
+// aggregate honoured it, two people would see different win rates under one
+// label — the exact failure the design exists to avoid. So this asserts that
+// every total is unchanged by the flag, and that only `shown` moves.
+console.log("\nA2 · WHOLE TOTALS, FILTERED DRILL-DOWN");
+{
+  const P = { id: "s1", org: "Riddle", email: "", phone: "", cat: "Hospital discharge",
+              tier: "A", division: "OLTL", owner: "Chris", ownerId: "u1", notes: "",
+              lastTouch: 20 };
+  const refs = [
+    { id: "o1", partnerId: "s1", status: "won",  value: 6000, ago: 10,  visible: true  },
+    { id: "o2", partnerId: "s1", status: "won",  value: 3400, ago: 40,  visible: false },
+    { id: "o3", partnerId: "s1", status: "lost", value: 0,    ago: 80,  visible: false },
+    { id: "o4", partnerId: "s1", status: "open", value: 5000, ago: 200, visible: true  },
+  ];
+  const whole = R.enrichPartner(P, refs);
+  // The same partner as seen by someone who may see everything.
+  const asAdmin = R.enrichPartner(P, refs.map((o) => ({ ...o, visible: true })));
+
+  ok("refs is whole", whole.refs === 4, whole.refs);
+  ok("won is whole (2, one of them withheld)", whole.won === 2, whole.won);
+  ok("revenue is whole ($9,400/mo)", whole.revenue === 9400, whole.revenue);
+  ok("winRate is whole (2/4 = 50%)", whole.winRate === 50, whole.winRate);
+  // ago 10, 40 and 80 are all inside 90 — only o4 (200) is outside it.
+  ok("refs90 is whole (3 of 4 inside 90 days)", whole.refs90 === 3, whole.refs90);
+  ok("lastRefAgo is whole", whole.lastRefAgo === 10, whole.lastRefAgo);
+  ok(
+    "🔴 EVERY aggregate is identical for a viewer who sees all of them",
+    ["refs", "refs90", "won", "revenue", "winRate", "lastRefAgo", "priority", "cadence"].every(
+      (k) => whole[k] === asAdmin[k],
+    ),
+    ["restricted", whole, "admin", asAdmin],
+  );
+  ok("only `shown` differs — 2 of 4", whole.shown === 2 && asAdmin.shown === 4,
+     [whole.shown, asAdmin.shown]);
+
+  // And the KPI roll-up across partners is equally blind to the flag.
+  const kWhole = R.partnerKpis([whole]);
+  const kAdmin = R.partnerKpis([asAdmin]);
+  ok(
+    "partnerKpis ignores the flag too",
+    JSON.stringify(kWhole) === JSON.stringify(kAdmin),
+    [kWhole, kAdmin],
+  );
+}
+
 // ── B. ghlSearchContacts against a fake GoHighLevel ────────────────────────
 console.log("\nB · ghlSearchContacts — A REAL REQUEST, A REAL REPLY");
 
