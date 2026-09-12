@@ -12,7 +12,7 @@ import {
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
-import { FOLDERS, FOLDER_LABELS, folderKeyById } from "@/lib/fieldFolders";
+import { FOLDERS, FOLDER_LABELS, folderKeyById, fieldIsAlwaysIntercepted } from "@/lib/fieldFolders";
 import { divisionLabel } from "@/lib/division";
 import { checkFieldName, type KnownField } from "@/lib/fieldNaming";
 import {
@@ -93,6 +93,15 @@ function sectionsFromDefs(
      * Intent Form and there was no way to tell which.
      */
     named: boolean;
+    /**
+     * 🔴 TRUE WHEN TICKING THIS FOLDER WOULD DO NOTHING AT ALL.
+     *
+     * Every field in it is hidden or system-info, and both of those are
+     * intercepted in groupFieldsForPipeline BEFORE any folder rule runs. So the
+     * checkbox is not "a bad idea here" — it is inert, and an inert control is
+     * worse than an absent one because nothing tells you it did nothing.
+     */
+    inert: boolean;
     fields: { id: string; name: string }[];
   }[] = [];
   for (const [folderId, fields] of byFolder) {
@@ -118,6 +127,7 @@ function sectionsFromDefs(
           .map((f) => f.name)
           .join(", ")}${fields.length > 2 ? "…" : ""}`,
       named,
+      inert: fields.every((f) => fieldIsAlwaysIntercepted(f.name)),
       fields: fields
         .map((f) => ({ id: f.id, name: f.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -173,7 +183,16 @@ export async function GET(request: Request) {
         })),
         config,
         stale,
-        sections,
+        // 🔴 THE INERT ONES ARE NOT OFFERED. Round 33 hid Reassign Followers as
+        // "a string of meaningless ids that reads as a fault"; the folder it
+        // lives in holds nothing else a pipeline can show, so a checkbox for it
+        // can only mislead. Split out rather than deleted — the screen says how
+        // many were withheld and why, so the count on screen still reconciles
+        // with what is in GoHighLevel.
+        sections: sections.filter((s) => !s.inert),
+        inertSections: sections
+          .filter((s) => s.inert)
+          .map((s) => ({ id: s.id, key: s.key, fields: s.fields })),
         // ITEM 6 — ⚠️ DETECTION IS FREE, as you said: every def already carries
         // parentId and the defs are already cached, so a folder no pipeline has
         // been given and no name is held for costs no extra call to find.
@@ -181,6 +200,9 @@ export async function GET(request: Request) {
           .filter(
             (sec) =>
               !sec.named &&
+              // ⚠️ AND NOT INERT. Asking an admin to type a name for a folder
+              // that enables nothing is asking for work with no effect.
+              !sec.inert &&
               !Object.values(config.pipelines).some((e) => e.folders.includes(sec.key)),
           )
           .map((sec) => ({ id: sec.id, key: sec.key, fields: sec.fields })),
@@ -268,6 +290,33 @@ export async function POST(request: Request) {
         // 🔴 ALWAYS seeded:true on a save. Writing false would arm the seed to
         // overwrite this very save on the next read.
         const current = await getPipelineConfig();
+        // 🔴 THE SCREEN CANNOT UNTICK WHAT IT WAS NEVER SHOWN.
+        //
+        // `next.pipelines` is the whole map as the screen holds it, so anything
+        // the screen does not render is absent from it — and absent here means
+        // REMOVED. Inert folders are now filtered out of `sections`, so without
+        // this an admin pressing Save would silently drop a stored selection
+        // they never saw and never chose to change.
+        //
+        // ⚠️ Narrow on purpose: ONLY tokens for folders that are inert today.
+        // Carrying every unrendered token would make deliberate removal
+        // impossible, which is the opposite mistake.
+        const inertTokens = new Set(
+          sectionsFromDefs(
+            await getEditableFieldDefs("opportunity"),
+            current.folderNames,
+          )
+            .filter((s) => s.inert)
+            .map((s) => s.key),
+        );
+        if (inertTokens.size)
+          for (const [pid, entry] of Object.entries(next.pipelines)) {
+            const kept = (current.pipelines[pid]?.folders || []).filter((t) =>
+              inertTokens.has(t),
+            );
+            for (const t of kept)
+              if (!entry.folders.includes(t)) entry.folders.push(t);
+          }
         const saved = await savePipelineConfig({
           seeded: true,
           pipelines: next.pipelines,

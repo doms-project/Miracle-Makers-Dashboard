@@ -35,6 +35,8 @@ interface Payload {
   known: KnownField[];
   sharedKey: string;
   unconfiguredFolders: Unconfigured[];
+  /** Folders withheld from the checklist because ticking them does nothing. */
+  inertSections?: Unconfigured[];
 }
 
 // ⚠️ SUGGEST TWO, DO NOT IMPOSE. Every pipeline on this account starts with an
@@ -280,6 +282,8 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     );
   if (!data) return <div className="isec"><div className="imeta">Loading…</div></div>;
 
+  const inert = data.inertSections || [];
+
   const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
     <div className={`pfsec ${s.named ? "" : "unnamed"}`} key={s.key}>
       <label className="pfseclab">
@@ -301,12 +305,21 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
         {s.named ? (
           <span className="pfsecname">{s.label}</span>
         ) : (
-          <span className="pfsecunk">
-            <span className="pfsecunk-t">Unnamed section</span>
-            <span className="pfsecunk-f">
-              {s.fields.slice(0, 3).map((f) => f.name).join(", ")}
-              {s.fields.length > 3 ? "…" : ""}
+          // 🔴 ONE LINE, LIKE EVERY OTHER ROW. This used to be a marker, a field
+          // list AND an id on its own line — three lines each, four of them on a
+          // screen of sixteen, so the rows that say "we do not know what this is"
+          // took more space than the twelve that are fine.
+          //
+          // ⚠️ THE FIELD NAMES DID NOT GO MISSING, THEY WENT WHERE THEY BELONG.
+          // Every row already has a chevron that reveals its fields; an unnamed
+          // row needed no second mechanism for the same information, and showing
+          // two of them with an ellipsis was never enough to recognise a folder
+          // by anyway. Expanded, it shows ALL of them.
+          <span className="pfsecunk" title="GoHighLevel does not share folder names with this dashboard">
+            <span className="pfsecunk-w" aria-hidden="true">
+              ⚠
             </span>
+            <span className="pfsecunk-t">Unnamed section</span>
           </span>
         )}
       </label>
@@ -327,21 +340,24 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
       >
         {expanded.has(s.key) ? "▴" : "▾"}
       </button>
-      {/* 🔴 AN UNNAMEABLE SECTION CANNOT BE TICKED WITH CONFIDENCE. Two rows
-          both reading "Section" — one of them the Website Intent Form — is a
-          checklist that cannot be used. GoHighLevel gives no name for a folder
-          it did not author, so the row shows its id, and the label falls back
-          to the fields inside it. */}
-      {!s.named ? (
-        <div className="pfsecid" title="This folder has no name in GoHighLevel">
-          <code>{s.id}</code>
-        </div>
-      ) : null}
       {/* ⚠️ EXPANDING LISTS THE FIELDS. Ticking a name alone is a guess —
           "More Details" and "Client Details" mean nothing until you see
-          inside. The defs are already cached, so this costs no call. */}
+          inside. The defs are already cached, so this costs no call.
+
+          🔴 AND FOR AN UNNAMED FOLDER THE ID COMES WITH THEM. It was on the
+          face of the collapsed row, in a code block, on its own line — a
+          debugging aid dressed as a heading. It is the thing you paste into
+          GoHighLevel to find the folder, so it belongs beside the fields you
+          are reading to recognise it, not above them. */}
       {expanded.has(s.key) ? (
-        <div className="pfsecfields">{s.fields.map((f) => f.name).join(" · ")}</div>
+        <div className="pfsecfields">
+          {s.fields.map((f) => f.name).join(" · ")}
+          {!s.named ? (
+            <div className="pfsecid" title="Paste this into GoHighLevel to find the folder">
+              <code>{s.id}</code>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -353,42 +369,91 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
           refuses the folder endpoint — so it cannot be mapped silently. The
           admin supplies the one thing we cannot obtain, and the ticking happens
           in the same action. */}
+      {/* 🔴 THIS BANNER USED TO ASK THE WRONG QUESTION.
+          "Unnamed section … [ Name it ]" says the folder has no name and the
+          admin is inventing one. IT HAS A NAME. GoHighLevel simply will not
+          share it — verified live, twice: `parentName` is empty on every field
+          (lib/fieldFolders.ts:491, round 55), and
+          GET /custom-fields/object-key/opportunity answers 400 "Api does not
+          support objectKey of type contact or opportunity".
+          So the admin is not naming anything. They are TELLING THIS DASHBOARD
+          WHAT GOHIGHLEVEL ALREADY CALLS IT — a different, much easier question,
+          and one they can answer by looking rather than by deciding. */}
       {(data.unconfiguredFolders || []).length ? (
         <div className="pfunknown">
           <b>
             {data.unconfiguredFolders.length} section
-            {data.unconfiguredFolders.length === 1 ? " is" : "s are"} not
-            configured
+            {data.unconfiguredFolders.length === 1 ? "" : "s"} need
+            {data.unconfiguredFolders.length === 1 ? "s" : ""} a label
           </b>
           <div className="ihint">
-            Made in GoHighLevel. Their fields show as unfiled on records until a
-            pipeline is given them. GoHighLevel will not tell us the name, so it
-            has to be typed once.
+            GoHighLevel does not share folder names with this dashboard, so we
+            cannot read what {data.unconfiguredFolders.length === 1 ? "this one is" : "these are"}{" "}
+            called. Until {data.unconfiguredFolders.length === 1 ? "it is" : "they are"} labelled
+            and given to a pipeline, the fields inside show as unfiled on records.
           </div>
           {data.unconfiguredFolders.map((u) => (
             <div className="pfunknownrow" key={u.id}>
               <div className="pfunknownwhat">
-                <b>Unnamed</b> · {u.fields.length} field
-                {u.fields.length === 1 ? "" : "s"} ·{" "}
-                {u.fields.slice(0, 3).map((f) => f.name).join(", ")}
-                {u.fields.length > 3 ? "…" : ""}
+                {/* ⚠️ ALL OF THEM, NEVER "two and an ellipsis". These names are
+                    the ONLY way to recognise which folder this is — the whole
+                    point of listing them. Truncating the evidence and then
+                    asking the question is asking a question that cannot be
+                    answered. */}
+                <div className="pfunknownlbl">
+                  Fields in it ({u.fields.length})
+                </div>
+                <ul className="pfunknownfields">
+                  {u.fields.map((f) => (
+                    <li key={f.id}>{f.name}</li>
+                  ))}
+                </ul>
+                <code className="pfunknownid" title="Paste this into GoHighLevel to find the folder">
+                  {u.id}
+                </code>
               </div>
-              <input
-                value={unkName[u.id] ?? ""}
-                placeholder="Name this section"
-                onChange={(e) =>
-                  setUnkName((m) => ({ ...m, [u.id]: e.target.value }))
-                }
-              />
-              <button
-                type="button"
-                disabled={busy || !(unkName[u.id] || "").trim()}
-                onClick={() => nameFolder(u.id)}
-              >
-                Name it
-              </button>
+              <div className="pfunknownask">
+                <label htmlFor={`pfunk-${u.id}`}>
+                  What is this section called in GoHighLevel?
+                </label>
+                <div className="pfunknownacts">
+                  <input
+                    id={`pfunk-${u.id}`}
+                    value={unkName[u.id] ?? ""}
+                    placeholder="e.g. Event Details"
+                    onChange={(e) =>
+                      setUnkName((m) => ({ ...m, [u.id]: e.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !(unkName[u.id] || "").trim()}
+                    onClick={() => nameFolder(u.id)}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {/* ⚠️ WITHHELD, NOT MISSING. A folder that vanishes with no explanation is
+          the same class of problem as one that appears with no name. */}
+      {inert.length ? (
+        <div className="pfinert">
+          {inert.length} section
+          {inert.length === 1 ? " is" : "s are"} not listed below:
+          every field in {inert.length === 1 ? "it is" : "them is"}{" "}
+          written by GoHighLevel itself, so ticking{" "}
+          {inert.length === 1 ? "it" : "them"} onto a pipeline would
+          change nothing on a record.{" "}
+          <span className="pfinertwhich">
+            {inert
+              .map((s) => s.fields.map((f) => f.name).join(", "))
+              .join(" · ")}
+          </span>
         </div>
       ) : null}
 

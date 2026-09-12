@@ -132,6 +132,26 @@ const SYSTEM_INFO_NAMES = [
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 const SYSTEM_INFO_SET = new Set(SYSTEM_INFO_NAMES.map(norm));
 
+/**
+ * 🔴 A FIELD NO FOLDER DECISION CAN AFFECT.
+ *
+ * Both name checks in groupFieldsForPipeline run BEFORE any folder rule and
+ * both `continue` (see :320-330, and the comment there: they "win over every
+ * folder rule below"). So for these fields, ticking or unticking the folder
+ * they happen to sit in changes NOTHING on the record panel:
+ *
+ *   HIDDEN_NAMES      never rendered anywhere
+ *   SYSTEM_INFO_NAMES always rendered, in the System info block, folder or not
+ *
+ * ⚠️ EXPORTED SO THE PIPELINES SCREEN ASKS THE SAME QUESTION THE PANEL ANSWERS.
+ * A checklist that offers a folder the panel will ignore is offering a control
+ * that does nothing — and the admin has no way to discover that.
+ */
+export function fieldIsAlwaysIntercepted(name: string): boolean {
+  const n = norm(name);
+  return HIDDEN_SET.has(n) || SYSTEM_INFO_SET.has(n);
+}
+
 // Reverse: folder id -> semantic key.
 const KEY_BY_ID = new Map<string, FolderKey>(
   (Object.keys(FOLDERS) as FolderKey[]).map((k) => [FOLDERS[k], k]),

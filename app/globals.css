@@ -372,21 +372,35 @@ tbody tr:last-child td{border-bottom:0;}
 /* ⚠️ COLUMNS, NOT A STACK. Fourteen full-width rows pushed every action below
    the fold. These are short, independent items — the shape is a compact grid
    that grows sideways before it grows down. */
-.pfseclist{flex:1 1 340px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px;}
-.pfsec{display:grid;grid-template-columns:1fr auto auto;align-items:center;border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:7px 9px;gap:3px 6px;}
+/* ITEM 3a — A GRID YOU SCAN, NOT A LIST YOU SCROLL. Sixteen sections at
+   260px-wide cards with card-sized padding is four screens of chrome around
+   sixteen words. Narrower columns and a tighter gap fit the same sixteen in
+   one view, which is what a checklist is for. */
+.pfseclist{flex:1 1 340px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:4px;}
+.pfsec{display:grid;grid-template-columns:1fr auto auto;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:3px 7px;gap:0 5px;}
 .pfsec.unnamed{border-color:#f0dcc9;background:#fdfaf6;}
-.pfseclab{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0;}
+.pfseclab{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0;}
+.pfseclab input{margin:0;flex:0 0 auto;}
 .pfsecname{font-weight:600;overflow-wrap:anywhere;}
-/* ⚠️ NOT A NAME. Two levels, both below the card's own size, reusing the
-   warning colour from .pfunconf / .pfsecid rather than inventing a third
-   amber: the marker says there is a problem, the field list is the evidence. */
-.pfsecunk{display:flex;flex-direction:column;gap:1px;min-width:0;line-height:1.35;}
-.pfsecunk-t{font-size:10.5px;font-weight:700;letter-spacing:.02em;color:#7a5227;}
-.pfsecunk-f{font-size:10px;font-weight:400;color:var(--ink-3);overflow-wrap:anywhere;}
+/* ⚠️ NOT A NAME — AND THE OLD RULE WAS NOT LOSING TO THE CASCADE.
+   Round 95 set the marker to 10.5px and the field list to 10px, and both were
+   rendering at exactly that. What made them read as loud as a real section
+   name was never the size:
+     · weight 700 against a named section's 600,
+     · a saturated brown against --ink,
+     · and TWO STACKED LINES where a name is one.
+   Small + bold + high-contrast reads heavier than large + regular, so shrinking
+   it again would not have helped. The field list has moved into the expanded
+   panel (one line now), the weight drops below the named rows rather than
+   above them, and the ⚠ carries the warning so the words do not have to. */
+.pfsecunk{display:inline-flex;align-items:baseline;gap:5px;min-width:0;}
+.pfsecunk-w{font-size:9.5px;color:#b07a2e;flex:0 0 auto;line-height:1;}
+.pfsecunk-t{font-size:11px;font-weight:500;font-style:italic;color:var(--ink-3);white-space:nowrap;}
 .pfseccount{font-size:10.5px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;white-space:nowrap;}
-/* The id, for an admin cross-referencing GoHighLevel's own field list. */
-.pfsecid{grid-column:1 / -1;font-size:10px;color:#7a5227;overflow-wrap:anywhere;}
-.pfsecid code{font-size:10px;}
+/* ITEM 3c — the id now lives INSIDE the expanded panel, beside the fields it
+   helps you match, rather than on the face of a collapsed row. */
+.pfsecid{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);font-size:9.5px;color:var(--ink-3);overflow-wrap:anywhere;}
+.pfsecid code{font-size:9.5px;}
 .pfsectoggle{border:0;background:none;color:var(--ink-3);cursor:pointer;font-size:12px;padding:2px 6px;}
 .pfsectoggle:hover{color:var(--plum);}
 .pfsechide{grid-column:1 / -1;display:flex;align-items:center;gap:7px;margin-top:4px;font-size:10.5px;color:var(--ink-2);cursor:pointer;line-height:1.4;}
@@ -402,8 +416,10 @@ tbody tr:last-child td{border-bottom:0;}
 /* ITEM 6 — the unconfigured-folder banner. */
 .pfunknown{margin-bottom:16px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:10px;padding:12px 14px;font-size:12px;color:#7a5227;}
 .pfunknown b{color:#5c3d1c;}
-.pfunknownrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:9px;}
-.pfunknownwhat{flex:1 1 260px;min-width:0;font-size:11.5px;overflow-wrap:anywhere;}
+/* ⚠️ flex-start, not center. The evidence column is now a full field list;
+   centring it against a two-line ask floats both away from their own edges. */
+.pfunknownrow{display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px;margin-top:11px;padding-top:11px;border-top:1px solid #f0dcc9;}
+.pfunknownwhat{flex:1 1 240px;min-width:0;font-size:11.5px;overflow-wrap:anywhere;}
 .pfunknownrow input{flex:0 1 220px;min-width:0;border:1px solid #e0c9ae;border-radius:8px;padding:7px 10px;font:inherit;font-size:12.5px;background:#fff;}
 
 /* One line saying why all four controls live on one screen. */
@@ -1231,3 +1247,19 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rftli .d{font-size:11px;color:var(--ink-3)}
 .rftli .t{font-size:12px;font-weight:600;color:var(--ink)}
 .rftli .n{font-size:12.5px;color:var(--ink-2);line-height:1.55;white-space:pre-wrap;margin-top:2px}
+
+/* ITEM 2 — the label banner. The question is "what does GoHighLevel call this",
+   so the evidence (every field name) is laid out to be read, and the ask sits
+   under it rather than beside a truncated list. */
+.pfunknownlbl{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#9a7340;margin-bottom:4px;}
+.pfunknownfields{margin:0 0 7px;padding-left:17px;}
+.pfunknownfields li{font-size:12px;line-height:1.55;color:#5c3d1c;}
+.pfunknownid{display:inline-block;font-size:9.5px;color:#9a7340;}
+.pfunknownask{flex:1 1 260px;min-width:0;}
+.pfunknownask > label{display:block;font-size:11.5px;font-weight:600;color:#5c3d1c;margin-bottom:5px;}
+.pfunknownacts{display:flex;gap:7px;flex-wrap:wrap;}
+.pfunknownacts input{flex:1 1 170px;min-width:0;}
+/* Withheld sections — a quiet line, not a second banner competing with the one
+   that actually needs an answer. */
+.pfinert{margin:-6px 0 14px;font-size:11.5px;line-height:1.6;color:var(--ink-3);}
+.pfinertwhich{color:var(--ink-2);}
