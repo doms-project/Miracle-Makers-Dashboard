@@ -81,14 +81,37 @@ export interface StoredPipelineConfig {
 export const PIPELINE_CONFIG_CUSTOM_VALUE_NAME = "MM Pipeline Folders";
 
 /**
- * 🔴 SEEDED NAMES. The Website Intent Form exists on this account today and its
- * four fields are showing as orphans on live records. Item 3 fixes pipelines
- * created from now on; it does nothing for the five that already exist, so this
- * folder is named and ticked by the seed.
+ * 🔴 SEEDED NAMES — FOLDERS **WE** CREATED, WHOSE NAMES WE THEREFORE KNOW.
+ *
+ * GoHighLevel will not tell us a folder's name (see `folderNames` above), but
+ * for a folder this app created there is nothing to ask: we chose the name. It
+ * was simply never written down, which is why three "Unnamed section" banners
+ * stood on a screen that could have answered all three itself.
+ *
+ * ⚠️ NAMING IS NOT TICKING. See SEED_TICKED_ON_CLIENT below — they used to be
+ * the same list, and that is a bug waiting to happen every time a name is added.
  */
 export const SEED_FOLDER_NAMES: Record<string, string> = {
   "1JFUFsjPXNFzMW18dYSe": "Website Intent Form",
+  "56mZT4dH0xztuxwgUt00": "Event Details",
+  "9OZdxXFfJsdNGR7qsQKQ": "Referral Detail",
 };
+
+/**
+ * 🔴 TICKED ONTO EVERY CLIENT PIPELINE BY THE SEED — AND ONLY THIS ONE.
+ *
+ * ⚠️ THIS LIST USED TO BE `Object.keys(SEED_FOLDER_NAMES)`, AND THAT WOULD HAVE
+ * BROKEN THE MOMENT A SECOND NAME WAS ADDED. The Website Intent Form is ticked
+ * everywhere because its four fields are orphaned on live client records right
+ * now — a deliberate, specific act. Event Details and Referral Detail are named
+ * for the same reason but must NOT be ticked: Event Cost, Event Date, Event
+ * Division and Event Venue on every enrolment record is exactly the all-twelve
+ * fall-through this file exists to prevent.
+ *
+ * Knowing what a folder is called and wanting it on a record are two different
+ * questions. One list cannot answer both.
+ */
+export const SEED_TICKED_ON_CLIENT: string[] = ["1JFUFsjPXNFzMW18dYSe"];
 
 export function emptyPipelineConfig(): StoredPipelineConfig {
   return { seeded: false, pipelines: {}, folderNames: {} };

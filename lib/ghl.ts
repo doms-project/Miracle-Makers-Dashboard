@@ -31,6 +31,7 @@ import {
   emptyPipelineConfig,
   idsInScope,
   SEED_FOLDER_NAMES,
+  SEED_TICKED_ON_CLIENT,
   type StoredPipelineConfig,
   type PipelineScope as StoredScope,
 } from "./pipelineConfig";
@@ -2679,10 +2680,73 @@ export async function savePipelineConfig(
  * NOT re-seed, because the flag it would need is the thing that failed to
  * parse.
  */
+/** At most one folderNames backfill write per process — see below. */
+let folderNameBackfillDone = false;
+
+/**
+ * 🔴 WHY A NAME MAY BE BACKFILLED WHEN A PIPELINE MAY NOT.
+ *
+ * The seed is one-time and driven by the `seeded` flag, never by emptiness —
+ * round 90's rule, and it is the right one: "no pipelines stored" and "the save
+ * that wiped them" look identical from here, so seeding on empty would let one
+ * failed write silently restore env defaults over an admin's configuration.
+ *
+ * ⚠️ THE COST OF THAT RULE IS EXACTLY THIS BUG. This account was seeded BEFORE
+ * `folderNames` existed, so the seed had already run and three folders we
+ * ourselves created have stood unnamed ever since, with a banner each.
+ *
+ * ✅ A NAME IS SAFE TO BACKFILL, AND A PIPELINE IS NOT, for a reason that is
+ * checkable rather than a matter of taste:
+ *
+ *   - A pipeline entry CAN be removed deliberately (the Pipelines screen writes
+ *     the whole `pipelines` map), so "absent" is a decision that must be obeyed.
+ *   - A folder name CANNOT. `rememberFolderName` refuses an empty name and there
+ *     is no unname action anywhere — `name-folder` is the only writer. So a name
+ *     can be SET or CORRECTED and never cleared, which means "absent" can only
+ *     ever mean NEVER SET.
+ *
+ * Nothing an admin can do is undone by this, and the per-key test is what makes
+ * that true: a key already present is left exactly as it is, whatever it says.
+ * If an unname action is ever added, this must go — the comment is the contract.
+ */
+function backfillFolderNames(cfg: StoredPipelineConfig): {
+  cfg: StoredPipelineConfig;
+  added: string[];
+} {
+  const added = Object.keys(SEED_FOLDER_NAMES).filter(
+    (id) => !(cfg.folderNames || {})[id],
+  );
+  if (!added.length) return { cfg, added };
+  const folderNames = { ...cfg.folderNames };
+  // ⚠️ ONLY THE ABSENT ONES. A name an admin typed wins over ours, always.
+  for (const id of added) folderNames[id] = SEED_FOLDER_NAMES[id];
+  return { cfg: { ...cfg, folderNames }, added };
+}
+
 export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
   const found = await findPipelineConfigValue();
   const parsed = found ? parsePipelineConfig(found.value) : null;
-  if (parsed?.seeded) return parsed;
+  if (parsed?.seeded) {
+    const { cfg, added } = backfillFolderNames(parsed);
+    if (!added.length) return parsed; // the normal path: no merge, no write
+    // 🔴 THE MERGED VALUE IS RETURNED EITHER WAY. The persist below is an
+    // optimisation so this stops recurring and so the names are legible in
+    // GoHighLevel's own custom-values screen — it is NOT what makes the screen
+    // correct. A read that fails because its own housekeeping write failed
+    // would be a worse bug than the one being fixed.
+    if (!folderNameBackfillDone) {
+      folderNameBackfillDone = true;
+      try {
+        return await savePipelineConfig(cfg);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[pipeline-config] could not persist ${added.length} seeded folder name(s) (${added.join(", ")}); serving them from memory instead: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    return cfg;
+  }
   if (found && !parsed) {
     // Present but unreadable. Do not seed over it.
     throw new GhlError(
@@ -2704,7 +2768,9 @@ export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   // PIPELINE. Its four fields are orphaned on live records right now; a fix
   // that only helps pipelines created from today leaves them orphaned.
   next.folderNames = { ...SEED_FOLDER_NAMES };
-  const seededFolderIds = Object.keys(SEED_FOLDER_NAMES);
+  // ⚠️ NOT Object.keys(SEED_FOLDER_NAMES) — see SEED_TICKED_ON_CLIENT. Naming a
+  // folder and putting it on every client record are different decisions.
+  const seededFolderIds = [...SEED_TICKED_ON_CLIENT];
   const add = (ids: string[], scope: StoredScope) => {
     for (const id of ids) {
       const mapped = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, id)
