@@ -183,6 +183,14 @@ export interface RawPartner {
   tier: string;
   division: string;
   owner: string;
+  /**
+   * The owner's USER ID, beside the resolved name.
+   *
+   * ⚠️ The Touch queue's Mine/All filter compares ids, never names. Two staff
+   * called Chris, or a rename in GoHighLevel, would silently change who a
+   * worklist belongs to if it matched on the display string.
+   */
+  ownerId: string;
   notes: string;
   /**
    * Days since the newest note on this contact.
@@ -212,6 +220,31 @@ export interface RawReferral {
    */
   ago: number | null;
   eventId?: string;
+  /**
+   * 🔴 WHOLE NUMBERS, FILTERED DETAIL — AND THIS FLAG IS THE WHOLE MECHANISM.
+   *
+   * True when `applyAccess` would show this opportunity to the viewer: one they
+   * own or FOLLOW (anywhere), or an unassigned one in a pipeline they hold
+   * (lib/pipelineAccess.ts:136-145).
+   *
+   * ⚠️ TAGGED, NOT SPLIT INTO TWO ARRAYS, and that is deliberate. Every
+   * aggregate below — refs, won, revenue, winRate, lastRefAgo — reads the whole
+   * array and IGNORES this flag, so a partner's win rate is the business's
+   * number and identical for everyone. Only the drawer's per-record list, which
+   * names individual cases, filters on it. Two arrays would make the next
+   * person choose which to aggregate, and eventually they would choose wrong.
+   *
+   * 🔴 THE SEAM, ACCEPTED KNOWINGLY — DO NOT "FIX" IT BY SCOPING THE TOTALS.
+   * Whole totals beside a filtered list make the withheld residual derivable:
+   * `revenue − Σ(shown won values)`, and `lastRefAgo` is `min(ago)` over ALL,
+   * so a hidden newest referral shows through. At exactly one withheld record
+   * the aggregate IS that record. That is arithmetic, not an oversight: the
+   * drawer already prints "6 of 12 shown", which announces the residual exists,
+   * and what leaks is commercial shape only — no name, no contact detail, no
+   * PHI. Making the totals viewer-scoped would give two people different win
+   * rates under one label, which is the failure this design exists to avoid.
+   */
+  visible: boolean;
 }
 
 export interface EnrichedPartner extends RawPartner {
@@ -226,6 +259,13 @@ export interface EnrichedPartner extends RawPartner {
   refs90: number;
   /** Referrals with no creation date — excluded from refs90, never silent. */
   undated: number;
+  /**
+   * How many of this partner's referrals the viewer may see as records.
+   *
+   * ⚠️ NOT USED BY ANY AGGREGATE. It exists so the drawer can say "6 of 12
+   * shown" — the count is the honesty, and the totals stay whole.
+   */
+  shown: number;
   won: number;
   revenue: number;
   winRate: number;
@@ -258,6 +298,7 @@ export function enrichPartner(
     refs: mine.length,
     refs90: recent.length,
     undated: mine.length - dated.length,
+    shown: mine.filter((o) => o.visible).length,
     won: won.length,
     revenue: won.reduce((a, o) => a + o.value, 0),
     winRate: mine.length ? Math.round((won.length / mine.length) * 100) : 0,

@@ -62,6 +62,7 @@ interface Payload {
   // 🔴 EVERY OPTION LIST COMES FROM GOHIGHLEVEL. The dialogs used to hold their
   // own copies; a dropdown offering a value the account has no option for
   // produces a save that silently drops it.
+  viewer: { userId: string; isAdmin: boolean };
   owners: Owner[];
   categoryOptions: string[];
   tierOptions: string[];
@@ -157,6 +158,17 @@ export default function ReferralsSection({
   const [division, setDivision] = useState<Division>("All");
   const [divOpen, setDivOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("sources");
+  /**
+   * 🔴 THE TOUCH QUEUE IS A WORKLIST, NOT A REPORT.
+   *
+   * Ranking every partner on the account and handing the result to everyone
+   * makes "Overdue: 47" a number about work the viewer cannot do. Default to
+   * theirs; admins get everything, because the whole board is their job.
+   *
+   * ⚠️ null means "follow the viewer" — once they choose, the choice sticks for
+   * the session rather than being overwritten on the next payload.
+   */
+  const [queueScope, setQueueScope] = useState<"mine" | "all" | null>(null);
 
   const [tier, setTier] = useState<string>("all");
   const [cat, setCat] = useState<string>("all");
@@ -388,10 +400,21 @@ export default function ReferralsSection({
     });
   }, [all, tier, cat, overdueOnly, search, sortKey, sortDir]);
 
-  const queue = useMemo(
-    () => [...all].sort((a, b) => b.priority - a.priority),
-    [all],
+  const scope: "mine" | "all" = queueScope ?? (data?.viewer.isAdmin ? "all" : "mine");
+  /**
+   * ⚠️ "Mine" INCLUDES PARTNERS NOBODY OWNS, and that mirrors the opportunity
+   * rule deliberately: applyAccess shows an UNASSIGNED case in a pipeline you
+   * hold, because unclaimed work is everyone's. A queue that hid unowned
+   * partners would quietly bury exactly the relationships nobody has picked up.
+   */
+  const isMine = useCallback(
+    (p: EnrichedPartner) => !p.ownerId || p.ownerId === (data?.viewer.userId || ""),
+    [data?.viewer.userId],
   );
+  const queue = useMemo(() => {
+    const base = scope === "mine" ? all.filter(isMine) : all;
+    return [...base].sort((a, b) => b.priority - a.priority);
+  }, [all, scope, isMine]);
   const overdue = queue.filter((p) => p.isOverdue);
   const dueSoon = queue.filter(
     (p) => !p.unknownTouch && !p.isOverdue && (p.overdueBy as number) >= -DUE_SOON_DAYS,
@@ -790,11 +813,41 @@ export default function ReferralsSection({
         {/* ── TOUCH QUEUE ───────────────────────────────────────────────── */}
         {tab === "queue" ? (
           <>
+            {/* ⚠️ THE SCOPE IS A CONTROL, NOT A SILENT DEFAULT. A worklist that
+                quietly shows a subset is the same problem as one that shows
+                everything — you cannot tell which you are looking at. */}
+            <div className="rfscope">
+              <div className="seg">
+                <button
+                  type="button"
+                  className={scope === "mine" ? "on" : ""}
+                  onClick={() => setQueueScope("mine")}
+                >
+                  Mine
+                </button>
+                <button
+                  type="button"
+                  className={scope === "all" ? "on" : ""}
+                  onClick={() => setQueueScope("all")}
+                >
+                  All
+                </button>
+              </div>
+              <span className="rfscopenote">
+                {scope === "mine"
+                  ? `Partners you own, plus any nobody owns — ${queue.length} of ${all.length} in ${divLabel(division)}.`
+                  : `Every partner in ${divLabel(division)} — ${all.length}.`}
+              </span>
+            </div>
+
             <div className="rfkpis">
+              {/* Each tile names the set it counts. Round 100's tiles did not,
+                  and a count whose scope is implied is a count you cannot
+                  check. */}
               <Kpi
                 label="Overdue"
                 value={overdue.length}
-                desc="past cadence"
+                desc={scope === "mine" ? "past cadence · yours" : "past cadence · everyone's"}
                 warn={overdue.length > 0}
               />
               <Kpi
@@ -1379,6 +1432,13 @@ function PartnerDrawer({
   const mine = referrals
     .filter((o) => o.partnerId === p.id)
     .sort((a, b) => (a.ago ?? 1e9) - (b.ago ?? 1e9));
+  /**
+   * 🔴 THE ONLY FILTERED THING ON THIS SCREEN. Every figure above is the
+   * business's number; this list names individual cases, so it honours
+   * applyAccess. See RawReferral.visible.
+   */
+  const shownRows = mine.filter((o) => o.visible);
+  const withheld = mine.length - shownRows.length;
 
   return (
     <>
@@ -1561,9 +1621,17 @@ function PartnerDrawer({
             <h4>Attributed opportunities</h4>
             {!mine.length ? (
               <div className="rfdhint">Nothing attributed yet.</div>
+            ) : !shownRows.length ? (
+              <div className="rfdhint">
+                None of {mine.length === 1 ? "this referral" : `these ${mine.length} referrals`}{" "}
+                is one you own or follow, and{" "}
+                {mine.length === 1 ? "it is" : "none is"} unclaimed in a pipeline
+                you hold — so there is nothing here to list. The figures above
+                still count {mine.length === 1 ? "it" : "all of them"}.
+              </div>
             ) : (
               <dl className="rfkv">
-                {mine.slice(0, 12).map((o) => (
+                {shownRows.slice(0, 12).map((o) => (
                   <div key={o.id} className="rfkvrow">
                     <dt>{o.ago === null ? "undated" : `${o.ago} days ago`}</dt>
                     <dd
@@ -1582,6 +1650,25 @@ function PartnerDrawer({
                 ))}
               </dl>
             )}
+            {/* 🔴 THE SENTENCE, AND IT DESCRIBES WHAT IS SHOWN — NOT WHAT IS
+                WITHHELD.
+                "the rest are in another division" was false: applyAccess never
+                looks at division (lib/pipelineAccess.ts:132-147).
+                "the rest are not assigned to you" was also wrong, twice over —
+                a record you FOLLOW is shown, so "assigned" is the wrong test;
+                and an UNASSIGNED case in a pipeline you hold is shown too, so
+                any sentence about the withheld set implies the complement
+                "these ones are yours", which is false for exactly those.
+                Describing the INCLUDED set positively cannot imply anything
+                false about either side, and it is the predicate the filter
+                actually implements. */}
+            {withheld > 0 ? (
+              <div className="rfwithheld">
+                {shownRows.length} of {mine.length} shown — the cases you own or
+                follow, plus unclaimed cases in your own pipelines.{" "}
+                <b>The figures above count all {mine.length}.</b>
+              </div>
+            ) : null}
           </div>
 
           {p.notes ? (

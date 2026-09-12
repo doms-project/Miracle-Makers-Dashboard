@@ -16,6 +16,8 @@ import {
 } from "@/lib/ghl";
 import { mapLimit } from "@/lib/concurrency";
 import { divisionLabel } from "@/lib/division";
+import { applyAccess } from "@/lib/pipelineAccess";
+import { isAdminSession } from "@/lib/visibility";
 import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
@@ -145,6 +147,11 @@ async function eventsPipeline() {
 export async function GET(request: Request) {
   return withGrants(async () => {
     try {
+      // 🔴 THE RETURN VALUE USED TO BE DISCARDED — `decryptSso(blob);` — so this
+      // route verified that a session existed and then had no userId, and could
+      // not have filtered by assignment even in principle. Every other
+      // client-record path keeps it (see /api/opportunities).
+      let session: { userId?: string; role?: string; type?: string } | null = null;
       if (ssoConfigured()) {
         const blob = request.headers.get("x-ghl-sso-key");
         if (!blob)
@@ -152,7 +159,7 @@ export async function GET(request: Request) {
             { error: "Sign-in required.", status: 401 } as ApiError,
             { status: 401 },
           );
-        decryptSso(blob);
+        session = decryptSso(blob);
       }
       const url = new URL(request.url);
       // Which partners' notes to resolve a last touch for.
@@ -305,6 +312,7 @@ export async function GET(request: Request) {
         tier: c.fields[F.tier] || "Prospect",
         division: c.fields[F.division] || "",
         owner: users.get(c.assignedTo) || "",
+        ownerId: c.assignedTo || "",
         notes: c.fields[F.notes] || "",
         lastTouch: null, // resolved below, for the ids asked for
       }));
@@ -325,6 +333,27 @@ export async function GET(request: Request) {
       // 99 (a): an association costs one call per partner).
       const refField = oppIdOf("Referring Partner", REFERRING_PARTNER_FIELD);
       const { records, failedPipelines } = await getOltlOpportunities("client");
+
+      // 🔴 WHOLE TOTALS, FILTERED DRILL-DOWN — settled, and this is the ONE
+      // place the boundary is computed.
+      //
+      // ⚠️ NO PLUMBING NEEDED: this route already runs inside withGrants
+      // (below), which installs the store getUserHomePipelines() reads — so
+      // applyAccess resolves live per-user pipeline grants here exactly as it
+      // does on the board.
+      //
+      // ⚠️ AND NO SSO MEANS NO FILTER, DELIBERATELY. On a deployment without
+      // SSO configured there is no viewer to scope to, so everything is
+      // visible — the same posture ssoConfigured() takes everywhere else,
+      // rather than hiding every record from a session that cannot exist.
+      const isAdmin = !session || isAdminSession(session.role, session.type);
+      const visibleIds = new Set(
+        applyAccess(records, {
+          userId: session?.userId || "",
+          isAdmin,
+        }).map((r) => r.id),
+      );
+
       const referrals: RawReferral[] = records
         .map((r) => ({
           id: r.id,
@@ -333,6 +362,10 @@ export async function GET(request: Request) {
           value: r.monetaryValue || 0,
           ago: daysSince(r.createdAt || ""),
           eventId: oppEventField ? String(r.cf?.[oppEventField] ?? "").trim() : "",
+          // ⚠️ TAGGED, NEVER FILTERED OUT HERE. Every aggregate reads the whole
+          // array; only the drawer's per-record list honours this flag. See
+          // RawReferral.visible for why two arrays would have been wrong.
+          visible: visibleIds.has(r.id),
         }))
         .filter((o) => o.partnerId);
 
@@ -376,6 +409,10 @@ export async function GET(request: Request) {
           // dropdown offering a value the account has no option for produces a
           // save that silently drops it, which is how a partner ends up with no
           // category and nobody notices.
+          // The Touch queue is a WORKLIST, not a report, so it defaults to the
+          // viewer's own partners. Admins default to all — they are the ones
+          // who need the whole board.
+          viewer: { userId: session?.userId || "", isAdmin },
           owners: [...users.entries()].map(([id, name]) => ({ id, name })),
           categoryOptions: optionsOf(contactDefs, PARTNER_FIELDS.category.name),
           tierOptions: optionsOf(contactDefs, PARTNER_FIELDS.tier.name),
