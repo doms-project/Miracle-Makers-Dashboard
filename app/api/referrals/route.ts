@@ -10,6 +10,9 @@ import {
   addContactNote,
   getContactCustomFields,
   ghlSearchContacts,
+  searchContacts,
+  updateContactCustomFields,
+  setContactOwner,
   getUserMap,
   explainGhlError,
   GhlError,
@@ -32,6 +35,10 @@ import {
   ATTENDEE_EVENT_FIELD_NAMES,
   OPP_EVENT_FIELD_NAMES,
   EVENT_HOST_FIELD_NAMES,
+  OPP_EVENT_FIELD_ID,
+  EVENT_HOST_FIELD_ID,
+  composeTouch,
+  parseTouch,
   type RawPartner,
   type RawReferral,
   type RawEvent,
@@ -100,7 +107,12 @@ async function resolveTouches(
 
 interface Body {
   ssoKey?: string;
-  action?: "add-partner" | "log-touch" | "log-referral" | "add-attendee";
+  action?:
+    | "add-partner"
+    | "log-touch"
+    | "log-referral"
+    | "add-attendee"
+    | "add-event";
   contactId?: string;
   firstName?: string;
   lastName?: string;
@@ -125,6 +137,10 @@ interface Body {
   /** add-attendee */
   profile?: string;
   outcome?: string;
+  /** add-event — `org` carries the event name, `partnerId` the host. */
+  eventDate?: string;
+  venue?: string;
+  cost?: number;
 }
 
 /**
@@ -178,7 +194,8 @@ export async function GET(request: Request) {
       const only = url.searchParams.get("only") || "";
       const onlyTouch = only === "touch";
       /** Either cheap mode — neither needs opportunity fields or the events pipeline. */
-      const light = onlyTouch || only === "notes";
+      const light =
+        onlyTouch || only === "notes" || only === "contacts" || only === "partners";
 
       const contactDefs = await getEditableFieldDefs("contact");
       // ⚠️ NOT FETCHED IN touch-only MODE. Measuring the next batch of partners
@@ -228,8 +245,15 @@ export async function GET(request: Request) {
       // id), every per-event number below starts working with NO code change.
       // Until then the Events tab says what is missing and shows what it can.
       const attendeeEventField = anyOf(contactDefs, ATTENDEE_EVENT_FIELD_NAMES);
-      const oppEventField = anyOf(oppDefs, OPP_EVENT_FIELD_NAMES);
-      const eventHostField = anyOf(oppDefs, EVENT_HOST_FIELD_NAMES);
+      // ⚠️ NAME FIRST, THE CONFIRMED ID AS A CROSS-CHECK — the same rule every
+      // other field on this screen follows. The ids exist now, so a rename in
+      // GoHighLevel degrades to the id rather than to nothing.
+      const oppEventField =
+        anyOf(oppDefs, OPP_EVENT_FIELD_NAMES) ||
+        (oppDefs.some((d) => d.id === OPP_EVENT_FIELD_ID) ? OPP_EVENT_FIELD_ID : "");
+      const eventHostField =
+        anyOf(oppDefs, EVENT_HOST_FIELD_NAMES) ||
+        (oppDefs.some((d) => d.id === EVENT_HOST_FIELD_ID) ? EVENT_HOST_FIELD_ID : "");
 
       // 🔴 THE OPTION LISTS COME FROM GOHIGHLEVEL, NOT FROM THIS CODEBASE.
       // Settled in round 101: three copies of the category list existed (16 in
@@ -240,6 +264,44 @@ export async function GET(request: Request) {
         defs: { id: string; name: string; options?: string[] }[],
         name: string,
       ) => defs.find((d) => norm(d.name) === norm(name))?.options || [];
+
+      // ── free-text contact search, for "+ Add partner → existing contact" ──
+      // 🔴 949 CONTACTS ALREADY EXIST. Without this the first thing this
+      // feature does is create a second copy of a person who enquired last
+      // year, or a caregiver's relative who works at a hospital.
+      // ⚠️ `searchContacts` is the PROVEN free-text call (lib/ghl.ts) — NOT the
+      // custom-field filter, which is the one unverified request in this
+      // feature. A picker that fails because of that would be a bad trade.
+      if (only === "contacts") {
+        const q = (url.searchParams.get("q") || "").trim();
+        if (q.length < 2) return NextResponse.json({ contacts: [] });
+        return NextResponse.json(
+          { contacts: await searchContacts(q) },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
+
+      // ── just the partners, for the "Referred by" picker on a client record ─
+      // ⚠️ ONE search call and nothing else: no notes, no opportunity sweep.
+      // The client panel needs names to choose from, not a scorecard.
+      if (only === "partners") {
+        const rt = idOf(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id);
+        const res = await ghlSearchContacts(rt, PARTNER_RECORD_TYPE);
+        const catId = idOf(PARTNER_FIELDS.category.name, PARTNER_FIELDS.category.id);
+        const divId = idOf(PARTNER_FIELDS.division.name, PARTNER_FIELDS.division.id);
+        return NextResponse.json(
+          {
+            partners: res.rows.map((c) => ({
+              id: c.id,
+              org: c.name,
+              cat: c.fields[catId] || "",
+              division: c.fields[divId] || "",
+            })),
+            truncated: res.truncated,
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
 
       // ── one partner's touch history, for the drawer ────────────────────────
       // ⚠️ TWO PROVEN CALLS AND NOT THE UNVERIFIED ONE. Checking the id against
@@ -265,7 +327,10 @@ export async function GET(request: Request) {
             } as ApiError,
             { status: 403 },
           );
-        const notes = await listContactNotes(id);
+        const notes = (await listContactNotes(id)).map((n) => {
+          const { type, text } = parseTouch(n.txt);
+          return { ...n, type, txt: text };
+        });
         return NextResponse.json(
           { notes },
           { headers: { "Cache-Control": "no-store" } },
@@ -515,7 +580,15 @@ export async function POST(request: Request) {
             { error: "A touch needs a note saying what happened.", status: 400 } as ApiError,
             { status: 400 },
           );
-        const n = await addContactNote(contactId, text, session?.userId || "");
+        // 🔴 THE TYPE IS NOW PERSISTED. It used to be collected and dropped —
+        // a rep picked "Visit", it rode along in the request body, and nothing
+        // read it. A control that discards its input is worse than no control,
+        // because the rep believes it was recorded.
+        const n = await addContactNote(
+          contactId,
+          composeTouch(body.touchType || "", text),
+          session?.userId || "",
+        );
         return NextResponse.json({
           ok: true,
           noteId: n.id,
@@ -539,9 +612,18 @@ export async function POST(request: Request) {
       if (body.action === "log-referral") {
         const partnerId = (body.partnerId || "").trim();
         const who = `${(body.firstName || "").trim()} ${(body.lastName || "").trim()}`.trim();
-        if (!partnerId)
+        // 🔴 A PARTNER **OR** AN EVENT. Logging a referral from an event card is
+        // the whole point of `Event Source`: you met them at the expo and they
+        // became a client, and that sentence has no partner in it when nobody
+        // hosted the event. Requiring a partner is what left the field with no
+        // writer at all.
+        if (!partnerId && !(body.eventId || "").trim())
           return NextResponse.json(
-            { error: "A referral needs the partner who sent it.", status: 400 } as ApiError,
+            {
+              error: "A referral needs a source.",
+              detail: "Either the partner who sent it, or the event they were met at.",
+              status: 400,
+            } as ApiError,
             { status: 400 },
           );
         if (!who)
@@ -620,13 +702,17 @@ export async function POST(request: Request) {
         const refId =
           oppDefs.find((d) => norm(d.name) === norm("Referring Partner"))?.id ||
           REFERRING_PARTNER_FIELD;
-        const cf: { id: string; value: unknown }[] = [{ id: refId, value: partnerId }];
-        // The event that produced this client, when the form was opened from one.
-        const evField = oppDefs.find((d) =>
-          OPP_EVENT_FIELD_NAMES.some((n) => norm(d.name) === norm(n)),
-        )?.id;
-        if (evField && (body.eventId || "").trim())
-          cf.push({ id: evField, value: (body.eventId || "").trim() });
+        const cf: { id: string; value: unknown }[] = [];
+        if (partnerId) cf.push({ id: refId, value: partnerId });
+        // The event that produced this client — `Event Source`, written here and
+        // nowhere else. Resolved by name with the confirmed id as a cross-check.
+        const evField =
+          oppDefs.find((d) => OPP_EVENT_FIELD_NAMES.some((n) => norm(d.name) === norm(n)))
+            ?.id ||
+          (oppDefs.some((d) => d.id === OPP_EVENT_FIELD_ID) ? OPP_EVENT_FIELD_ID : "");
+        const evId = (body.eventId || "").trim();
+        const evSkipped = !!evId && !evField;
+        if (evField && evId) cf.push({ id: evField, value: evId });
 
         // ⚠️ MONTHLY RECURRING, AND IT IS A REP'S INPUT. The brief is explicit:
         // the rep types the estimated monthly value at referral time. Stored in
@@ -690,6 +776,113 @@ export async function POST(request: Request) {
           stageName: dest.stages?.[0]?.name || "",
           monthly,
           noteSaved,
+          // ⚠️ STATED, NEVER SILENT. If the event link could not be written the
+          // referral still exists — but this event's Clients and Revenue will
+          // not count it, and the rep should know that now rather than wonder
+          // later why the card reads zero.
+          eventLinkSkipped: evSkipped,
+        });
+      }
+
+      // ── create an event, hosted by a partner ───────────────────────────────
+      // 🔴 THE ONLY WRITER OF `Event Host`. Without it "Run by [ partner ]" can
+      // never resolve and the drawer's "Events worked" is permanently empty —
+      // the field would exist and nothing would ever set it, which is exactly
+      // the state `Event Source` was in.
+      if (body.action === "add-event") {
+        const name = (body.org || "").trim();
+        if (!name)
+          return NextResponse.json(
+            { error: "An event needs a name.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        const evPipe = await eventsPipeline();
+        if (!evPipe)
+          return NextResponse.json(
+            {
+              error: "There is no Events pipeline configured.",
+              detail:
+                "Nothing was created. Give a pipeline named \"Events\" client scope in Admin → Pipelines.",
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        const stageId = evPipe.stages?.[0]?.id || "";
+        if (!stageId)
+          return NextResponse.json(
+            {
+              error: `"${evPipe.name}" has no stages.`,
+              detail: "Nothing was created. Add a stage in GoHighLevel, then add the event.",
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        const oppDefs = await getEditableFieldDefs("opportunity");
+        const pick = (names: readonly string[], fallbackId: string) =>
+          oppDefs.find((d) => names.some((n) => norm(d.name) === norm(n)))?.id ||
+          (oppDefs.some((d) => d.id === fallbackId) ? fallbackId : "");
+        const cf: { id: string; value: unknown }[] = [];
+        const missing: string[] = [];
+        const hostField = pick(EVENT_HOST_FIELD_NAMES, EVENT_HOST_FIELD_ID);
+        const hostId = (body.partnerId || "").trim();
+        if (hostId) {
+          if (hostField) cf.push({ id: hostField, value: hostId });
+          else missing.push("Event Host");
+        }
+        const put = (name: string, fallbackId: string, value: string | number) => {
+          if (value === "" || value === undefined) return;
+          const d =
+            oppDefs.find((x) => norm(x.name) === norm(name)) ||
+            oppDefs.find((x) => x.id === fallbackId);
+          if (!d) {
+            missing.push(name);
+            return;
+          }
+          cf.push({ id: d.id, value });
+        };
+        put(EVENT_FIELDS.date.name, EVENT_FIELDS.date.id, (body.eventDate || "").trim());
+        put(EVENT_FIELDS.venue.name, EVENT_FIELDS.venue.id, (body.venue || "").trim());
+        put(EVENT_FIELDS.division.name, EVENT_FIELDS.division.id, (body.division || "").trim());
+        if (Number(body.cost) > 0)
+          put(EVENT_FIELDS.cost.name, EVENT_FIELDS.cost.id, Number(body.cost));
+
+        // ⚠️ AN EVENT HAS NO CONTACT. GoHighLevel wants one on an opportunity,
+        // so the HOST's contact is used when there is one — which is also true:
+        // the partner is who this event belongs to. With no host there is
+        // nothing to attach, and that is said rather than invented.
+        if (!hostId)
+          return NextResponse.json(
+            {
+              error: "An event needs a host partner.",
+              detail:
+                "GoHighLevel attaches every opportunity to a contact, and for an event that is the organisation running it. Add the event from that partner's panel.",
+              status: 400,
+            } as ApiError,
+            { status: 400 },
+          );
+
+        const oppId = await createOpportunity({
+          pipelineId: evPipe.id,
+          stageId,
+          contactId: hostId,
+          name,
+          ...(Number(body.cost) > 0 ? { monetaryValue: 0 } : {}),
+          customFields: cf,
+        });
+        if (!oppId)
+          return NextResponse.json(
+            {
+              error: "The event was not created.",
+              detail: "GoHighLevel returned no opportunity id.",
+              status: 502,
+            } as ApiError,
+            { status: 502 },
+          );
+        return NextResponse.json({
+          ok: true,
+          eventId: oppId,
+          pipelineName: evPipe.name,
+          skipped: missing,
         });
       }
 
@@ -810,6 +1003,22 @@ export async function POST(request: Request) {
             } as ApiError,
             { status: 409 },
           );
+
+        // 🔴 AN EXISTING CONTACT IS PROMOTED, NOT DUPLICATED.
+        // upsertContact dedupes on email/phone, so an organisation with neither
+        // — which is most of them — would have been created a second time. When
+        // the caller picked somebody, write the partner fields onto THAT record.
+        const existingId = (body.contactId || "").trim();
+        if (existingId) {
+          if (cf.length) await updateContactCustomFields(existingId, cf);
+          if (body.owner) await setContactOwner(existingId, body.owner.trim());
+          return NextResponse.json({
+            ok: true,
+            contactId: existingId,
+            promoted: true,
+            skipped: missing,
+          });
+        }
 
         // 🔴 A CONTACT AND NOTHING ELSE. A partner is not a case.
         const c = await upsertContact({
