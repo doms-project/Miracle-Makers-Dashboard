@@ -24,7 +24,7 @@ import type {
   RelationCounts,
   EditableFieldDef,
 } from "@/lib/types";
-import { useGhlSession } from "@/lib/useGhlSession";
+import { useGhlSession, ssoResolved } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
@@ -40,6 +40,8 @@ import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
 import AddCaregiverDialog from "@/components/AddCaregiverDialog";
 import ReferralsSection from "@/components/ReferralsSection";
+import ReferredBy from "@/components/ReferredBy";
+import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -1628,9 +1630,13 @@ export default function Dashboard() {
   // available to send. Re-runs when the STATUS changes — a real session
   // transition — and not merely when the object is replaced.
   useEffect(() => {
-    if (sso.status === "loading") return;
+    // 🔴 WAIT FOR THE BLOB, NOT FOR ITS DECRYPTED COPY — report 81 §3.1.
+    // /api/opportunities decrypts the same blob itself on every request; the
+    // client's decrypted session is only used to render "Signed in as …". This
+    // used to spend a whole round trip on that before asking for any data.
+    if (!ssoResolved(sso)) return;
     load();
-  }, [sso.status, load]);
+  }, [sso.status, sso.blob, load]);
 
   // 🔴 REFRESH-ON-FOCUS IS GONE. It caused 429s.
   //
@@ -1705,9 +1711,9 @@ export default function Dashboard() {
   }, [sso]);
 
   useEffect(() => {
-    if (view === "caregivers" && !cgLoaded && !cgTried.current && sso.status !== "loading")
+    if (view === "caregivers" && !cgLoaded && !cgTried.current && ssoResolved(sso))
       loadCaregivers();
-  }, [view, cgLoaded, sso.status, loadCaregivers]);
+  }, [view, cgLoaded, sso.status, sso.blob, loadCaregivers]);
 
   // Escape closes the record panel.
   useEffect(() => {
@@ -1730,7 +1736,7 @@ export default function Dashboard() {
     setResErr(null);
     try {
       const headers: Record<string, string> = {};
-      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
       const res = await fetch("/api/resources", { headers, cache: "no-store" });
       const j = (await res.json().catch(() => ({}))) as {
         resources?: ResFile[];
@@ -1768,9 +1774,9 @@ export default function Dashboard() {
   const resourcesOpen =
     view === "resources" || (view === "caregivers" && cgView === "resources");
   useEffect(() => {
-    if (resourcesOpen && !resLoaded && sso.status !== "loading")
+    if (resourcesOpen && !resLoaded && ssoResolved(sso))
       loadResources();
-  }, [resourcesOpen, resLoaded, sso.status, loadResources]);
+  }, [resourcesOpen, resLoaded, sso.status, sso.blob, loadResources]);
 
   // Admin upload → the configured Resources folder (server-side; token never in
   // browser).
@@ -1784,7 +1790,7 @@ export default function Dashboard() {
       setUploading(true);
       try {
         const headers: Record<string, string> = {};
-        if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+        if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
         const fd = new FormData();
         fd.append("file", file);
         // ITEM 6c — the chosen folder rides with the upload. Empty means the
@@ -1833,12 +1839,12 @@ export default function Dashboard() {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
       const res = await fetch("/api/resources/folders", {
         method: "POST",
         headers,
         body: JSON.stringify({
-          ssoKey: sso.status === "ready" ? sso.blob : undefined,
+          ssoKey: sso.blob ?? undefined,
           name,
         }),
       });
@@ -1873,7 +1879,7 @@ export default function Dashboard() {
       setFolderErr(null);
       try {
         const headers: Record<string, string> = {};
-        if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+        if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
         const res = await fetch(
           `/api/resources/folders?id=${encodeURIComponent(id)}`,
           { method: "DELETE", headers },
@@ -1899,7 +1905,7 @@ export default function Dashboard() {
     setFolderErr(null);
     try {
       const headers: Record<string, string> = {};
-      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
       const res = await fetch(
         `/api/resources/files?id=${encodeURIComponent(delFile.id)}`,
         { method: "DELETE", headers },
@@ -1927,7 +1933,7 @@ export default function Dashboard() {
     setFolderErr(null);
     try {
       const headers: Record<string, string> = {};
-      if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+      if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
       const res = await fetch(
         `/api/resources/folders?id=${encodeURIComponent(delFolder.id)}&confirm=1`,
         { method: "DELETE", headers },
@@ -1993,13 +1999,13 @@ export default function Dashboard() {
 
   // Load this opportunity's notes when the panel opens (server re-checks access).
   useEffect(() => {
-    if (!selId || sso.status === "loading") return;
+    if (!selId || !ssoResolved(sso)) return;
     let cancelled = false;
     setNotesLoading(true);
     setNotesErr(null);
     setNoteErr(null);
     const headers: Record<string, string> = {};
-    if (sso.status === "ready") headers["x-ghl-sso-key"] = sso.blob;
+    if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
     fetch(`/api/opportunities/${selId}/notes`, { headers, cache: "no-store" })
       .then(async (res) => {
         const j = (await res.json().catch(() => ({}))) as {
@@ -2029,7 +2035,7 @@ export default function Dashboard() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selId, sso.status]);
+  }, [selId, sso.status, sso.blob]);
 
   // Admin (or the open no-SSO setup view) sees everything; a restricted signed-in
   // user sees only their assigned records. ROLE-ONLY, mirroring the server rule
@@ -2167,6 +2173,22 @@ export default function Dashboard() {
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
   // (a new hire must not be invisible); an unknown id renders "Former user".
+  /**
+   * `Referring Partner`, resolved by NAME from the opportunity field defs the
+   * payload already carries — the brief's id is the cross-check, never the
+   * lookup. "" when this account has no such field, and the block then does not
+   * render rather than writing into nothing.
+   */
+  const referringPartnerFieldId = useMemo(() => {
+    const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return (
+      fieldDefs.find((d) => n(d.name) === n("Referring Partner"))?.id ||
+      (fieldDefs.some((d) => d.id === REFERRING_PARTNER_FIELD)
+        ? REFERRING_PARTNER_FIELD
+        : "")
+    );
+  }, [fieldDefs]);
+
   const userLabel = useCallback(
     (uid: string): string => {
       if (!uid) return "Unassigned";
@@ -2533,7 +2555,11 @@ export default function Dashboard() {
   // Fetch link counts for the contacts currently on screen. Skips any already
   // known, so paging or filtering only ever asks for the new ones.
   useEffect(() => {
-    if (sso.status === "loading") return;
+    // 🔴 WAIT FOR THE BLOB, NOT FOR ITS DECRYPTED COPY — report 81 §3.1.
+    // /api/opportunities decrypts the same blob itself on every request; the
+    // client's decrypted session is only used to render "Signed in as …". This
+    // used to spend a whole round trip on that before asking for any data.
+    if (!ssoResolved(sso)) return;
     // ITEM 1 — STAND DOWN WHILE A RECORD IS OPEN. This batch asks about up to 60
     // contacts at concurrency 6, off the SAME 100-per-10s GoHighLevel budget the
     // open panel is trying to use for notes, relations and contact fields. The
@@ -2558,9 +2584,9 @@ export default function Dashboard() {
           "/api/relations/counts",
           {
             method: "POST",
-            ssoBlob: sso.status === "ready" ? sso.blob : null,
+            ssoBlob: sso.blob,
             body: JSON.stringify({
-              ssoKey: sso.status === "ready" ? sso.blob : undefined,
+              ssoKey: sso.blob ?? undefined,
               contactIds: ids,
             }),
           },
@@ -3358,7 +3384,7 @@ export default function Dashboard() {
     setCErr(null);
     setCLoading(true);
     const h: Record<string, string> = {};
-    if (sso.status === "ready") h["x-ghl-sso-key"] = sso.blob;
+    if (sso.blob) h["x-ghl-sso-key"] = sso.blob;
     // ITEM 1 — STAGGERED behind notes rather than fired alongside it. Two
     // requests leaving together can both hit GoHighLevel's rate limit and both
     // fail, and the report-47 retry is ONE attempt with backoff — it rescues a
@@ -3411,7 +3437,7 @@ export default function Dashboard() {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              ssoKey: sso.status === "ready" ? sso.blob : undefined,
+              ssoKey: sso.blob ?? undefined,
               expectedVersion: cFields?.version,
               fields: [{ id: def.id, value }],
             }),
@@ -3481,7 +3507,7 @@ export default function Dashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ssoKey: sso.status === "ready" ? sso.blob : undefined,
+          ssoKey: sso.blob ?? undefined,
           body: v,
         }),
       });
@@ -3579,7 +3605,7 @@ export default function Dashboard() {
           method: "PUT",
           headers: { "Content-Type": "application/json", ...ssoHeader() },
           body: JSON.stringify({
-            ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            ssoKey: sso.blob ?? undefined,
             body: v,
           }),
         },
@@ -3679,7 +3705,7 @@ export default function Dashboard() {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            ssoKey: sso.blob ?? undefined,
             expectedVersion,
             ...patch,
           }),
@@ -3754,7 +3780,7 @@ export default function Dashboard() {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ssoKey: sso.status === "ready" ? sso.blob : undefined,
+            ssoKey: sso.blob ?? undefined,
             expectedVersion: rec.version, // ITEM 5
             ...change,
           }),
@@ -4011,7 +4037,7 @@ export default function Dashboard() {
         onSave={(val) => saveCustomField(rec, def, val)}
         users={users}
         isAdmin={isAdminViewer}
-        ssoBlob={sso.status === "ready" ? sso.blob : null}
+        ssoBlob={sso.blob}
         onOptionAdded={applyNewOption}
       />
     </div>
@@ -5397,7 +5423,14 @@ export default function Dashboard() {
           // other route here does. Hiding it from non-admins would have been a
           // permission invented in the UI.
           <ReferralsSection
-            ssoBlob={sso.status === "ready" ? sso.blob : null}
+            ssoBlob={sso.blob}
+            /* 🔴 FINDING 12 — the section used to mount and fire immediately
+               with a null blob, so every visitor got a 401 error card that
+               vanished a moment later, and the Touch queue flashed "All" before
+               flipping to "Mine". It now waits for the handshake to RESOLVE:
+               either a blob to send, or the settled knowledge that none is
+               coming. One state, no flash. */
+            ssoReady={ssoResolved(sso)}
             reloadToken={refReload}
             onBusy={setRefBusy}
           />
@@ -5405,7 +5438,7 @@ export default function Dashboard() {
           isAdminViewer ? (
             <div className="scroll adminscroll">
               <PipelineAccessTab
-                ssoBlob={sso.status === "ready" ? sso.blob : null}
+                ssoBlob={sso.blob}
               />
             </div>
           ) : (
@@ -5425,7 +5458,7 @@ export default function Dashboard() {
                not used. The board and the list each sit in a .scroll; the admin
                screens now do too. */
             <div className="scroll adminscroll">
-              <PipelineAdmin ssoBlob={sso.status === "ready" ? sso.blob : null} />
+              <PipelineAdmin ssoBlob={sso.blob} />
             </div>
           ) : (
             <div className="empty">
@@ -5437,7 +5470,7 @@ export default function Dashboard() {
         ) : view === "import" ? (
           isAdminViewer ? (
             <div className="scroll adminscroll">
-              <ImportWizard ssoBlob={sso.status === "ready" ? sso.blob : null} />
+              <ImportWizard ssoBlob={sso.blob} />
             </div>
           ) : (
             <div className="empty">
@@ -5948,7 +5981,7 @@ export default function Dashboard() {
           pipelines={pipelines}
           stagesByPipeline={stagesByPipeline}
           users={users}
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           onClose={() => setMoveOpen(false)}
           onMoved={(rec, transferred) => {
             // ITEM 4. Owner CHANGED: the viewer may have just lost access, so
@@ -6029,7 +6062,7 @@ export default function Dashboard() {
                 userLabel(masterDrop.record.ownerId).split(" — ")[0]
               : ""
           }
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           onClose={() => setMasterDrop(null)}
           onDone={(rec) => {
             setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
@@ -6057,7 +6090,7 @@ export default function Dashboard() {
           pipelines={pipelines}
           stagesByPipeline={stagesByPipeline}
           users={users}
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           allowedPipelineIds={pipelinesFor(masterDrop.cat)}
           // ⚠️ STEP 2 — a card dragged OUT of Reassign is being CLAIMED, so an
           // owner is mandatory and forceUnassigned must be off. Before this,
@@ -6212,7 +6245,7 @@ export default function Dashboard() {
       {/* Add Lead (item 3) */}
       {addCgOpen ? (
         <AddCaregiverDialog
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           // ⚠️ THE CAREGIVER PIPELINES ONLY. cgPipelines comes from the
           // scope:"caregiver" half of the stored config, so a client pipeline
           // cannot reach this dialog by construction.
@@ -6235,7 +6268,7 @@ export default function Dashboard() {
           }
           isAdmin={isAdminViewer}
           homePipelineIds={homePipelineIds}
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           onClose={() => setAddOpen(false)}
           onCreated={(oppId) => {
             // Refresh, then OPEN the new record so they can fill in the rest.
@@ -6251,7 +6284,7 @@ export default function Dashboard() {
         <EmailComposer
           key={selected.id}
           opportunityId={selected.id}
-          ssoBlob={sso.status === "ready" ? sso.blob : null}
+          ssoBlob={sso.blob}
           context={{
             clientFirst: selected.first,
             clientLast: selected.last,
@@ -6346,6 +6379,35 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="pbody">
+              {/* 🔴 REFERRED BY — SETTABLE AFTER THE FACT, WHICH IS THE COMMON
+                  CASE AND WAS IMPOSSIBLE.
+                  Round 103 built "Log a referral": attribution at the moment of
+                  the call. But most referrals arrive the other way round —
+                  somebody fills in the website form, and mentions on the call
+                  that Riddle Hospital sent them. Until now nothing could record
+                  that, so the partner never got credit for business they
+                  generated.
+                  ⚠️ Its own block rather than a folder field: `Referring
+                  Partner` lives in the "Referral Detail" folder, which is
+                  mapped to the Events pipeline only — so it renders on no
+                  client record at all. See the report on whether to move it.
+                  ⚠️ Writes through the SAME saveField path as every other field
+                  — optimistic, version-checked, reverts on failure. */}
+              {railWhere === "clients" ? (
+                <ReferredBy
+                  rec={selected}
+                  ssoBlob={sso.blob}
+                  fieldId={referringPartnerFieldId}
+                  onSave={(value, label) =>
+                    saveField(
+                      selected,
+                      `cf:${referringPartnerFieldId}`,
+                      { customFields: [{ id: referringPartnerFieldId, value }] },
+                      (r) => ({ ...r, cf: { ...r.cf, [referringPartnerFieldId]: value } }),
+                    ).then(() => label)
+                  }
+                />
+              ) : null}
               {/* ITEM 1 — HOW TO REACH THIS PERSON. First thing on the panel and
                   NOT collapsible: a record panel that cannot tell you the
                   phone number has failed at its basic job.
@@ -6755,7 +6817,7 @@ export default function Dashboard() {
                               onSave={(val) => saveContactField(def, val)}
                               users={users}
                               isAdmin={isAdminViewer}
-                              ssoBlob={sso.status === "ready" ? sso.blob : null}
+                              ssoBlob={sso.blob}
                               onOptionAdded={applyNewOption}
                             />
                           </div>
@@ -6877,7 +6939,7 @@ export default function Dashboard() {
               <CaregiversSection
                 key={selected.id}
                 opportunityId={selected.id}
-                ssoBlob={sso.status === "ready" ? sso.blob : null}
+                ssoBlob={sso.blob}
                 canManage={canEdit(selected)}
                 // ITEM 2 — decided by WHICH PAYLOAD the record came from, which
                 // is exact: the caregiver scope is a different request against a

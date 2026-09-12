@@ -143,10 +143,17 @@ function Kpi({
 
 export default function ReferralsSection({
   ssoBlob,
+  ssoReady,
   reloadToken,
   onBusy,
 }: {
   ssoBlob: string | null;
+  /**
+   * 🔴 THE HANDSHAKE HAS SETTLED — a blob to send, or none ever coming.
+   * NOT "the session has been decrypted": that is a separate round trip this
+   * screen does not need, and waiting for it is what report 81 §3.1 measured.
+   */
+  ssoReady: boolean;
   /** Bumped by the toolbar's Refresh. One refresh button, every section. */
   reloadToken: number;
   onBusy: (busy: boolean) => void;
@@ -180,8 +187,12 @@ export default function ReferralsSection({
   const [openId, setOpenId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [logFor, setLogFor] = useState<EnrichedPartner | null>(null);
-  const [refFor, setRefFor] = useState<{ partner: EnrichedPartner; eventId?: string } | null>(null);
+  /** Either a partner, an event, or both — see LogReferralDialog. */
+  const [refFor, setRefFor] = useState<
+    { partner?: Pick<RawPartner, "id" | "org" | "division">; event?: RawEvent } | null
+  >(null);
   const [metFor, setMetFor] = useState<RawEvent | null>(null);
+  const [eventForPartner, setEventForPartner] = useState<EnrichedPartner | null>(null);
   /**
    * 🔴 THE OUTCOME DROPDOWN'S FAILURE STATE, PER ATTENDEE.
    *
@@ -218,9 +229,14 @@ export default function ReferralsSection({
 
   // Mounted only while the Referrals section is open, so this is also what
   // keeps the section from costing anything for someone who never opens it.
+  //
+  // ⚠️ AND IT WAITS. Firing before the handshake settles sent a null blob, got
+  // a 401, drew the full-page error card, then reloaded when the blob arrived —
+  // an error state on every single entry, plus a wasted round trip.
   useEffect(() => {
+    if (!ssoReady) return;
     void load();
-  }, [reloadToken, load]);
+  }, [reloadToken, load, ssoReady]);
 
   // Close the division listbox on Escape or a click outside it.
   useEffect(() => {
@@ -497,6 +513,16 @@ export default function ReferralsSection({
         `${data.meta.failedPipelines.map((p) => p.name).join(", ")} could not be read, so any referral in ${data.meta.failedPipelines.length === 1 ? "it is" : "them is"} missing from every count here.`,
       );
   }
+
+  if (!ssoReady && !data)
+    return (
+      <div className="statewrap">
+        <div className="statecard">
+          <div className="spinner" />
+          <h3>Checking your session…</h3>
+        </div>
+      </div>
+    );
 
   if (loading && !data)
     return (
@@ -984,7 +1010,16 @@ export default function ReferralsSection({
                 {events.map((e) => {
                   const st = eventStats(e, data?.attendees || [], data?.referrals || []);
                   const good = st.cpl !== null && st.cpl <= 120;
-                  const host = e.host ? all.find((x) => x.id === e.host) : undefined;
+                  // 🔴 LOOK IN THE FULL LIST, NOT THE DIVISION-FILTERED ONE.
+                  // `all` is cut to the division on screen, so an OLTL event
+                  // hosted by a Private Pay partner resolved to undefined and
+                  // the card stated "No organisation linked" — which is a lie,
+                  // not an absence. The host EXISTS; this view had filtered it
+                  // out of the array being searched.
+                  const host = e.host
+                    ? data?.partners.find((x) => x.id === e.host)
+                    : undefined;
+                  const hostVisibleHere = !!host && inDivision(host.division, division);
                   return (
                     <div key={e.id} className="rfev">
                       <div className="hd">
@@ -994,7 +1029,7 @@ export default function ReferralsSection({
                               WORDING, and it is also the honest one when the
                               host field does not exist at all: a button naming
                               a partner we cannot know would be an invention. */}
-                          {host ? (
+                          {host && hostVisibleHere ? (
                             <div className="rfevhost">
                               Run by{" "}
                               <button
@@ -1004,6 +1039,22 @@ export default function ReferralsSection({
                               >
                                 {host.org}
                               </button>
+                            </div>
+                          ) : host ? (
+                            // ⚠️ SAY WHAT IS TRUE. Round 106's rule again: the
+                            // host is real and this view is the reason it is
+                            // not shown, so name the reason instead of implying
+                            // nothing exists. Not a link — opening it would
+                            // jump to a partner the current division excludes.
+                            <div className="rfevnohost">
+                              Run by a partner in{" "}
+                              {host.division ? `the ${host.division} division` : "another division"}
+                            </div>
+                          ) : e.host ? (
+                            // A host id that resolves to no partner at all: the
+                            // contact was deleted, or it is past the page cap.
+                            <div className="rfevnohost">
+                              Run by a partner that is no longer in the list
                             </div>
                           ) : (
                             <div className="rfevnohost">
@@ -1066,6 +1117,18 @@ export default function ReferralsSection({
                             onClick={() => setMetFor(e)}
                           >
                             Add person met
+                          </button>
+                          {/* 🔴 THE ONLY WRITER OF `Event Source`. Without this
+                              the field exists and nothing ever sets it, so an
+                              event's Clients and Revenue stay at "—" for ever.
+                              This is the sentence the field records: you met
+                              them at the expo, and they became a client. */}
+                          <button
+                            type="button"
+                            className="ighost"
+                            onClick={() => setRefFor({ partner: host, event: e })}
+                          >
+                            Log a referral from this event
                           </button>
                         </div>
                         {!data?.meta.attendeeEventField ? (
@@ -1282,6 +1345,18 @@ export default function ReferralsSection({
           onClose={() => setOpenId(null)}
           onLog={() => setLogFor(open)}
           onLogReferral={() => setRefFor({ partner: open })}
+          onAddEvent={() => setEventForPartner(open)}
+        />
+      ) : null}
+
+      {eventForPartner ? (
+        <AddEventDialog
+          ssoBlob={ssoBlob}
+          partner={eventForPartner}
+          divisions={data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]}
+          hostFieldPresent={!!data?.meta.eventHostField}
+          onClose={() => setEventForPartner(null)}
+          onAdded={() => void load()}
         />
       ) : null}
 
@@ -1289,7 +1364,7 @@ export default function ReferralsSection({
         <LogReferralDialog
           ssoBlob={ssoBlob}
           partner={refFor.partner}
-          eventId={refFor.eventId}
+          event={refFor.event}
           pipelines={data?.clientPipelines || []}
           onClose={() => setRefFor(null)}
           onLogged={() => void load()}
@@ -1393,6 +1468,7 @@ function PartnerDrawer({
   onClose,
   onLog,
   onLogReferral,
+  onAddEvent,
 }: {
   p: EnrichedPartner;
   ssoBlob: string | null;
@@ -1404,9 +1480,10 @@ function PartnerDrawer({
   onClose: () => void;
   onLog: () => void;
   onLogReferral: () => void;
+  onAddEvent: () => void;
 }) {
   const [notes, setNotes] = useState<
-    { id: string; when: string; who: string; txt: string }[] | null
+    { id: string; when: string; who: string; txt: string; type?: string }[] | null
   >(null);
   const [noteErr, setNoteErr] = useState<unknown>(null);
 
@@ -1414,7 +1491,9 @@ function PartnerDrawer({
     let live = true;
     setNotes(null);
     setNoteErr(null);
-    apiFetch<{ notes: { id: string; when: string; who: string; txt: string }[] }>(
+    apiFetch<{
+      notes: { id: string; when: string; who: string; txt: string; type?: string }[];
+    }>(
       `/api/referrals?only=notes&contactId=${encodeURIComponent(p.id)}`,
       { ssoBlob },
     )
@@ -1530,6 +1609,14 @@ function PartnerDrawer({
               <button type="button" className="ighost" onClick={onLog}>
                 Log a touch
               </button>
+              {/* 🔴 THE ONLY WRITER OF `Event Host`. Same problem as Event
+                  Source: the field exists and nothing sets it, so "Run by
+                  [ partner ]" can never resolve and "Events worked" is
+                  permanently empty. An event belongs to whoever ran it, so it
+                  is created from their panel. */}
+              <button type="button" className="ighost" onClick={onAddEvent}>
+                Add an event
+              </button>
             </div>
             {/* ⚠️ THE SENTENCE STAYS, WORD FOR WORD. It is the distinction the
                 whole screen turns on, and with two buttons side by side it is
@@ -1554,8 +1641,13 @@ function PartnerDrawer({
               <div className="rftl">
                 {notes.map((n) => (
                   <div className="rftli" key={n.id}>
+                    {/* d · type · note — the prototype's timeline, now that the
+                        type is actually stored rather than discarded. */}
                     <div className="d">{n.when}</div>
-                    <div className="t">{n.who}</div>
+                    <div className="t">
+                      {n.type ? `${n.type} · ` : ""}
+                      {n.who}
+                    </div>
                     <div className="n">{n.txt}</div>
                   </div>
                 ))}
@@ -1817,6 +1909,17 @@ function AddPartnerDialog({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  /**
+   * 🔴 949 CONTACTS ALREADY EXIST, so "new organisation" cannot be the only
+   * option. A partner is often already in the system — someone who enquired
+   * once, a caregiver's relative who works at a hospital — and creating them
+   * again is the first thing this feature would otherwise do.
+   */
+  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<{ id: string; name: string; email: string; phone: string }[]>([]);
+  const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
+  const [searching, setSearching] = useState(false);
   const [org, setOrg] = useState("");
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
@@ -1831,19 +1934,50 @@ function AddPartnerDialog({
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState("");
 
+  // Debounced, and only from two characters — a keystroke-per-request picker on
+  // a 100-per-10-seconds budget is the same hazard as an unpaced loop.
+  useEffect(() => {
+    if (mode !== "existing" || q.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    let live = true;
+    setSearching(true);
+    const t = setTimeout(() => {
+      apiFetch<{ contacts: typeof hits }>(
+        `/api/referrals?only=contacts&q=${encodeURIComponent(q.trim())}`,
+        { ssoBlob },
+      )
+        .then((j) => {
+          if (live) setHits(j.contacts || []);
+        })
+        .catch(() => {
+          if (live) setHits([]);
+        })
+        .finally(() => {
+          if (live) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q, mode, ssoBlob]);
+
   const save = async () => {
     setBusy(true);
     setErr(null);
     setDone("");
     try {
-      const j = await apiFetch<{ contactId: string; skipped?: string[] }>(
+      const j = await apiFetch<{ contactId: string; skipped?: string[]; promoted?: boolean }>(
         "/api/referrals",
         {
           method: "POST",
           body: JSON.stringify({
             ssoKey: ssoBlob ?? undefined,
             action: "add-partner",
-            org: org.trim(),
+            ...(mode === "existing" && picked ? { contactId: picked.id } : {}),
+            org: mode === "existing" && picked ? picked.name : org.trim(),
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             email: email.trim(),
@@ -1856,10 +1990,11 @@ function AddPartnerDialog({
           }),
         },
       );
+      const verb = j.promoted ? "marked as a referral partner" : "added";
       setDone(
         j.skipped?.length
-          ? `Partner added. Not saved on this account: ${j.skipped.join("; ")}.`
-          : "Partner added.",
+          ? `${picked?.name || org.trim()} ${verb}. Not saved on this account: ${j.skipped.join("; ")}.`
+          : `${picked?.name || org.trim()} ${verb}.`,
       );
       onAdded();
       setTimeout(onClose, j.skipped?.length ? 3200 : 1200);
@@ -1880,6 +2015,88 @@ function AddPartnerDialog({
           </button>
         </div>
         <div className="movebody">
+          <div className="rfmode">
+            <label>
+              <input
+                type="radio"
+                checked={mode === "new"}
+                onChange={() => {
+                  setMode("new");
+                  setPicked(null);
+                }}
+              />
+              New organisation
+            </label>
+            <label>
+              <input
+                type="radio"
+                checked={mode === "existing"}
+                onChange={() => setMode("existing")}
+              />
+              Pick an existing contact
+            </label>
+          </div>
+
+          {mode === "existing" ? (
+            <>
+              <div className="irow">
+                <label htmlFor="rf-find">Find a contact</label>
+                <input
+                  id="rf-find"
+                  type="search"
+                  value={picked ? picked.name : q}
+                  onChange={(e) => {
+                    setPicked(null);
+                    setQ(e.target.value);
+                  }}
+                  placeholder="Riddle, Chamber, a person's name…"
+                />
+              </div>
+              {picked ? (
+                <div className="rfpicked">
+                  <b>{picked.name}</b> will be marked as a referral partner. Their
+                  existing record is kept — nothing is duplicated.
+                  <button type="button" className="linkbtn" onClick={() => setPicked(null)}>
+                    change
+                  </button>
+                </div>
+              ) : q.trim().length >= 2 ? (
+                <div className="rfhits">
+                  {searching ? (
+                    <div className="rfdhint">Searching…</div>
+                  ) : !hits.length ? (
+                    <div className="rfdhint">
+                      No contact matches “{q.trim()}”. Switch to <b>New
+                      organisation</b> if they are not in GoHighLevel yet.
+                    </div>
+                  ) : (
+                    hits.map((h) => (
+                      <button
+                        type="button"
+                        className="rfhit"
+                        key={h.id}
+                        onClick={() => setPicked({ id: h.id, name: h.name })}
+                      >
+                        <span className="n">{h.name}</span>
+                        <span className="m">
+                          {[h.email, h.phone].filter(Boolean).join(" · ") || "no email or phone"}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="rfdhint">
+                  Type at least two characters. ⚠️ This searches every contact,
+                  not only partners — the point is to catch someone who is
+                  already in GoHighLevel under another hat.
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {mode === "new" ? (
+          <>
           <div className="irow">
             <label htmlFor="rf-org">Organisation</label>
             <input
@@ -1894,6 +2111,8 @@ function AddPartnerDialog({
             relationship usually stays. A named contact is optional and goes on
             the same record, so the row still reads as the organisation.
           </div>
+          </>
+          ) : null}
           <div className="irow">
             <label htmlFor="rf-first">Contact first name</label>
             <input id="rf-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
@@ -1993,9 +2212,9 @@ function AddPartnerDialog({
             type="button"
             className="cgsave"
             onClick={() => void save()}
-            disabled={busy || !org.trim()}
+            disabled={busy || (mode === "new" ? !org.trim() : !picked)}
           >
-            {busy ? "Saving…" : "Add partner"}
+            {busy ? "Saving…" : mode === "existing" ? "Mark as partner" : "Add partner"}
           </button>
         </div>
       </div>
@@ -2017,15 +2236,21 @@ function AddPartnerDialog({
 function LogReferralDialog({
   ssoBlob,
   partner,
-  eventId,
+  event,
   pipelines,
   onClose,
   onLogged,
 }: {
   ssoBlob: string | null;
-  partner: EnrichedPartner;
+  /**
+   * 🔴 OPTIONAL — AND THAT IS WHAT GAVE `Event Source` A WRITER.
+   * Opened from an event with no host there is no partner in the sentence at
+   * all: you met them at the expo, and the expo is the source. Requiring a
+   * partner is precisely why the field could never be written.
+   */
+  partner?: Pick<RawPartner, "id" | "org" | "division">;
   /** Set when the referral came from an event card. */
-  eventId?: string;
+  event?: RawEvent;
   pipelines: PipelineChoice[];
   onClose: () => void;
   onLogged: () => void;
@@ -2046,13 +2271,14 @@ function LogReferralDialog({
   // Pay is either deliberate or a mis-file, and nothing on screen would say
   // which — falling back to Private Pay by name when there is no match.
   const suggested = useMemo(() => {
+    const div = partner?.division || event?.division || "";
     const byDivision = pipelines.find(
-      (p) => p.division.toLowerCase() === (partner.division || "").toLowerCase(),
+      (p) => p.division.toLowerCase() === div.toLowerCase(),
     );
     return (
       byDivision || pipelines.find((p) => /private\s*pay/i.test(p.name)) || pipelines[0]
     );
-  }, [pipelines, partner.division]);
+  }, [pipelines, partner?.division, event?.division]);
   const [pipelineId, setPipelineId] = useState(suggested?.id || "");
   const dest = pipelines.find((p) => p.id === pipelineId) || suggested;
 
@@ -2061,27 +2287,36 @@ function LogReferralDialog({
     setErr(null);
     setDone("");
     try {
-      const j = await apiFetch<{ pipelineName: string; stageName: string; noteSaved: boolean }>(
+      const j = await apiFetch<{
+        pipelineName: string;
+        stageName: string;
+        noteSaved: boolean;
+        eventLinkSkipped?: boolean;
+      }>(
         "/api/referrals",
         {
           method: "POST",
           body: JSON.stringify({
             ssoKey: ssoBlob ?? undefined,
             action: "log-referral",
-            partnerId: partner.id,
+            partnerId: partner?.id || "",
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             phone: phone.trim(),
             monthlyValue: Number(monthly) || 0,
             pipelineId,
-            division: partner.division,
-            ...(eventId ? { eventId } : {}),
+            division: partner?.division || event?.division || "",
+            ...(event ? { eventId: event.id } : {}),
             text: text.trim(),
           }),
         },
       );
+      const to = partner ? partner.org : event ? event.name : "no source";
       setDone(
-        `Filed in ${j.pipelineName}${j.stageName ? ` · ${j.stageName}` : ""}, attributed to ${partner.org}.` +
+        `Filed in ${j.pipelineName}${j.stageName ? ` · ${j.stageName}` : ""}, attributed to ${to}.` +
+          (j.eventLinkSkipped
+            ? " ⚠️ The event link was NOT saved — no Event Source field on this account, so this event's Clients will not count it."
+            : "") +
           (j.noteSaved === false ? " The note could not be saved — add it on the record." : ""),
       );
       onLogged();
@@ -2097,7 +2332,9 @@ function LogReferralDialog({
     <div className="previewmodal" onClick={onClose}>
       <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
-          <span className="previewname">Log a referral · from {partner.org}</span>
+          <span className="previewname">
+            Log a referral · from {partner ? partner.org : event ? event.name : "—"}
+          </span>
           <button className="x" type="button" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -2182,11 +2419,12 @@ function LogReferralDialog({
             {dest ? (
               <>
                 Creates an opportunity in <b>{dest.name}</b>
-                {dest.stage ? ` at ${dest.stage}` : ""}, with {partner.org}{" "}
-                attributed as the source.{" "}
-                {partner.division
-                  ? `Defaulted from this partner's division (${partner.division}).`
-                  : "This partner has no division set, so the default is Private Pay."}
+                {dest.stage ? ` at ${dest.stage}` : ""}, attributed to{" "}
+                <b>{partner ? partner.org : event ? event.name : "no source"}</b>
+                {partner && event ? ` (met at ${event.name})` : ""}.{" "}
+                {(partner?.division || event?.division)
+                  ? `Defaulted from the ${partner?.division || event?.division} division.`
+                  : "No division is set on the source, so the default is Private Pay."}
               </>
             ) : (
               "There is no client pipeline configured to file this in."
@@ -2199,9 +2437,17 @@ function LogReferralDialog({
               it is already answered by the partner's own Owner column. */}
           <div className="rfdhint">
             Who works the case is decided by the pipeline&apos;s notification
-            workflow in GoHighLevel, not here. {partner.org} is credited as the
-            source either way.
+            workflow in GoHighLevel, not here.{" "}
+            {partner ? `${partner.org} is` : "The source is"} credited either
+            way.
           </div>
+          {event && !partner ? (
+            <div className="rfdhint">
+              ⚠️ This event has no host partner, so the referral is attributed to
+              the <b>event</b> alone. Nobody&apos;s partner scorecard changes —
+              the event&apos;s Clients and Revenue do.
+            </div>
+          ) : null}
 
           {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
           {done ? <div className="savemsg ok">{done}</div> : null}
@@ -2214,7 +2460,7 @@ function LogReferralDialog({
             type="button"
             className="cgsave"
             onClick={() => void save()}
-            disabled={busy || !firstName.trim() || !dest}
+            disabled={busy || !firstName.trim() || !dest || (!partner && !event)}
           >
             {busy ? "Saving…" : "Log referral"}
           </button>
@@ -2392,6 +2638,160 @@ function AddAttendeeDialog({
             disabled={!canSave}
           >
             {busy ? "Saving…" : "Add person"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ADD AN EVENT — 🔴 THE ONLY WRITER OF `Event Host`.
+//
+// Created from a partner's panel because that is what the field records: which
+// organisation ran this event. Without a writer the field exists, nothing sets
+// it, "Run by [ partner ]" never resolves, and the drawer's "Events worked"
+// section is permanently empty — the same dead end `Event Source` was in.
+//
+// ⚠️ THE HOST IS ALSO THE CONTACT. GoHighLevel attaches every opportunity to a
+// contact, and for an event the honest answer is the organisation running it —
+// so no placeholder contact is invented.
+// ---------------------------------------------------------------------------
+function AddEventDialog({
+  ssoBlob,
+  partner,
+  divisions,
+  hostFieldPresent,
+  onClose,
+  onAdded,
+}: {
+  ssoBlob: string | null;
+  partner: EnrichedPartner;
+  divisions: string[];
+  /** False → the event is created but nothing records who ran it. Said, not hidden. */
+  hostFieldPresent: boolean;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [date, setDate] = useState("");
+  const [venue, setVenue] = useState("");
+  const [cost, setCost] = useState("");
+  const [div, setDiv] = useState(partner.division || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [done, setDone] = useState("");
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    setDone("");
+    try {
+      const j = await apiFetch<{ pipelineName: string; skipped?: string[] }>(
+        "/api/referrals",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ssoKey: ssoBlob ?? undefined,
+            action: "add-event",
+            org: name.trim(),
+            partnerId: partner.id,
+            eventDate: date,
+            venue: venue.trim(),
+            cost: Number(cost) || 0,
+            division: div,
+          }),
+        },
+      );
+      setDone(
+        `Added to ${j.pipelineName}, run by ${partner.org}.` +
+          (j.skipped?.length ? ` Not saved on this account: ${j.skipped.join("; ")}.` : ""),
+      );
+      onAdded();
+      setTimeout(onClose, j.skipped?.length ? 3200 : 1400);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="previewmodal" onClick={onClose}>
+      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+        <div className="previewhead">
+          <span className="previewname">Add an event · run by {partner.org}</span>
+          <button className="x" type="button" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="movebody">
+          <div className="irow">
+            <label htmlFor="re-name">Event name</label>
+            <input
+              id="re-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Delco Senior Expo"
+            />
+          </div>
+          <div className="irow">
+            <label htmlFor="re-date">Date</label>
+            <input id="re-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <label htmlFor="re-cost">Cost</label>
+            <input
+              id="re-cost"
+              type="number"
+              min={0}
+              step={50}
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              placeholder="450"
+            />
+          </div>
+          <div className="rfdhint">
+            ⚠️ Event cost is a one-off — a booth is paid once — so it is never
+            shown as a monthly figure, unlike referral value.
+          </div>
+          <div className="irow">
+            <label htmlFor="re-venue">Venue</label>
+            <input id="re-venue" value={venue} onChange={(e) => setVenue(e.target.value)} />
+            <label htmlFor="re-div">Division</label>
+            <select id="re-div" value={div} onChange={(e) => setDiv(e.target.value)}>
+              <option value="">Not set</option>
+              {divisions.map((d) => (
+                <option key={d} value={d}>
+                  {d === "All" ? "All — appears under every division" : d}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="rfdhint">
+            Creates an opportunity in the Events pipeline with <b>{partner.org}</b>{" "}
+            recorded as the host, so it appears under &ldquo;Events worked&rdquo;
+            on their panel and as &ldquo;Run by&rdquo; on the event card.
+          </div>
+          {!hostFieldPresent ? (
+            <div className="rfdhint">
+              ⚠️ There is no <b>Event Host</b> field on this account, so the event
+              will be created but <b>nothing will record who ran it</b> — it will
+              not appear under this partner&apos;s Events worked.
+            </div>
+          ) : null}
+          {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
+          {done ? <div className="savemsg ok">{done}</div> : null}
+        </div>
+        <div className="moveacts">
+          <button type="button" className="ighost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="cgsave"
+            onClick={() => void save()}
+            disabled={busy || !name.trim()}
+          >
+            {busy ? "Saving…" : "Add event"}
           </button>
         </div>
       </div>

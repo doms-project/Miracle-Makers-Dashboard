@@ -69,6 +69,17 @@ export const ATTENDEE_EVENT_FIELD_NAMES = [
   "Event ID",
 ] as const;
 
+/**
+ * ✅ CREATED ON THE ACCOUNT, 12 September. Ids kept as a CROSS-CHECK only — the
+ * route still resolves by name, so these never become the single point of
+ * failure a hardcoded pair would be.
+ *
+ *   Event Source   O87ax86ucnqvbXhJkkep   opportunity
+ *   Event Host     PCbzK8AbUDYajq9Aja60   opportunity
+ */
+export const OPP_EVENT_FIELD_ID = "O87ax86ucnqvbXhJkkep";
+export const EVENT_HOST_FIELD_ID = "PCbzK8AbUDYajq9Aja60";
+
 /** Which event produced this client. Holds the event opportunity's id. */
 export const OPP_EVENT_FIELD_NAMES = [
   "Event Source",
@@ -99,6 +110,35 @@ export const EVENT_HOST_FIELD_NAMES = [
  * channel ends up counted twice.
  */
 export const TOUCH_TYPES = ["Call", "Visit", "Email", "Event", "Other"] as const;
+
+/**
+ * 🔴 THE TYPE IS PREFIXED INTO THE NOTE, BECAUSE GoHighLevel HAS NOWHERE ELSE.
+ *
+ * A note carries body / userId / dateAdded / relations and no metadata field —
+ * recorded at lib/ghl.ts's DIVISION_TAG for exactly this reason. So the type
+ * goes where the division already goes: into the text, at the front.
+ *
+ * ⚠️ `Visit: ` , the prototype's own shape, NOT `[Visit] `. The bracket form is
+ * already load-bearing on OPPORTUNITY notes (division and edited tags) and
+ * parseNoteBody() consumes leading bracket tags — reusing it here would make a
+ * partner touch parse as a division-tagged opportunity note.
+ *
+ * ⚠️ IT SURVIVES IN GOHIGHLEVEL, which is the point: a rep reading the contact
+ * natively sees "Visit: dropped lunch for the discharge team", not a code.
+ */
+export function composeTouch(type: string, text: string): string {
+  const t = (type || "").trim();
+  const body = (text || "").trim();
+  return t && (TOUCH_TYPES as readonly string[]).includes(t) ? `${t}: ${body}` : body;
+}
+
+/** The inverse. An untyped note (or one written in GHL) returns type "". */
+export function parseTouch(body: string): { type: string; text: string } {
+  const m = /^([A-Za-z][A-Za-z ]{0,12}):\s*([\s\S]*)$/.exec(body || "");
+  if (m && (TOUCH_TYPES as readonly string[]).includes(m[1].trim()))
+    return { type: m[1].trim(), text: m[2] };
+  return { type: "", text: body || "" };
+}
 
 export const TIERS = ["A", "B", "C", "Prospect"] as const;
 export type Tier = (typeof TIERS)[number];

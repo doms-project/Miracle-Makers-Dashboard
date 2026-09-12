@@ -7,7 +7,7 @@ import { isFieldEditable } from "./editable";
 import { PIPELINE_FOLDERS, FOLDERS, folderKeyById } from "./fieldFolders";
 import { divisionLabel } from "./division";
 import { emailKey, phoneKey } from "./phone";
-import { mapLimit } from "./concurrency";
+import { mapLimit, type Settled } from "./concurrency";
 
 // Account-specific — MUST come from env (re-derive per account with
 // scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
@@ -1411,6 +1411,21 @@ export async function latestContactNoteAt(contactId: string): Promise<string> {
     if (!newest || new Date(d).getTime() > new Date(newest).getTime()) newest = d;
   }
   return newest;
+}
+
+/**
+ * Set a contact's owner.
+ *
+ * ⚠️ SEPARATE FROM updateContactCustomFields on purpose. That function's whole
+ * contract is "send ONLY the field that changed, because a partial customFields
+ * array updates rather than replaces" — folding a native field into it would
+ * blur a boundary that took a live verification to establish.
+ */
+export async function setContactOwner(contactId: string, userId: string): Promise<void> {
+  if (!contactId || !userId) return;
+  await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, {
+    assignedTo: userId,
+  });
 }
 
 /** A contact's notes, newest first, with their text. No opportunity filter. */
@@ -3019,7 +3034,36 @@ export interface ContactSearchResult {
 const CF_PAGE = 100;
 const CF_MAX_PAGES = 10;
 /** Per-contact hydrate ceiling. 100 requests per 10 seconds is the budget. */
-const CF_HYDRATE_CAP = 250;
+// ⚠️ 150, NOT 250. At the paced rate 250 reads take ~37s of a 60s budget before
+// anything else runs. Rows past the cap set `truncated`, which the screen states
+// rather than silently showing a short list.
+const CF_HYDRATE_CAP = 150;
+/**
+ * 🔴 PACED, LIKE THE TOUCH LOOP — AND IT WAS NOT.
+ *
+ * This loop was `mapLimit(targets, 5, …)` with no pause while the touch loop in
+ * /api/referrals chunks and sleeps for exactly the same budget. Same feature,
+ * same round, one reasoned about and one left firing flat out.
+ *
+ * ⚠️ ROUND 89's ARITHMETIC APPLIES: a loop at concurrency C and latency L issues
+ * `C × 10000/L` requests per 10 seconds. At C=5 and a 100ms round trip that is
+ * 500 per 10s against a ceiling of 100.
+ *
+ * ✅ MEASURED, NOT ESTIMATED — scripts/hydrate-rate-proof.mjs, 250 reads at
+ * 100ms latency, peak inside any sliding 10-second window:
+ *
+ *     BEFORE  concurrency 5, no pause     250 req/10s   🔴 2.5× the ceiling
+ *     1100ms pause, 12 × conc 4            92 req/10s   ✅ but only 8 spare
+ *     AFTER   1500ms pause, 12 × conc 4    72 req/10s   ✅ 28 spare
+ *
+ * 🔴 THE FIRST FIX MEASURED AT 92 AND I HAD WRITTEN "~86, leaving headroom".
+ * Eight requests per 10 seconds is not headroom — the opportunity sweep and the
+ * touch loop share this ceiling. The pause is 1500ms because 1100ms did not
+ * survive its own measurement.
+ */
+const CF_CHUNK = 12;
+const CF_CONCURRENCY = 4;
+const CF_PAUSE_MS = 1500;
 
 /** A contact's custom fields as a map, or null when the row carried none. */
 function contactCfMap(c: RawContact): Record<string, string> | null {
@@ -3138,7 +3182,18 @@ export async function ghlSearchContacts(
     // because this is one request each and the budget is 100 per 10 seconds.
     const targets = rows.slice(0, CF_HYDRATE_CAP);
     if (rows.length > CF_HYDRATE_CAP) truncated = true;
-    const got = await mapLimit(targets, 5, (r) => getContactCustomFields(r.id));
+    // ⚠️ CHUNKED AND PAUSED. See CF_CHUNK above — an unpaced wave here is a 429
+    // on the ONE path where a 429 is hardest to diagnose, because this branch
+    // only runs when GoHighLevel's search has already returned no field values.
+    const got: Settled<ContactFieldsRead>[] = [];
+    for (let i = 0; i < targets.length; i += CF_CHUNK) {
+      const slice = targets.slice(i, i + CF_CHUNK);
+      got.push(
+        ...(await mapLimit(slice, CF_CONCURRENCY, (r) => getContactCustomFields(r.id))),
+      );
+      if (i + CF_CHUNK < targets.length)
+        await new Promise((r) => setTimeout(r, CF_PAUSE_MS));
+    }
     hydrated = targets.length;
     const out: ContactByField[] = [];
     for (let i = 0; i < targets.length; i++) {

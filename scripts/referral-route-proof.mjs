@@ -55,6 +55,7 @@ const fake = http.createServer((req, res) => {
               { id: EVDATE, name: "Event Date", dataType: "DATE" },
               { id: EVCOST, name: "Event Cost", dataType: "MONETORY" },
               { id: "F_EVHOST", name: "Event Host", dataType: "TEXT" },
+              { id: "F_EVSRC", name: "Event Source", dataType: "TEXT" },
             ]
           : [
               { id: RT, name: "Record Type", dataType: "SINGLE_OPTIONS", picklistOptions: ["Referral Partner", "Event Attendee", "Client"] },
@@ -234,7 +235,7 @@ await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const fakePort = fake.address().port;
 console.log(`fake GoHighLevel on :${fakePort}`);
 
-const PORT = 3488;
+const PORT = 3502;
 const dev = spawn("npx", ["next", "dev", "-p", String(PORT)], {
   env: {
     ...process.env,
@@ -424,6 +425,66 @@ const p1 = (vis.body.partners || []).find((x) => x.id === "p1");
 console.log(
   `  ${p1 && p1.ownerId === "u1" ? "ok  " : "FAIL"} partner carries ownerId for the Mine/All filter (got ${JSON.stringify(p1?.ownerId)})`,
 );
+
+console.log("\n─── 9 · ROUND 107 — THE WRITERS THAT DID NOT EXIST ───────────");
+MODE = "good";
+
+// (a) Event Source — a referral logged FROM an event, with no partner at all.
+sent.length = 0;
+const fromEvent = await post({
+  action: "log-referral",
+  eventId: "ev1",
+  firstName: "Eve",
+  division: "OLTL",
+  monthlyValue: 4200,
+});
+const ob2 = (sent.find((x) => x.url === "/opportunities/" || x.url === "/opportunities") || {}).body || {};
+console.log(`  HTTP ${fromEvent.status} · cf sent: ${JSON.stringify(ob2.customFields)}`);
+console.log(
+  `  ${(ob2.customFields || []).some((f) => f.id === "F_EVSRC" && f.value === "ev1") ? "ok  " : "FAIL"} Event Source written — the field finally has a writer`,
+);
+console.log(
+  `  ${fromEvent.status === 200 ? "ok  " : "FAIL"} accepted with NO partner (the event is the source)`,
+);
+
+// (b) Event Host — an event created from a partner's drawer.
+sent.length = 0;
+const newEv = await post({
+  action: "add-event",
+  org: "Delco Senior Expo 2027",
+  partnerId: "p1",
+  eventDate: "2027-03-14",
+  venue: "Springfield Mall",
+  cost: 650,
+  division: "OLTL",
+});
+const eb = (sent.find((x) => x.url === "/opportunities/" || x.url === "/opportunities") || {}).body || {};
+console.log(`\n  HTTP ${newEv.status} · ${JSON.stringify(newEv.body)}`);
+console.log(`  cf sent: ${JSON.stringify(eb.customFields)}`);
+console.log(
+  `  ${(eb.customFields || []).some((f) => f.id === "F_EVHOST" && f.value === "p1") ? "ok  " : "FAIL"} Event Host written — "Run by" can now resolve`,
+);
+console.log(
+  `  ${eb.contactId === "p1" ? "ok  " : "FAIL"} the host IS the opportunity's contact (no invented placeholder)`,
+);
+
+// (c) the touch type — collected AND persisted, then parsed back out.
+sent.length = 0;
+await post({ action: "log-touch", contactId: "p1", touchType: "Visit", text: "Dropped lunch." });
+const noteBody = (sent.find((x) => /\/notes$/.test(x.url) && x.method === "POST") || {}).body || {};
+console.log(`\n  note body written: ${JSON.stringify(noteBody.body)}`);
+console.log(
+  `  ${noteBody.body === "Visit: Dropped lunch." ? "ok  " : "FAIL"} the type is in the note, not discarded`,
+);
+
+// (d) the two light read modes.
+const pl = await call("?only=partners");
+console.log(`\n  only=partners → ${JSON.stringify((pl.body.partners || []).map((p) => p.org))}`);
+console.log(
+  `  ${(pl.body.partners || []).length === 2 ? "ok  " : "FAIL"} the "Referred by" picker has a list`,
+);
+const cs = await call("?only=contacts&q=rid");
+console.log(`  only=contacts&q=rid → ${(cs.body.contacts || []).length} hit(s)`);
 
 dev.kill("SIGTERM");
 fake.close();
