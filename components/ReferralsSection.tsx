@@ -757,7 +757,7 @@ export default function ReferralsSection({
               </button>
             </div>
 
-            <div className="panel">
+            <div className="rfpanel">
               <div className="rftw">
                 <table className="rftable">
                   <thead>
@@ -963,7 +963,7 @@ export default function ReferralsSection({
             </div>
 
             {!overdue.length && !dueSoon.length ? (
-              <div className="panel">
+              <div className="rfpanel">
                 <div className="empty">
                   <b>
                     {kpis.unknown && !all.some((p) => !p.unknownTouch)
@@ -977,7 +977,7 @@ export default function ReferralsSection({
                 </div>
               </div>
             ) : (
-              <div className="panel">
+              <div className="rfpanel">
                 {[...overdue, ...dueSoon].map((p) => (
                   <div key={p.id} className={p.isOverdue ? "rfq od" : "rfq soon"}>
                     <div className="rfbar" />
@@ -1075,7 +1075,7 @@ export default function ReferralsSection({
                 </p>
               </div>
             ) : !events.length ? (
-              <div className="panel">
+              <div className="rfpanel">
                 <div className="empty">
                   <b>No events in {divLabel(division)}</b>
                   <br />
@@ -1084,7 +1084,7 @@ export default function ReferralsSection({
                 </div>
               </div>
             ) : (
-              <div className="panel">
+              <div className="rfpanel">
                 {events.map((e) => {
                   const st = eventStats(e, data?.attendees || [], data?.referrals || []);
                   const good = st.cpl !== null && st.cpl <= 120;
@@ -1269,7 +1269,7 @@ export default function ReferralsSection({
                   Everyone met at an event
                   <span className="rfn">{data.attendees.length}</span>
                 </h3>
-                <div className="panel">
+                <div className="rfpanel">
                   <div className="rftw">
                     <table className="rftable">
                       <thead>
