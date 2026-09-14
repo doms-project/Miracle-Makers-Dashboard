@@ -1900,3 +1900,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    it. ⚠️ The h1 carries no box of its own: the button is the visible heading,
    so the wrapper must not add margin or a second font size. */
 .rechead-h{margin:0;font:inherit;display:block;}
+
+/* ROUND 121b · ITEM 3 — "the pipelines are empty", said once, above the board. */
+.cgempty{margin:6px 0 0;font-size:11.5px;color:var(--ink-3);}

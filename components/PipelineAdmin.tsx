@@ -1412,11 +1412,20 @@ export default function PipelineAdmin({
                 <span className="pfscope">
                   {/* ⚠️ "none" IS NOT A WORD ON A SCREEN. It is a stored token;
                       what an admin needs to read is what it does. */}
+                  {/* 🔴 ROUND 121b — "caregiver" WAS AMBIGUOUS ON THIS ROW.
+                      The header showed the SCOPE as a bare word, and the
+                      Recruiting group below it is a DIFFERENT setting that also
+                      defaults to caregiver. Two settings, one word, one row —
+                      an admin cannot tell which the header means. Naming the
+                      BOARD is what separates them: scope is which board picker
+                      lists it, the group is which half of Recruiting. */}
                   {!entry
                     ? "not configured"
                     : entry.scope === "none"
                       ? "no board picker"
-                      : entry.scope}
+                      : entry.scope === "caregiver"
+                        ? "Caregivers board"
+                        : "Clients board"}
                 </span>
                 <span className="pfcount">
                   {entry ? `${entry.folders.length} section(s)` : "Shared only"}
