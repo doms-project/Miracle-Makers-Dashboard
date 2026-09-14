@@ -200,6 +200,21 @@ export interface ApiError {
   error: string;
   detail?: string;
   status?: number;
+  /**
+   * 🔴 TRUE WHEN THE APP DECLINED ON PURPOSE — round 119, item 3.
+   *
+   * A REFUSAL and a FAULT are not the same thing and must not look the same.
+   * "\"PP Staff Applicants\" has no scope yet. Choose Client or Caregiver above"
+   * is round 112's guard doing exactly its job, and it was rendered under
+   * "✗ Something went wrong. The details below will help us fix it." — behind a
+   * disclosure triangle. The instruction was hidden inside a fault report.
+   *
+   * ⚠️ MARKED BY THE THING THAT DECIDED, not inferred from a status code. A 400
+   * from GoHighLevel is a fault; a 400 from OUR OWN route carrying our own
+   * sentence is a refusal. Only the code that refused can tell them apart, so
+   * it says so here rather than leaving the renderer to guess.
+   */
+  refusal?: boolean;
 }
 
 // Resources tab — a file in the OLTL Resources media folder.

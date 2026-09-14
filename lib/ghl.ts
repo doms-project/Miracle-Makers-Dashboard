@@ -2745,12 +2745,32 @@ export async function createFieldFolder(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A section needs a name.", 400);
-  const res = await ghlSend<Record<string, unknown>>("POST", "/custom-fields/folder", {
-    locationId,
-    name,
-    objectKey: args.model === "contact" ? "contact" : "opportunity",
-  });
-  // 🔴 READ THE ID FROM WHATEVER SHAPE COMES BACK. This read only
+  // 🔴 ROUND 119 — THE WRONG API, AND ROUND 90 WROTE THE DISTINCTION DOWN:
+  // "/custom-fields/ and /locations/{id}/customFields are DIFFERENT APIs with
+  // different vocabularies." `/custom-fields/` is the write API and it REFUSES
+  // these objects — "Api does not support objectKey of type contact or
+  // opportunity". `createCustomField` was moved to the location endpoint in
+  // round 93; THIS FUNCTION WAS NOT, and nothing exercised it until round 118
+  // built an action that calls it.
+  //
+  // ✅ THE LOCATION ENDPOINT IS PROVEN: all four folders created on this
+  // account this week went through it — Referral Partner, Event Attendance,
+  // Event Details, Referral Detail.
+  //
+  // ⚠️ AND THE VOCABULARY IS DIFFERENT TOO, which is the trap round 90 was
+  // warning about: `documentType: "folder"` and `model`, not `objectKey`; and
+  // the id comes back under **customFieldFolder**, not `customField`.
+  const res = await ghlSend<Record<string, unknown>>(
+    "POST",
+    `/locations/${encodeURIComponent(locationId)}/customFields`,
+    {
+      name,
+      documentType: "folder",
+      model: args.model === "contact" ? "contact" : "opportunity",
+    },
+  );
+  // 🔴 READ THE ID FROM WHATEVER SHAPE COMES BACK — and `customFieldFolder` is
+  // the key this endpoint actually uses. This read only
   // `res.customField.id`, and a folder create does not return `customField` —
   // so it threw AFTER GoHighLevel had already created the folder, leaving an
   // orphan section on the account that nothing pointed at and the screen never
@@ -3068,19 +3088,85 @@ export async function savePipelineConfig(
       value: body,
     });
   }
-  const after = await findPipelineConfigValue();
-  const parsed = after ? parsePipelineConfig(after.value) : null;
+  // 🔴 ROUND 119 · ITEM 2 — RETRY THE READ-BACK, NOT THE WRITE.
+  //
+  // The write already happened. A re-read is a GET and is safe to repeat, which
+  // is exactly 117's rule for the 429 applied to a different race: GoHighLevel
+  // had not settled, the read-back returned the PREVIOUS value, and this
+  // reported a truncation that did not happen — about a save that had worked.
+  //
+  // ⚠️ AND THE OLD MESSAGE WAS WORSE THAN NO GUARD. "Treat this save as failed"
+  // reads as "click again", and clicking again writes it twice. Round 90 probed
+  // the cap at 100,000 characters and stored it intact; the whole config is
+  // about 600. Truncation was never a plausible reading of this evidence.
+  let parsed: StoredPipelineConfig | null = null;
+  let lastRaw = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) await sleep(attempt * 400); // 400ms, then 800ms
+    const after = await findPipelineConfigValue();
+    lastRaw = after?.value ?? "";
+    parsed = after ? parsePipelineConfig(after.value) : null;
+    if (parsed && sameConfig(parsed, next)) return parsed;
+  }
+
   if (!parsed)
     throw new GhlError(
       "Pipeline configuration was written but could not be read back. Nothing has been changed on screen — check the \"MM Pipeline Folders\" custom value in GoHighLevel before trying again.",
       502,
     );
-  if (serialisePipelineConfig(parsed) !== body)
-    throw new GhlError(
-      "Pipeline configuration did not store exactly as sent — it may have been truncated. Treat this save as failed.",
-      502,
-    );
-  return parsed;
+
+  // 🔴 AND NOW IT SAYS WHAT DIFFERS, rather than guessing at a cause. Three
+  // reads disagreeing with the write is a real divergence and the admin needs
+  // to know WHICH pipeline, not a theory about byte limits.
+  throw new GhlError(
+    "Pipeline configuration was saved, but reading it back three times still shows something different. Check it in GoHighLevel before changing anything else.",
+    502,
+    `${describeConfigDiff(next, parsed)} Stored value is ${lastRaw.length} characters; ` +
+      `${body.length} were sent. (Round 90 stored 100,000 characters intact, so length is not the cause.)`,
+  );
+}
+
+/**
+ * 🔴 COMPARE WHAT THE VALUE MEANS, NOT ITS BYTES.
+ *
+ * The old guard was `serialisePipelineConfig(parsed) !== body` — a raw string
+ * comparison against what was sent. `parsePipelineConfig` NORMALISES on the way
+ * in: it drops an empty `exclude` (round 116), de-duplicates it, trims folder
+ * tokens and drops entries with an unreadable scope. Every one of those is the
+ * parser doing its job, and every one of them made the strings differ — so a
+ * perfectly stored config could be reported as truncated by a normalisation
+ * this file performs on purpose.
+ *
+ * Parsing BOTH sides removes that entire class of false alarm, and leaves the
+ * guard doing the one thing it was for: catching a value that came back saying
+ * something else.
+ */
+function sameConfig(a: StoredPipelineConfig, b: StoredPipelineConfig): boolean {
+  const norm = (c: StoredPipelineConfig) => {
+    const round = parsePipelineConfig(serialisePipelineConfig(c));
+    return round ? serialisePipelineConfig(round) : "";
+  };
+  const na = norm(a);
+  return !!na && na === norm(b);
+}
+
+/** Which pipelines differ, named — for the detail line above. */
+function describeConfigDiff(
+  sent: StoredPipelineConfig,
+  got: StoredPipelineConfig,
+): string {
+  const ids = new Set([...Object.keys(sent.pipelines), ...Object.keys(got.pipelines)]);
+  const diffs: string[] = [];
+  for (const id of ids) {
+    const a = sent.pipelines[id];
+    const b = got.pipelines[id];
+    if (!a) diffs.push(`${id}: stored but not sent`);
+    else if (!b) diffs.push(`${id}: sent but not stored`);
+    else if (JSON.stringify(a) !== JSON.stringify(b))
+      diffs.push(`${id}: sent ${JSON.stringify(a)}, stored ${JSON.stringify(b)}`);
+  }
+  if (!diffs.length) return "The pipelines match; the difference is elsewhere in the value.";
+  return `Differs on ${diffs.length} pipeline(s): ${diffs.slice(0, 4).join(" · ")}.`;
 }
 
 /**
