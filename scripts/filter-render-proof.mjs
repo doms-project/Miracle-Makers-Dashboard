@@ -160,7 +160,10 @@ await frame.waitForFunction(
   { timeout: 90000 },
 );
 for (let i = 0; i < 10; i++) {
-  await frame.click('button:has-text("Caregivers")');
+  // ⚠️ ROUND 120 RENAMED THIS RAIL ENTRY to Recruiting. Anchored on the rail
+  // button's class as well as its label, so a future rename fails loudly here
+  // rather than matching some other button that happens to say the word.
+  await frame.click('.railsec:has-text("Recruiting")');
   await page.waitForTimeout(700);
   if ((await frame.textContent(".main h1"))?.includes("Applicant")) break;
 }

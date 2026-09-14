@@ -678,6 +678,23 @@ export default function PipelineAdmin({
         if (j.folderId) folderId = j.folderId;
         if (Array.isArray(j.results)) for (const r of j.results) add(step, r.ok, r.detail);
         else add(step, j.ok !== false, String(j.detail || "Done."));
+        // 🔴 ROUND 121 · ITEM 1 — A STEP THAT DEPENDS ON AN EARLIER ONE MUST NOT
+        // RUN WHEN IT FAILED. Live, both field moves failed and the tick ran
+        // anyway: an EMPTY folder went onto five client pipelines, which is
+        // round 93's orphan in a new shape. The tick exists to show those two
+        // fields; with neither moved it has nothing to show.
+        if (step === "fields" && Array.isArray(j.results) && j.results.length &&
+            j.results.every((r: { ok?: boolean }) => r.ok === false)) {
+          add(
+            "tick",
+            false,
+            "Not ticked — neither field moved, so the folder is empty and " +
+              "ticking it onto every client pipeline would add a section with " +
+              "nothing in it. Fix the move above, then run this again.",
+          );
+          setSaved("");
+          return;
+        }
         if (j.config) {
           setData((d) => (d ? { ...d, config: j.config } : d));
           announce(j.config);
@@ -1783,9 +1800,26 @@ export default function PipelineAdmin({
       {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}
       {data.contactSections?.length ? (
         <>
-          <div className="istep" style={{ marginTop: 20 }}>
-            Contact sections — not editable here
-          </div>
+          {/* 🔴 ROUND 121 · ITEM 5 — COLLAPSED, WITH THE COUNT IN THE HEADER.
+              116 built this and it earned its place — it found five folders
+              whose fields were being dropped, three of them ours, mapped in
+              118. But nothing in the LIST is actionable, and it sat open on a
+              screen already carrying nine controls. The number is the value: a
+              count that changes tells an admin something happened, and the
+              list only matters when it does.
+              ⚠️ `:not([open])` IS NOT OPTIONAL — round 119 measured three
+              <details> on this page rendering open because an author `display`
+              rule beat the browser's collapse. Sweep rule 8 checks it. */}
+          <details className="pfcontacts-wrap">
+            <summary>
+              Contact sections
+              <span className="pfcwcount">
+                {data.contactSections.length} mapped
+                {data.unknownContactFolders?.length
+                  ? ` · ${data.unknownContactFolders.length} not known about`
+                  : ""}
+              </span>
+            </summary>
           <div className="pfgovern">
             <p>
               {/* 🔴 THE HONEST HALF. These are hardcoded in
@@ -1821,13 +1855,15 @@ export default function PipelineAdmin({
                   .map((c) => (
                     <div className="pfcrow" key={c.id}>
                       <span className="pfcname">{c.label}</span>
+                      {/* ⚠️ ONLY WHERE IT DIFFERS — round 121, item 5. "same
+                          name in GoHighLevel" repeated on eight of eleven rows,
+                          which is eight lines saying nothing. The two that
+                          matter are the two that are renamed. */}
                       {c.renamed ? (
                         <span className="pfcghl" title="The name in GoHighLevel">
                           {c.ghlName}
                         </span>
-                      ) : (
-                        <span className="pfcsame">same name in GoHighLevel</span>
-                      )}
+                      ) : null}
                       <span className="pfcfields">
                         {/* ⚠️ A SECTION WITH NO FIELDS IS THE FINDING. "Enquiry
                             Details" holds one field used by nobody and renders
@@ -1843,6 +1879,9 @@ export default function PipelineAdmin({
               </div>
             ))}
           </div>
+          </details>
+          {/* 🔴 OUTSIDE THE COLLAPSE, DELIBERATELY. These ARE actionable: their
+              fields do not appear on any record and somebody has to decide. */}
           {data.unknownContactFolders?.length ? (
             <div className="pfstale">
               <b>

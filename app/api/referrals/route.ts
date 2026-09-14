@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getSelectedPipelines,
+  firstStage,
   getEditableFieldDefs,
   getOltlOpportunities,
   upsertContact,
@@ -570,8 +571,10 @@ export async function GET(request: Request) {
               id: p.id,
               name: p.name,
               division: divisionLabel(p.name),
-              stage: p.stages?.[0]?.name || "",
-              stageId: p.stages?.[0]?.id || "",
+              // ITEM 3 — by POSITION. `stages[0]` answered TRANSFERRED IN on
+              // all five pipelines; see firstStage() in lib/ghl.ts.
+              stage: firstStage(p).name,
+              stageId: firstStage(p).id,
             })),
           // ── what this answer does NOT know, said out loud ──────────────────
           meta: {
@@ -754,7 +757,7 @@ export async function POST(request: Request) {
                 },
             { status: 409 },
           );
-        const stageId = dest.stages?.[0]?.id || "";
+        const stageId = firstStage(dest).id;
         if (!stageId)
           return NextResponse.json(
             {
@@ -861,7 +864,7 @@ export async function POST(request: Request) {
           contactId: contact.id,
           opportunityId: oppId,
           pipelineName: dest.name,
-          stageName: dest.stages?.[0]?.name || "",
+          stageName: firstStage(dest).name,
           monthly,
           noteSaved,
           // ⚠️ STATED, NEVER SILENT. If the event link could not be written the
@@ -895,7 +898,7 @@ export async function POST(request: Request) {
             } as ApiError,
             { status: 409 },
           );
-        const stageId = evPipe.stages?.[0]?.id || "";
+        const stageId = firstStage(evPipe).id;
         if (!stageId)
           return NextResponse.json(
             {

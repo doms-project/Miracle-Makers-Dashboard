@@ -1855,9 +1855,13 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    two switchers in the app cannot drift apart. These are the only differences:
    it sits in the page header rather than a section body, so it loses the
    bottom margin the Referrals one needs, and its options carry a hint. */
-.cghead{margin:0;}
-.cghead .rfdivname{display:inline-flex;align-items:center;gap:8px;}
-.cghead > small{display:block;margin-top:2px;}
+/* ⚠️ NOT `.cghead` — THAT NAME WAS TAKEN, and the sweep caught it within the
+   round. CaregiversSection uses `.sechead cghead` for the linked-caregivers
+   heading inside the record panel; borrowing the same class would have given
+   one class two meanings and moved a heading nobody asked me to touch. */
+.rechead{margin:0;}
+.rechead .rfdivname{display:inline-flex;align-items:center;gap:8px;}
+.rechead > small{display:block;margin-top:2px;}
 .cghint{display:block;font-size:11px;font-weight:400;color:var(--ink-3);margin-top:1px;}
 
 /* ROUND 120 · ITEM 1 — the recruiting-group control, on the scope row's rhythm. */
@@ -1873,3 +1877,26 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
   color:var(--plum);cursor:pointer;text-decoration:underline;
   text-decoration-color:transparent;transition:text-decoration-color .12s;}
 .rfoppopen:hover{text-decoration-color:currentColor;}
+
+/* ROUND 121 · ITEM 5 — the contact listing, collapsed.
+   ⚠️ THE GUARD IS REQUIRED. `.pfcontacts` is display:grid, and round 119
+   measured that an author `display` on a direct child beats the browser's
+   collapse — three <details> on this page were rendering open. */
+.pfcontacts-wrap{margin-top:20px;border:1px solid var(--line);border-radius:10px;
+  background:var(--bg);overflow:hidden;}
+.pfcontacts-wrap:not([open]) > :not(summary){display:none;}
+.pfcontacts-wrap > summary{cursor:pointer;list-style:none;padding:11px 13px;
+  font-size:12.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:9px;
+  user-select:none;}
+.pfcontacts-wrap > summary::-webkit-details-marker{display:none;}
+.pfcontacts-wrap > summary::before{content:"▸";font-size:11px;color:var(--ink-3);
+  transition:transform .15s;}
+.pfcontacts-wrap[open] > summary::before{transform:rotate(90deg);}
+.pfcontacts-wrap > summary:hover{background:var(--row-hover);}
+.pfcwcount{margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-3);}
+.pfcontacts-wrap .pfgovern,.pfcontacts-wrap .pfcontacts{margin:0 13px 13px;}
+
+/* ROUND 121 — the Recruiting heading is an <h1> again, with the control inside
+   it. ⚠️ The h1 carries no box of its own: the button is the visible heading,
+   so the wrapper must not add margin or a second font size. */
+.rechead-h{margin:0;font:inherit;display:block;}

@@ -1652,7 +1652,11 @@ function AttributedRow({
       const j = await apiFetch<{ record?: { monetaryValue?: number; status?: string } }>(
         `/api/opportunities/${encodeURIComponent(opp.id)}`,
         {
-          method: "PUT",
+          // 🔴 PATCH — round 121, item 2. `/api/opportunities/[id]` exports
+          // PATCH and nothing else, so a PUT is answered by Next.js itself with
+          // a 405 and an empty body, before any handler runs. This row's value
+          // and status edits have been dead since 112.
+          method: "PATCH",
           ssoBlob,
           body: JSON.stringify({
             ssoKey: ssoBlob ?? undefined,
@@ -2823,7 +2827,13 @@ function LogReferralDialog({
     setDone("");
     try {
       await apiFetch(`/api/opportunities/${encodeURIComponent(chosenOpp)}`, {
-        method: "PUT",
+        // 🔴 PATCH, for the same reason — and this is the one 115c "proved".
+        // The proof asserted "EXACTLY ONE write · a PUT to an opportunity" and
+        // passed, against a fake that answered any method. It proved the
+        // harness. The record panel's own `saveField` has always sent PATCH;
+        // re-implementing the call instead of reusing it is what changed the
+        // method.
+        method: "PATCH",
         ssoBlob,
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
