@@ -46,7 +46,14 @@ export default function AddCaregiverDialog({
   /** Caregiver pipelines only — scope:"caregiver" from the stored config. */
   pipelines: { id: string; name: string }[];
   onClose: () => void;
-  onAdded: () => void;
+  /**
+   * ⚠️ THE PIPELINE IT LANDED IN, round 123. Recruiting is filtered by group,
+   * and the division routing here does not read that filter — so an add can
+   * legitimately land outside what the screen is showing. The caller needs the
+   * id to follow it; without one the record is simply absent and nothing says
+   * why. Undefined when nothing was created (contact-only / REJECTED).
+   */
+  onAdded: (pipelineId?: string) => void;
 }) {
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
@@ -105,7 +112,7 @@ export default function AddCaregiverDialog({
           ? `Added to ${j.pipelineName}.`
           : "Recorded as a contact. No application was created.",
       );
-      onAdded();
+      onAdded(j.pipelineId || undefined);
       setTimeout(onClose, 1400);
     } catch (e) {
       setErr(e);

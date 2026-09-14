@@ -216,6 +216,10 @@ const port = server.address().port;
 process.env.GHL_API_BASE = `http://127.0.0.1:${port}`;
 process.env.GHL_LOCATION_ID = process.env.GHL_LOCATION_ID || "loc_test";
 process.env.GHL_API_KEY = process.env.GHL_API_KEY || "key_test";
+// ⚠️ THE TOKEN VARIABLE WAS RENAMED TO GHL_PIT AND THIS FILE WAS NOT UPDATED,
+// so six of its assertions had been failing on "GHL_PIT is missing" rather than
+// on anything about referrals. Set here so the script stands alone again.
+process.env.GHL_PIT = process.env.GHL_PIT || "pit_test";
 
 const G = await import("../lib/ghl.ts");
 

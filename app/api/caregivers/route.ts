@@ -235,7 +235,17 @@ async function postHandler(request: Request) {
     );
 
     return NextResponse.json(
-      { ok: true, contactId: contact.id, opportunityId: oppId, pipelineName: dest.name },
+      // ⚠️ pipelineId TOO — round 123. The caller needs to know WHERE it
+      // landed, not just what it is called: the Recruiting section is filtered
+      // by group, and a new record in a group the screen is not showing has to
+      // be followed rather than silently missing. A name is not an id.
+      {
+        ok: true,
+        contactId: contact.id,
+        opportunityId: oppId,
+        pipelineId: dest.id,
+        pipelineName: dest.name,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {

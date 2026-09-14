@@ -45,7 +45,7 @@ import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
 import AddCaregiverDialog from "@/components/AddCaregiverDialog";
-import ReferralsSection from "@/components/ReferralsSection";
+import ReferralsSection, { type Payload as ReferralsPayload } from "@/components/ReferralsSection";
 import ReferredBy from "@/components/ReferredBy";
 import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
 import { divisionLabel } from "@/lib/division";
@@ -1474,6 +1474,25 @@ export default function Dashboard() {
   // keeps one position across every section rather than growing a second copy.
   const [refReload, setRefReload] = useState(0);
   const [refBusy, setRefBusy] = useState(false);
+  /**
+   * 🔴 ANALYSIS 104 · 13 — THE REFERRALS PAYLOAD, HELD ACROSS A SECTION SWITCH.
+   *
+   * ⚠️ THE PAGE DOES NOT FETCH IT AND DOES NOT READ IT. It is written only by
+   * a section that has already loaded, and handed straight back on the next
+   * mount — so this is a cache, not a second owner of the data. `refReload`
+   * still forces a real re-read, which is what the toolbar's Refresh bumps.
+   */
+  const refCache = useRef<ReferralsPayload | null>(null);
+  /**
+   * ⚠️ STABLE ON PURPOSE. This is a dependency inside the section; an inline
+   * arrow would change identity on every render of this page and re-fire the
+   * mirror effect each time. And a REF rather than state because nothing here
+   * renders it — storing it in state would re-render the whole page on every
+   * optimistic edit inside Referrals, for a value only the next mount reads.
+   */
+  const rememberReferrals = useCallback((p: ReferralsPayload) => {
+    refCache.current = p;
+  }, []);
   const [selId, setSelId] = useState<string | null>(null);
   /**
    * 🔴 THE CLIENT TILES ARE A FILTER NOW — round 114, item 2.
@@ -1523,6 +1542,44 @@ export default function Dashboard() {
    */
   const [cgGroup, setCgGroup] = useState<"caregiver" | "staff" | "all">("caregiver");
   const [cgGroupOpen, setCgGroupOpen] = useState(false);
+  /**
+   * 🔴 ROUND 123 · ITEM 1 — ONE NOUN, DERIVED FROM THE SWITCHER.
+   *
+   * The switcher filtered the list from the day it shipped and **nothing that
+   * described the list read it**: the heading, the count, both tile subs, the
+   * loading and error lines, the search placeholder and the "no matches" row
+   * all said "applicant" whatever was selected. Same fault as the caregiver
+   * tile in 113 and the client board in 114 — the control is honoured and what
+   * reports it is not.
+   *
+   * ⚠️ ONE OBJECT, NOT SIX TERNARIES. Six copies of `cgGroup === "staff" ? …`
+   * is how five of them stay in step and the sixth does not. Anything that
+   * names what is on screen reads this.
+   *
+   * ⚠️ AND `many` IS "applicants" UNDER **ALL**, NOT "records". Every pipeline
+   * in Recruiting is an applicants pipeline — OLTL/PP/ODP Staff Applicants, PP
+   * Caregiver Applicants, ODP DSP Applicant. Under All the umbrella word is
+   * the accurate one; the heading and the number carry the difference.
+   */
+  const cgNoun = useMemo(() => {
+    if (cgGroup === "staff")
+      return {
+        /** The menu's own word for this choice — so the control shows what it offered. */
+        group: "Staff",
+        one: "staff applicant",
+        many: "staff applicants",
+        /** What a PIPELINE in this group is called, which is not what a RECORD is called. */
+        pipelines: "staff",
+      };
+    if (cgGroup === "all")
+      return { group: "All", one: "applicant", many: "applicants", pipelines: "recruiting" };
+    return { group: "Caregivers", one: "applicant", many: "applicants", pipelines: "applicant" };
+  }, [cgGroup]);
+  /** `12 applicants` / `1 staff applicant` — the plural decided once. */
+  const cgCount = useCallback(
+    (n: number) => `${n} ${n === 1 ? cgNoun.one : cgNoun.many}`,
+    [cgNoun],
+  );
   /** Pipelines explicitly marked staff. Absent = caregiver — one default, one place. */
   const [pipelineGroups, setPipelineGroups] = useState<Record<string, "caregiver" | "staff">>({});
   const [cgStagesByPipeline, setCgStagesByPipeline] = useState<
@@ -2297,16 +2354,31 @@ export default function Dashboard() {
       case "resources":
         return { title: "Resources", sub: "Shared documents and folders" };
       case "caregivers":
-        // 🔴 ROUND 120 · ITEM 1 — RECRUITING, and the subtitle follows the
-        // switcher. The title itself is rendered as the heading-as-control
-        // below; this is the fallback text and the subtitle source.
+        // 🔴 ROUND 123 · ITEM 1 — THE TITLE FOLLOWS THE SWITCHER TOO.
+        //
+        // It was the stale half. The subtitle has moved with `cgGroup` since
+        // 120; the title was the constant "Recruiting" and the heading-as-
+        // control renders the title — so the one element the eye reads as
+        // "what am I looking at" was the one element that never changed. The
+        // Referrals switcher it was borrowed from renders `divLabel(division)`
+        // — the SELECTION. This now does the same.
+        //
+        // ⚠️ SECTION **AND** SELECTION, not selection alone. A bare
+        // "Caregivers" is the exact ambiguity 121b removed from the Pipelines
+        // header: it reads as the old Caregivers screen rather than one half
+        // of Recruiting. The rail says Recruiting; so does the first half of
+        // this, and the second half is the choice.
         return {
-          title: "Recruiting",
+          title: `Recruiting · ${cgNoun.group}`,
           sub:
             cgGroup === "staff"
-              ? "Staff hires across your division"
+              ? // ⚠️ "Staff hires" WAS WRONG, and not only stale. The three
+                // pipelines are OLTL / PP / ODP **Staff Applicants** — someone
+                // in stage one has applied, not been hired. The subtitle was
+                // naming an outcome the records have not reached.
+                "Staff applicants across your division"
               : cgGroup === "all"
-                ? "Applicants and staff hires across your division"
+                ? "Caregiver, DSP and staff applicants across your division"
                 : "Caregiver and DSP applicants across your division",
         };
       case "referrals":
@@ -2323,7 +2395,7 @@ export default function Dashboard() {
           sub: "Enrollments across your division · contacts, comms and settings stay in GoHighLevel",
         };
     }
-  }, [view, headerLabel, cgGroup]);
+  }, [view, headerLabel, cgGroup, cgNoun]);
 
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
@@ -3305,7 +3377,10 @@ export default function Dashboard() {
    * case that blamed the Access tab for a dropdown nobody had set.
    */
   const recruitingEmpty = useMemo(() => {
-    const label = cgGroup === "staff" ? "staff" : cgGroup === "all" ? "recruiting" : "applicant";
+    // ⚠️ THE PIPELINE WORD, NOT THE RECORD WORD — "no staff pipelines" and
+    // "0 staff applicants" are two different sentences. Both now come out of
+    // cgNoun so they cannot drift.
+    const label = cgNoun.pipelines;
     // What EXISTS in this group, before the viewer's own access narrows it.
     const inGroup =
       cgGroup === "all"
@@ -3340,7 +3415,7 @@ export default function Dashboard() {
         one in the Access tab.
       </>
     );
-  }, [cgGroup, cgPipelines, pipelineGroups]);
+  }, [cgGroup, cgNoun, cgPipelines, pipelineGroups]);
 
   const cgActivePipeline = useMemo(
     () =>
@@ -4801,7 +4876,7 @@ export default function Dashboard() {
         </button>
         <button
           className={railWhere === "caregivers" ? "railsec active" : "railsec"}
-          title="Caregiver applicants and staff hires"
+          title="Caregiver, DSP and staff applicants"
           type="button"
           onClick={() => setView("caregivers")}
         >
@@ -5092,7 +5167,7 @@ export default function Dashboard() {
             }
             title={
               railWhere === "caregivers"
-                ? "Re-read the applicants from GoHighLevel"
+                ? `Re-read the ${cgNoun.many} from GoHighLevel`
                 : railWhere === "referrals"
                   ? "Re-read the partners, and measure their last contact again"
                   : "Re-read everything from GoHighLevel"
@@ -5643,14 +5718,14 @@ export default function Dashboard() {
             <div className="statewrap">
               <div className="statecard">
                 <div className="spinner" />
-                <h3>Loading applicants…</h3>
+                <h3>Loading {cgNoun.many}…</h3>
               </div>
             </div>
           ) : cgLoadFailed ? (
             <div className="statewrap">
               <div className="statecard">
                 <h3>
-                  <span className="errdot">●</span> Couldn&apos;t load applicants
+                  <span className="errdot">●</span> Couldn&apos;t load {cgNoun.many}
                 </h3>
                 <p>{cgLoadFailed.error}</p>
                 {cgLoadFailed.detail ? (
@@ -5676,9 +5751,9 @@ export default function Dashboard() {
             <>
               {cgStaleError ? (
                 <div className="loadwarn">
-                  <b>Couldn&apos;t refresh applicants.</b> {cgStaleError.error}{" "}
+                  <b>Couldn&apos;t refresh {cgNoun.many}.</b> {cgStaleError.error}{" "}
                   {cgStaleError.detail ? `${cgStaleError.detail} ` : ""}
-                  The {cgData.length} applicants below are from the last load
+                  The {cgCount(cgData.length)} below are from the last load
                   that worked.{" "}
                   <button
                     type="button"
@@ -5697,7 +5772,7 @@ export default function Dashboard() {
                   <div className="v">{cgStats.unassigned}</div>
                   <div className="sub">
                     {cgStats.unassigned === 0
-                      ? "every applicant has a recruiter"
+                      ? `every ${cgNoun.one} has a recruiter`
                       : `of ${cgFocused.length} shown · nobody is calling them`}
                   </div>
                 </div>
@@ -5712,7 +5787,7 @@ export default function Dashboard() {
                           `${cgStats.oldest.r.first} ${cgStats.oldest.r.last}`.trim()} · ${
                           cgStats.oldest.r.stage
                         }`
-                      : "no stage dates on the applicants shown"}
+                      : `no stage dates on the ${cgNoun.many} shown`}
                   </div>
                 </div>
 
@@ -5749,7 +5824,7 @@ export default function Dashboard() {
                       type="button"
                       className={`srcpick${cgF("recruiter", "") ? " on" : ""}`}
                       onClick={() => setCgF("recruiter", "")}
-                      title="Show unassigned applicants only"
+                      title={`Show unassigned ${cgNoun.many} only`}
                     >
                       <b>{cgStats.unassigned}</b> unassigned
                     </button>
@@ -5793,7 +5868,7 @@ export default function Dashboard() {
                   type="button"
                   className={`stat statbtn${cgF("stalled") ? " on" : ""}`}
                   onClick={() => setCgF("stalled")}
-                  title={`Show applicants ${STALL_DAYS}+ days in stage`}
+                  title={`Show ${cgNoun.many} ${STALL_DAYS}+ days in stage`}
                 >
                   <div className="k">Stalled</div>
                   <div className="v">
@@ -5823,7 +5898,7 @@ export default function Dashboard() {
                   </b>{" "}
                   —{" "}
                   <button type="button" onClick={() => setCgFocus(null)}>
-                    show every applicant
+                    show every {cgNoun.one}
                   </button>
                 </div>
               ) : null}
@@ -5831,7 +5906,7 @@ export default function Dashboard() {
                 <div className="search">
                   <IconSearch />
                   <input
-                    placeholder="Search applicants by name…"
+                    placeholder={`Search ${cgNoun.many} by name…`}
                     value={cgQuery}
                     onChange={(e) => setCgQuery(e.target.value)}
                   />
@@ -5902,17 +5977,16 @@ export default function Dashboard() {
                     the shown set, and says what it is a subset OF whenever a
                     tile is narrowing it: two numbers that agree, and neither of
                     them silently the wrong one. */}
+                {/* 🔴 ROUND 123 · ITEM 1 — AND IT NAMES THE GROUP. It said
+                    "applicants" under Staff, beside a heading that said
+                    Recruiting and a list of staff records. */}
                 <span className="count">
                   {cgFocus ? (
                     <>
-                      {cgFocused.length} shown · {cgVisible.length} applicant
-                      {cgVisible.length === 1 ? "" : "s"} before this filter
+                      {cgFocused.length} shown · {cgCount(cgVisible.length)} before this filter
                     </>
                   ) : (
-                    <>
-                      {cgVisible.length} applicant
-                      {cgVisible.length === 1 ? "" : "s"}
-                    </>
+                    cgCount(cgVisible.length)
                   )}
                 </span>
               </div>
@@ -5926,13 +6000,7 @@ export default function Dashboard() {
                   sentence and one the chips already tell. */}
               {cgData.length === 0 && !cgQuery.trim() && !cgStage && !cgFocus ? (
                 <div className="imeta cgempty">
-                  No{" "}
-                  {cgGroup === "staff"
-                    ? "staff applicants"
-                    : cgGroup === "all"
-                      ? "records"
-                      : "applicants"}{" "}
-                  yet — the{" "}
+                  No {cgNoun.many} yet — the{" "}
                   {cgVisiblePipelines.length === 1
                     ? "pipeline is"
                     : `${cgVisiblePipelines.length} pipelines are`}{" "}
@@ -6028,7 +6096,7 @@ export default function Dashboard() {
                   </table>
                   {cgFocused.length === 0 ? (
                     <div className="empty">
-                      No applicants match this filter.
+                      No {cgNoun.many} match this filter.
                       {/* ⚠️ It guarded on `cgVisible`, so a TILE that matched
                           nothing left an empty table and no sentence — the rows
                           were gone and nothing said why. */}
@@ -6141,6 +6209,16 @@ export default function Dashboard() {
             ssoReady={ssoResolved(sso)}
             reloadToken={refReload}
             onBusy={setRefBusy}
+            /* 🔴 ANALYSIS 104 · 13 — THE LAST PAYLOAD SURVIVES THE SECTION
+               SWITCH. This section is rendered conditionally, so leaving it
+               unmounts it and returning re-ran `touch=auto` from scratch:
+               Clients -> Referrals -> Clients -> Referrals was two full loads
+               and up to 120 note reads. Held here, the second visit draws
+               immediately and reads nothing.
+               ⚠️ THE PAGE NEVER FETCHES IT — only stores what the section
+               loaded, so nobody who avoids Referrals pays for it. */
+            cache={refCache.current}
+            onCache={rememberReferrals}
           />
         ) : view === "access" ? (
           isAdminViewer ? (
@@ -7035,9 +7113,30 @@ export default function Dashboard() {
           // ⚠️ THE CAREGIVER PIPELINES ONLY. cgPipelines comes from the
           // scope:"caregiver" half of the stored config, so a client pipeline
           // cannot reach this dialog by construction.
+          // 🔴 ROUND 123 · ITEM 1 — AND IT IS **NOT** NARROWED BY THE SWITCHER,
+          // deliberately. That was the obvious change and it is the wrong one
+          // twice over. Round 122's item 21 settled the principle: a VIEW must
+          // not make a DATA decision — filing depends on the division, which is
+          // a fact about the person, not on which half of Recruiting happens to
+          // be on screen. And this dialog's own copy is written in those terms:
+          // "No pipeline exists for OLTL_CHC" would become a lie the moment a
+          // pipeline existed and was merely filtered out of view. The list
+          // stays whole; what follows the add is the record.
           pipelines={cgPipelines.map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setAddCgOpen(false)}
-          onAdded={() => void loadCaregivers()}
+          onAdded={(landedIn) => {
+            // ⚠️ FOLLOW IT WHEN IT LANDS OUTSIDE THE VIEW. Adding a staff
+            // applicant while Caregivers is selected used to reload a list the
+            // new record could not appear in — an add that reports success and
+            // shows nothing. Switching here is navigation following an
+            // explicit action, which is not the same thing as a view deciding
+            // where a record goes.
+            if (landedIn) {
+              const g = pipelineGroups[landedIn] === "staff" ? "staff" : "caregiver";
+              if (cgGroup !== "all" && cgGroup !== g) setCgGroup(g);
+            }
+            void loadCaregivers();
+          }}
         />
       ) : null}
       {addOpen ? (

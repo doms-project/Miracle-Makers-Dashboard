@@ -137,8 +137,12 @@ interface Body {
     | "add-event"
     /** ITEM 15 — READS, by POST, so a contact id stays out of the URL. */
     | "contact-opps"
-    | "partner-notes";
+    | "partner-notes"
+    /** ROUND 123 — and this one carried up to SIXTY of them. */
+    | "touch";
   contactId?: string;
+  /** The explicit "measure the next 60" batch. Contact ids, intersected server-side. */
+  touchFor?: unknown[];
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -241,6 +245,47 @@ async function contactOpps(
 }
 
 /**
+ * 🔴 ROUND 123 — "MEASURE THE NEXT 60", REACHED BY POST.
+ *
+ * ⚠️ AND THIS IS A CORRECTION OF SOMETHING I REPORTED AS DONE. Round 122 said
+ * every contact id was out of every URL and the proof agreed. It was wrong:
+ * this call sent up to sixty of them at once in
+ * `?only=touch&touchFor=c1,c2,…`, the single largest id exposure on the
+ * screen, and the assertion that cleared it could not have seen it — the
+ * regex required `${encodeURIComponent(<no brackets>)}` and the argument here
+ * is `ids.join(",")`, which contains one. The same shape as `ghlSend<[^>]*>`
+ * never matching a generic. The check is fixed in the same commit as the call.
+ *
+ * ⚠️ THE INTERSECTION WITH THE LIVE PARTNER LIST IS THE SECURITY HALF and it
+ * is unchanged: the ids arrive from a browser, and a route that reads notes off
+ * any contact id handed to it is a way to read notes off contacts this view has
+ * nothing to do with.
+ */
+async function measureTouches(
+  asked: string[],
+  F: { recordType: string },
+): Promise<NextResponse> {
+  const partnerRes = await ghlSearchContacts(F.recordType, PARTNER_RECORD_TYPE);
+  const live = new Set(partnerRes.rows.map((r) => r.id));
+  const want = asked.filter((id) => live.has(id));
+  const targets = want.slice(0, TOUCH_CAP);
+  const { map, failed } = await resolveTouches(targets);
+  return NextResponse.json(
+    {
+      touch: map,
+      meta: {
+        touchAsked: want.length,
+        touchResolved: targets.length - failed,
+        touchFailed: failed,
+        touchCapped: Math.max(0, want.length - targets.length),
+        touchCap: TOUCH_CAP,
+      },
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+/**
  * One partner's touch history. ITEM 15 — reached by POST so the contact id
  * stays out of the URL; the partner check is unchanged.
  */
@@ -287,23 +332,16 @@ export async function GET(request: Request) {
       }
       const url = new URL(request.url);
       // Which partners' notes to resolve a last touch for.
-      //   touch=auto      — the first TOUCH_CAP partners, for the first load
-      //   touchFor=a,b,c  — an explicit batch, for "measure the next 60"
-      // ⚠️ ALWAYS INTERSECTED WITH THE PARTNER LIST. The ids arrive from the
-      // browser, and a route that reads notes off any contact id it is handed
-      // is a way to read notes off contacts this view has nothing to do with.
-      const asked = (url.searchParams.get("touchFor") || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      //   touch=auto — the first TOUCH_CAP partners, for the first load
+      //
+      // 🔴 ROUND 123 — `touchFor=a,b,c` IS GONE FROM HERE. An explicit batch is
+      // a POST now (`action: "touch"`), because it carried up to sixty contact
+      // ids in a query string. Removed rather than deprecated: leaving the GET
+      // form means an id can still reach a log by whichever caller forgot.
       const autoTouch = url.searchParams.get("touch") === "auto";
-      // `only=touch` skips the opportunity sweep entirely — measuring the next
-      // batch of partners must not re-read every client pipeline to do it.
       const only = url.searchParams.get("only") || "";
-      const onlyTouch = only === "touch";
       /** Either cheap mode — neither needs opportunity fields or the events pipeline. */
-      const light =
-        onlyTouch || only === "notes" || only === "contacts" || only === "partners";
+      const light = only === "notes" || only === "contacts" || only === "partners";
 
       const contactDefs = await getEditableFieldDefs("contact");
       // ⚠️ NOT FETCHED IN touch-only MODE. Measuring the next batch of partners
@@ -436,29 +474,6 @@ export async function GET(request: Request) {
       // ── partners, by Record Type ───────────────────────────────────────────
       const partnerRes = await ghlSearchContacts(F.recordType, PARTNER_RECORD_TYPE);
 
-      // ── touch-only: measure a batch and answer, nothing else ───────────────
-      if (onlyTouch) {
-        const live = new Set(partnerRes.rows.map((r) => r.id));
-        const want = (autoTouch ? partnerRes.rows.map((r) => r.id) : asked).filter(
-          (id) => live.has(id),
-        );
-        const targets = want.slice(0, TOUCH_CAP);
-        const { map, failed } = await resolveTouches(targets);
-        return NextResponse.json(
-          {
-            touch: map,
-            meta: {
-              touchAsked: want.length,
-              touchResolved: targets.length - failed,
-              touchFailed: failed,
-              touchCapped: Math.max(0, want.length - targets.length),
-              touchCap: TOUCH_CAP,
-            },
-          },
-          { headers: { "Cache-Control": "no-store" } },
-        );
-      }
-
       const [users, attendeeRes] = await Promise.all([
         getUserMap(),
         ghlSearchContacts(F.recordType, ATTENDEE_RECORD_TYPE),
@@ -480,7 +495,9 @@ export async function GET(request: Request) {
 
       // ── last touch, for the partners asked for ─────────────────────────────
       const live = new Set(partners.map((p) => p.id));
-      const want = (autoTouch ? partners.map((p) => p.id) : asked).filter((id) =>
+      // ⚠️ `touch=auto` OR NOTHING. The explicit batch left this route's GET
+      // entirely (see measureTouches), so there is no second source of ids here.
+      const want = (autoTouch ? partners.map((p) => p.id) : []).filter((id) =>
         live.has(id),
       );
       const touchTargets = want.slice(0, TOUCH_CAP);
@@ -1076,6 +1093,19 @@ export async function POST(request: Request) {
         const cid = clean(body.contactId);
         if (!cid) return NextResponse.json({ opportunities: [] });
         return contactOpps(cid, session, isAdminSession(session?.role, session?.type) || !session);
+      }
+
+      if (body.action === "touch") {
+        const ids = (Array.isArray(body.touchFor) ? body.touchFor : [])
+          .map((v: unknown) => clean(v))
+          .filter(Boolean) as string[];
+        if (!ids.length) return NextResponse.json({ touch: {}, meta: { touchAsked: 0,
+          touchResolved: 0, touchFailed: 0, touchCapped: 0, touchCap: TOUCH_CAP } });
+        const defsT = await getEditableFieldDefs("contact");
+        const rtT =
+          defsT.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
+          PARTNER_FIELDS.recordType.id;
+        return measureTouches(ids, { recordType: rtT });
       }
 
       if (body.action === "partner-notes") {
