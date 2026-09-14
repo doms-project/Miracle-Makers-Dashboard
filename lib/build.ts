@@ -25,12 +25,12 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "119",
+  round: "120",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the attribution folder used the wrong API and now uses the right one · " +
-    "three steps that report as they land · a lagging read-back is not " +
-    "truncation · a refusal is not a fault · no silent writes",
+    "Recruiting, with a switcher between caregiver applicants and staff hires · " +
+    "the four referral modals on the record panel's scale · .savemsg.ok and " +
+    ".moveacts, both used everywhere and defined nowhere",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

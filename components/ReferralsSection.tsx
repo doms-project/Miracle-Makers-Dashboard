@@ -146,7 +146,17 @@ export default function ReferralsSection({
   ssoReady,
   reloadToken,
   onBusy,
+  onOpenRecord,
+  canOpenRecord,
 }: {
+  /**
+   * 🔴 ITEM 3 — OPEN AN ATTRIBUTED CASE'S RECORD. 118 deferred this believing
+   * the panel's open path had to be lifted through the section switch. It does
+   * not: the panel renders ABOVE that switch, so setting the id is enough.
+   */
+  onOpenRecord?: (id: string) => void;
+  /** ⚠️ Whether THAT id is in the caller's loaded payload — see AttributedRow. */
+  canOpenRecord?: (id: string) => boolean;
   ssoBlob: string | null;
   /**
    * 🔴 THE HANDSHAKE HAS SETTLED — a blob to send, or none ever coming.
@@ -1456,6 +1466,8 @@ export default function ReferralsSection({
           onLogReferral={() => setRefFor({ partner: open })}
           onAddEvent={() => setEventForPartner(open)}
           onChanged={() => void load()}
+          onOpenRecord={onOpenRecord}
+          canOpenRecord={canOpenRecord}
         />
       ) : null}
 
@@ -1600,10 +1612,16 @@ function AttributedRow({
   opp,
   ssoBlob,
   onSaved,
+  onOpenRecord,
+  canOpenRecord,
 }: {
   opp: RawReferral;
   ssoBlob: string | null;
   onSaved: () => void;
+  /** ITEM 3 — open this opportunity's record panel. */
+  onOpenRecord?: (id: string) => void;
+  /** True when the record is in this tab's loaded payload; see the row. */
+  canOpenRecord?: (id: string) => boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(String(opp.value || ""));
@@ -1676,9 +1694,30 @@ function AttributedRow({
   return (
     <div className="rfopp">
       <div className="rfoppmain">
-        <span className="rfoppname" title={opp.name}>
-          {opp.name}
-        </span>
+        {/* 🔴 ROUND 120 · ITEM 3 — OPEN THE RECORD. Deferred in 118 because the
+            panel's open path looked like it needed lifting through the section
+            switch; it does not. The panel renders ABOVE the view switch
+            (app/page.tsx:7039), so setting the id opens it over whatever
+            section is showing. Two props, no restructuring.
+
+            ⚠️ A BUTTON ONLY WHEN THE RECORD IS ACTUALLY LOADED. A referral can
+            point at an opportunity this viewer's payload does not contain —
+            another division, or a pipeline they do not hold — and a click that
+            opens nothing is worse than a name that was never clickable. */}
+        {onOpenRecord && canOpenRecord?.(opp.id) ? (
+          <button
+            type="button"
+            className="rfoppname rfoppopen"
+            title={`${opp.name} — open the record`}
+            onClick={() => onOpenRecord(opp.id)}
+          >
+            {opp.name}
+          </button>
+        ) : (
+          <span className="rfoppname" title={opp.name}>
+            {opp.name}
+          </span>
+        )}
         <span className="rfoppago">
           {opp.ago === null ? "undated" : `${opp.ago}d ago`}
         </span>
@@ -1769,7 +1808,11 @@ function PartnerDrawer({
   onLogReferral,
   onAddEvent,
   onChanged,
+  onOpenRecord,
+  canOpenRecord,
 }: {
+  onOpenRecord?: (id: string) => void;
+  canOpenRecord?: (id: string) => boolean;
   p: EnrichedPartner;
   ssoBlob: string | null;
   referrals: RawReferral[];
@@ -2031,6 +2074,8 @@ function PartnerDrawer({
                     opp={o}
                     ssoBlob={ssoBlob}
                     onSaved={onChanged}
+                    onOpenRecord={onOpenRecord}
+                    canOpenRecord={canOpenRecord}
                   />
                 ))}
               </div>
@@ -2114,7 +2159,7 @@ function LogTouchDialog({
 
   return (
     <div className="previewmodal" onClick={onClose}>
-      <div className="movebox addbox" onClick={(e) => e.stopPropagation()}>
+      <div className="movebox addbox rfmodal" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
           <span className="previewname">Log a touch · {partner.org}</span>
           <button className="x" type="button" onClick={onClose} aria-label="Close">
@@ -2337,7 +2382,7 @@ function AddPartnerDialog({
 
   return (
     <div className="previewmodal" onClick={onClose}>
-      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+      <div className="movebox addbox cgadd rfmodal" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
           <span className="previewname">Add a referral partner</span>
           <button className="x" type="button" onClick={onClose} aria-label="Close">
@@ -2865,7 +2910,7 @@ function LogReferralDialog({
 
   return (
     <div className="previewmodal" onClick={onClose}>
-      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+      <div className="movebox addbox cgadd rfmodal" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
           <span className="previewname">
             Log a referral · from {partner ? partner.org : event ? event.name : "—"}
@@ -3439,7 +3484,7 @@ function AddEventDialog({
 
   return (
     <div className="previewmodal" onClick={onClose}>
-      <div className="movebox addbox cgadd" onClick={(e) => e.stopPropagation()}>
+      <div className="movebox addbox cgadd rfmodal" onClick={(e) => e.stopPropagation()}>
         <div className="previewhead">
           <span className="previewname">Add an event · run by {partner.org}</span>
           <button className="x" type="button" onClick={onClose} aria-label="Close">

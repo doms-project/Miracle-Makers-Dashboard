@@ -1689,3 +1689,187 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
   border:2px solid var(--line);border-top-color:var(--plum);
   animation:pfspin .7s linear infinite;}
 @keyframes pfspin{to{transform:rotate(360deg)}}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ROUND 120 · ITEM 6 — .savemsg.ok WAS NEVER DEFINED.
+
+   Used across the app since it was written; every success message has been
+   rendering with the base `.savemsg` rule — 10.5px grey — which is the
+   dashboard's voice for a HINT. 119 put tick outcomes in rows, so the thing
+   that says "that worked" has to read as a result, not as a footnote.
+
+   🔴 THE RULE ONLY. `.savemsg` itself is untouched, so nothing that does not
+   carry `.ok` moves.
+   ═══════════════════════════════════════════════════════════════════════ */
+.savemsg.ok{color:var(--ok-ink,#2d7a4f);background:var(--ok-soft,#eef7f1);
+  border:1px solid var(--ok-line,#cfe6d8);border-radius:8px;padding:7px 10px;
+  font-size:11px;line-height:1.5;font-weight:500;}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ROUND 120 · ITEM 2 — THE FOUR REFERRAL MODALS, ON THE PANEL'S SCALE.
+
+   🔴 .moveacts WAS NEVER DEFINED EITHER. Six dialogs render a footer under
+   that class and it has no padding, no border, no background — so the
+   buttons sat hard against the body's own padding with nothing separating
+   them from the last field. That is most of "the footer does not share an
+   alignment", and no geometry assertion about INPUTS could ever have caught
+   it, because it is not about the inputs.
+
+   ⚠️ IT IS DEFINED FOR EVERY DIALOG, not just the four. A footer with no
+   styling is a defect wherever it renders, and leaving five of six broken to
+   keep a diff small would be the wrong call. It adds spacing that was absent;
+   it changes no control.
+   ═══════════════════════════════════════════════════════════════════════ */
+.moveacts{flex:none;display:flex;align-items:center;justify-content:flex-end;
+  gap:10px;padding:14px 18px;border-top:1px solid var(--line);
+  background:var(--canvas);}
+
+/* 🔴 SCOPED TO EXACTLY THE FOUR, BY THEIR OWN CLASS.
+   `.addbox` would also catch Add Client, and `.cgadd` would catch the
+   attendee dialog and miss Log a touch. The brief names four modals and 596
+   live records sit behind everything else, so the scope is spelled out rather
+   than inferred from a class that happens to be nearby. */
+
+/* ── THE SCALE, READ OFF THE RECORD PANEL — NOT INVENTED ────────────────
+   The panel's `.f` primitive and `.grid` are a coherent system that has been
+   on screen for months:
+
+     label     11px / 600 / var(--ink-2) / margin-bottom 5px
+     control   padding 9px 11px · 12.5px · radius 8 · MIN-HEIGHT 36px
+     pairs     grid 1fr 1fr · gap 14px 16px
+     full      grid-column 1 / -1
+     section   .sechead, margin 24px 0 12px
+
+   The modals were a NEAR-MISS of every one of those, which is what reads as
+   badly made:
+
+     label     700, not 600           — a different weight, same size
+     control   padding 8px 10px       — 1px narrower on both axes
+     control   no min-height          — a select and an input differ in height
+                                        on the same row, so a "pair" measured
+                                        at the same TOP still has two bottoms
+     pairs     gap 4px 14px           — a 14px gutter beside the panel's 16
+     body      padding 16px 18px 20px — an 18px left edge under a 16px header
+
+   🔴 THAT LAST ONE IS THE "EDGES" COMPLAINT, exactly. `.previewhead` pads
+   16px and `.movebody` pads 18px, so the title and the first label have never
+   started at the same x. Nothing about the inputs could reveal it. */
+.rfmodal .movebody{padding:18px 22px 22px;gap:0;}
+.rfmodal .previewhead{padding:14px 22px;}
+.rfmodal .moveacts{padding:14px 22px;}
+
+/* Label, control and hint on ONE left edge, with the panel's own numbers. */
+.rfmodal .movebody .irow{display:block;}
+.rfmodal .movebody .irow label,
+.rfmodal .irow2 label,
+.rfmodal .rfvalue > label{display:block;font-size:11px;font-weight:600;
+  color:var(--ink-2);margin:0 0 5px;}
+.rfmodal .movebody .irow select,
+.rfmodal .movebody .irow input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .movebody .irow textarea,
+.rfmodal .irow2 select,
+.rfmodal .irow2 input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .rfvaluebox input{width:100%;min-width:0;box-sizing:border-box;
+  padding:9px 11px;font-size:12.5px;border-radius:8px;min-height:36px;}
+/* ⚠️ A TEXTAREA IS THE ONE CONTROL min-height MUST NOT PIN — `rows` decides
+   its height, and 36px would fight it. It keeps the padding and the radius. */
+.rfmodal .movebody .irow textarea{min-height:0;}
+
+/* The panel's pair geometry, to the pixel. */
+.rfmodal .irow2{gap:14px 16px;}
+/* One rhythm between blocks: the gap that `.movebody` used to provide is now
+   carried by the rows themselves, so a paired row and a full-width row sit the
+   same distance apart. */
+.rfmodal .movebody > .irow,
+.rfmodal .movebody > .irow2,
+.rfmodal .movebody > .rfgroup > .irow,
+.rfmodal .movebody > .rfgroup > .irow2{margin-bottom:14px;}
+.rfmodal .movebody > *:last-child{margin-bottom:0;}
+/* Hints hang off the control above them, not float between blocks. */
+.rfmodal .rfdhint{margin:-8px 0 14px;}
+.rfmodal .rfglab + .rfdhint{margin:2px 0 10px;}
+.rfmodal .pffnote,.rfmodal .rfvalue .rfdhint{margin:5px 0 0;}
+/* Section headings on the panel's own rhythm. */
+.rfmodal .rfglab{margin:18px 0 10px;padding-top:14px;}
+.rfmodal .movebody > .rfgroup:first-child > .rfglab,
+.rfmodal .movebody > .rfglab:first-child{margin-top:0;padding-top:0;border-top:0;}
+
+/* 🔴 AND THE SCREENSHOT FOUND WHAT THE MEASUREMENTS COULD NOT:
+   THE PAIRED INPUTS HAVE NO BORDER. Not a subtle one — none at all.
+
+   `.irow select,.irow input{border:1px solid var(--line);background:…}` is the
+   rule that makes a control look like a control, and `.irow2` is a SIBLING
+   class, not a child of `.irow` (globals.css:874 sets only width and
+   min-width). So every short field 115c paired — first name, last name,
+   phone, category, tier, division, owner, venue, date, cost — has rendered as
+   naked placeholder text on the modal's own background since the day it was
+   built.
+
+   ⚠️ 117 COUNTED THOSE CONTROLS AND MEASURED THEIR TOPS. Every number was
+   right. "6 controls in 4 rows, 2 paired" is true of an invisible box. That is
+   the whole argument for the screenshot. */
+.rfmodal .movebody .irow2 input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .movebody .irow2 select,
+.rfmodal .movebody .irow2 textarea,
+.rfmodal .movebody .irow input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .movebody .irow select,
+.rfmodal .movebody .irow textarea{
+  border:1px solid var(--line);background:var(--bg);color:var(--ink);
+  font:inherit;font-size:12.5px;outline:none;transition:border-color .12s;}
+.rfmodal .movebody input:focus,.rfmodal .movebody select:focus,
+.rfmodal .movebody textarea:focus{border-color:var(--plum);
+  box-shadow:0 0 0 3px var(--plum-soft);}
+
+/* ⚠️ AND ONE LABEL SHOUTED WHILE THE OTHERS SPOKE. `.rfvalue > label` is
+   uppercase and letter-spaced — so "ESTIMATED MONTHLY VALUE" sat beside
+   "Phone" on the same row in a different voice. The emphasis this field is
+   owed is the `$` and the `/mo`, which it keeps; its LABEL matches its
+   neighbour. */
+.rfmodal .rfvalue > label{text-transform:none;letter-spacing:0;font-weight:600;
+  margin-bottom:5px;}
+/* 🔴 AND THE NUMBER ITSELF COMES DOWN TO THE ROW'S HEIGHT. At 22px/800 inside
+   a flex box, the value control ended 12px below the phone input beside it —
+   the "ragged row" the screenshot proof measures. It stays visibly the money
+   field through the affixes and its own weight, at the height of every other
+   control on the screen. */
+.rfmodal .rfvaluebox{gap:8px;}
+.rfmodal .rfvaluebox input{flex:1 1 auto;font-size:14px;font-weight:700;
+  padding:9px 11px;min-height:36px;box-sizing:border-box;letter-spacing:0;}
+.rfmodal .rfvaluecur{font-size:14px;}
+.rfmodal .rfvaluemo{font-size:12px;}
+
+/* ⚠️ min-height IS NOT ENOUGH FOR EVERY CONTROL. A native `input[type=date]`
+   carries a calendar button and a `select` its own chrome, so at the same
+   padding they render 2px taller than a text input — which is the "ragged
+   row" the screenshot proof measures on Venue/Date and Cost/Division. A fixed
+   height with border-box pins all three to the panel's 36px. */
+.rfmodal .movebody .irow input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .movebody .irow select,
+.rfmodal .movebody .irow2 input:not([type="checkbox"]):not([type="radio"]),
+.rfmodal .movebody .irow2 select,
+.rfmodal .rfvaluebox input{height:36px;box-sizing:border-box;}
+.rfmodal .movebody textarea{height:auto;}
+
+/* ROUND 120 · ITEM 1 — the Recruiting heading-as-control.
+   ⚠️ IT BORROWS .rfhead / .rfdiv / .rfdivpop rather than copying them, so the
+   two switchers in the app cannot drift apart. These are the only differences:
+   it sits in the page header rather than a section body, so it loses the
+   bottom margin the Referrals one needs, and its options carry a hint. */
+.cghead{margin:0;}
+.cghead .rfdivname{display:inline-flex;align-items:center;gap:8px;}
+.cghead > small{display:block;margin-top:2px;}
+.cghint{display:block;font-size:11px;font-weight:400;color:var(--ink-3);margin-top:1px;}
+
+/* ROUND 120 · ITEM 1 — the recruiting-group control, on the scope row's rhythm. */
+.pfgroupedit{flex:1 1 100%;display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:8px;}
+.pfgroupedit label{font-size:10.5px;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-3);}
+.pfgroupedit select{border:1px solid var(--line);border-radius:7px;padding:5px 8px;
+  font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
+.pfgroupedit .ihint{margin:0;font-size:11px;color:var(--ink-3);}
+
+/* ROUND 120 · ITEM 3 — an attributed case's name, when the record is loaded. */
+.rfoppopen{background:none;border:0;padding:0;font:inherit;text-align:left;
+  color:var(--plum);cursor:pointer;text-decoration:underline;
+  text-decoration-color:transparent;transition:text-decoration-color .12s;}
+.rfoppopen:hover{text-decoration-color:currentColor;}
