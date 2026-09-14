@@ -302,6 +302,48 @@ export async function GET(request: Request) {
         );
       }
 
+      // ── one contact's opportunities, for "attribute an existing lead" ─────
+      // 🔴 NO NEW GoHighLevel CALL. The full-payload branch below already
+      // fetches every opportunity this viewer may see; this mode reuses that
+      // work and filters by contactId. A per-contact opportunity search would
+      // be a request per keystroke-chosen contact against a 100-per-10s budget,
+      // to learn something already in memory.
+      if (only === "contact-opps") {
+        const cid = (url.searchParams.get("contactId") || "").trim();
+        if (!cid) return NextResponse.json({ opportunities: [] });
+        // ⚠️ `.records` — getOltlOpportunities returns the whole payload shape
+        // (records plus pipelines, stages, users, defs), not a bare array.
+        const { records: all } = await getOltlOpportunities();
+        const refId = (
+          await getEditableFieldDefs("opportunity")
+        ).find((d) => norm(d.name) === norm("Referring Partner"))?.id
+          || REFERRING_PARTNER_FIELD;
+        // ⚠️ THE ACCESS FILTER STILL APPLIES. A contact id arrives from the
+        // browser, and without this anyone could list opportunities they may
+        // not see by typing a name into a picker.
+        const mine = applyAccess(all, {
+          userId: session?.userId || "",
+          isAdmin: isAdminSession(session?.role, session?.type),
+        });
+        return NextResponse.json(
+          {
+            referringPartnerField: refId,
+            opportunities: mine
+              .filter((r) => r.contactId === cid)
+              .map((r) => ({
+                id: r.id,
+                name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled case",
+                pipelineName: r.pipelineName,
+                stage: r.stage,
+                status: r.status,
+                /** Already attributed? The picker says so rather than silently overwriting. */
+                partnerId: String(r.cf?.[refId] ?? "").trim(),
+              })),
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
+
       // ── just the partners, for the "Referred by" picker on a client record ─
       // ⚠️ ONE search call and nothing else: no notes, no opportunity sweep.
       // The client panel needs names to choose from, not a scorecard.
@@ -529,6 +571,14 @@ export async function GET(request: Request) {
             eventHostField,
             /** The contact field id the outcome dropdown PATCHes. */
             outcomeField: F.outcome,
+            /**
+             * 🔴 THE OPPORTUNITY FIELD "Log a referral → someone already in
+             * GoHighLevel" writes — round 115c, item 4. It is the SAME field
+             * ReferredBy sets from the record panel, and attribution is a
+             * single PUT of it. Sent so the referrals section can attribute
+             * without a second round trip to learn the id.
+             */
+            referringPartnerField: refField,
             // ⚠️ `want`, NOT `asked`. The route-proof run reported
             // "touchAsked: 0, touchResolved: 2" on a touch=auto load, because
             // `asked` is only the EXPLICIT touchFor list and auto fills none of

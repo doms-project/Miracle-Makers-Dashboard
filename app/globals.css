@@ -536,6 +536,9 @@ tbody tr:last-child td{border-bottom:0;}
 .pfrow > summary:hover{background:var(--row-hover);}
 .pfrow[open] > summary{background:var(--sel);}
 .pfrow .pfseclist{margin:0 12px 12px;border-radius:8px;}
+/* A row's own status, so an error is read where it happened. */
+.pfrowmsg{margin:10px 12px 0;}
+
 .pfscopeedit{display:flex;align-items:center;gap:9px;margin:10px 12px 4px;flex-wrap:wrap;}
 .pfscopeedit label{font-size:10.5px;font-weight:700;letter-spacing:.05em;
   text-transform:uppercase;color:var(--ink-3);}
@@ -855,7 +858,21 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* ── ITEM 3 · Add Client ── */
 .addclientbtn{border:1px solid var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;margin-right:10px;transition:background .12s;}
 .addclientbtn:hover{background:var(--plum);color:#fff;}
-.addbox{max-width:620px;}
+/* 🔴 WIDER, AND TWO COLUMNS WHERE THE FIELDS ARE SHORT — round 115c, item 3.
+   `.movebody .irow input{width:100%}` makes every control fill its row, so a
+   row holding "First name" and "Last name" became FOUR lines: one line's worth
+   of content spread over four. At 520px there was no room to do otherwise;
+   at 760 there is.
+   ⚠️ `width` as well as `max-width`: `.movebox` sets `width:min(520px,100%)`
+   and a max-width alone would never beat it. */
+.addbox{width:min(760px,100%);max-width:760px;}
+/* A pair of short fields, side by side, collapsing to one column when narrow.
+   The textarea and the pipeline picker stay full width — they are not short. */
+.irow2{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;align-items:start;}
+.irow2 > div{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.irow2 label{font-size:11px;font-weight:700;color:var(--ink-2);margin-top:6px;}
+.irow2 input,.irow2 select{width:100%;min-width:0;}
+@media (max-width:640px){.irow2{grid-template-columns:1fr;}}
 .addsec{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:14px 0 2px;}
 .addgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .addgrid .f.wide{grid-column:1 / -1;}
@@ -1147,7 +1164,13 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    names (.kpi, .box, .bars, .drawer, .badge) would have been the third time,
    so none of them are used: rfkpi, rfbox, rfbars, rfdrawer, rfbadge.
    ═══════════════════════════════════════════════════════════════════════════ */
-.rfwrap{padding:18px 22px 40px;max-width:1180px}
+/* 🔴 FULL WIDTH — round 115c, item 2. `max-width:1180px` made the Referrals
+   section a reading column on a screen that is not reading material: the
+   sources table has EIGHT columns (organisation, category, tier, owner, last
+   touch, refs, clients, revenue) and crushed them into half the window while
+   the other half sat empty. The client board uses the whole width for fewer
+   columns. Nothing here is prose. */
+.rfwrap{padding:18px 22px 40px}
 
 /* The heading IS the division control. Styled as heading text, not as a
    control: no border, no background, no select chrome — a chevron and a hover

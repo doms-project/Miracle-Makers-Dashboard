@@ -100,14 +100,45 @@ for (const f of files) {
   });
 }
 
+/**
+ * 🔴 THE CSS SCANS MUST IGNORE COMMENTS — properly, not by prefix.
+ *
+ * Rules 5-7 skipped only lines that START with `/*`, so the CONTINUATION lines
+ * of a block comment were scanned as if they were code. Round 115c wrote a
+ * comment quoting the very rule it had just fixed, and the sweep flagged its own
+ * explanation — a false positive is as corrosive as a missed one, because the
+ * next person learns to ignore the output.
+ *
+ * Returns the file's lines with every commented one blanked, so line numbers
+ * still line up with the real file.
+ */
+const cssCode = (src) => {
+  let inBlock = false;
+  return src.split("\n").map((l) => {
+    let out = l;
+    if (inBlock) {
+      const end = out.indexOf("*" + "/");
+      if (end === -1) return "";
+      out = " ".repeat(end + 2) + out.slice(end + 2);
+      inBlock = false;
+    }
+    const start = out.indexOf("/" + "*");
+    if (start !== -1) {
+      const end = out.indexOf("*" + "/", start + 2);
+      if (end === -1) { inBlock = true; return out.slice(0, start); }
+      out = out.slice(0, start) + " ".repeat(end + 2 - start) + out.slice(end + 2);
+    }
+    return out;
+  });
+};
+
 // ── 6 · A SCROLLING FLEX CHILD WITH NO EXPLICIT MINIMUM ───────────────────
 // Three separate symptoms from one rule: `.rfhits` collapsed to 0px, `.rfdbd`
 // cut off its last row, `.movebody` clipped a modal at Owner. A flex item that
 // scrolls needs `min-height:0`, or its automatic minimum keeps it at content
 // size and the parent clips whatever does not fit.
-const cssLines = readFileSync("app/globals.css", "utf8").split("\n");
+const cssLines = cssCode(readFileSync("app/globals.css", "utf8"));
 cssLines.forEach((l, i) => {
-  if (/^\s*\/\*|^\s*\*/.test(l)) return;
   if (!/overflow(-y)?\s*:\s*(auto|scroll)/.test(l)) return;
   // Only a FLEX ITEM is at risk, and only when it does not say its own minimum.
   if (!/flex\s*:/.test(l)) return;
@@ -121,9 +152,8 @@ cssLines.forEach((l, i) => {
 // ── 5 · A TICKBOX SIZED AS A TEXT INPUT ───────────────────────────────────
 // CSS-side rather than TS-side: any `.irow input` style that sets a width or a
 // minimum will be inherited by checkboxes and radios placed in that row.
-const css = readFileSync("app/globals.css", "utf8").split("\n");
+const css = cssCode(readFileSync("app/globals.css", "utf8"));
 css.forEach((l, i) => {
-  if (/^\s*\/\*/.test(l)) return;
   if (!/\.irow\s+input(?!\[)/.test(l)) return;
   if (!/min-width|width\s*:/.test(l)) return;
   if (/:not\(\[type="checkbox"\]\)/.test(l)) return;
@@ -148,7 +178,8 @@ css.forEach((l, i) => {
 // comment carrying `deliberate-override` is allowed a second definition. That
 // keeps the check honest — anything unmarked is still flagged — without
 // rewriting working CSS to satisfy a grep.
-const cssAll = readFileSync("app/globals.css", "utf8").split("\n");
+const cssRaw = readFileSync("app/globals.css", "utf8").split("\n");
+const cssAll = cssCode(readFileSync("app/globals.css", "utf8"));
 const seen = new Map();
 cssAll.forEach((l, i) => {
   // Only plain single-class selectors at the start of a rule; pseudo-classes,
@@ -158,7 +189,8 @@ cssAll.forEach((l, i) => {
   const cls = m[1];
   if (!seen.has(cls)) { seen.set(cls, i + 1); return; }
   // Look back a few lines for the marker.
-  const marked = cssAll.slice(Math.max(0, i - 8), i)
+  // ⚠️ THE MARKER IS IN A COMMENT, so this one lookback reads the RAW file.
+  const marked = cssRaw.slice(Math.max(0, i - 8), i)
     .some((x) => /deliberate-override/.test(x));
   if (marked) return;
   flag("A CLASS DEFINED TWICE IN globals.css", "app/globals.css", i + 1, l,

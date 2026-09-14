@@ -42,6 +42,10 @@ const ALL_CONTACTS = [
   { id: "x2", contactName: "Riddle Memorial Rehab",  email: "",              phone: "610-555-0101" },
   { id: "x3", contactName: "Joan Riddle",            email: "joan@mail.com", phone: "" },
   { id: "x4", contactName: "Crozer SNF",             email: "",              phone: "" },
+  // ⚠️ A CLIENT, not a partner. Item 4's path attributes a CLIENT's existing
+  // case to a partner, so the fixture needs somebody to be the client — the
+  // first run searched "Riddle", found the partner, and listed zero cases.
+  { id: "c_mich", contactName: "Michelle Chance", email: "m@ex.com", phone: "610-555-0199" },
 ];
 
 /** Every request the fake GHL received, so the route's behaviour is visible. */
@@ -111,7 +115,12 @@ const fake = http.createServer((req, res) => {
         status: i === 1 ? "won" : "open",
         monetaryValue: i === 1 ? 5500 : 0,
         createdAt: new Date(Date.now() - (i + 3) * 86400000).toISOString(),
-        customFields: [{ id: "F_REF", fieldValue: "x1" }],
+        contact: { id: "c_mich", firstName: "Michelle", lastName: "Chance" },
+        // Most already credited to x1 so "already credited" is testable, a few
+        // not — the case item 4 exists for.
+        // ⚠️ i===1 MUST stay credited: it is the won/$5,500 case section 6
+        // asserts on, and dropping its attribution removed it from the drawer.
+        customFields: i === 1 || i % 2 === 0 ? [{ id: "F_REF", fieldValue: "x1" }] : [],
       })), meta: { total: 12 } });
     if (/^\/contacts\/[^/]+\/notes/.test(u)) return send(200, { notes: [] });
     if (/^\/contacts\/[^/]+$/.test(u)) return send(200, { contact: { id: "x1" } });
@@ -405,6 +414,67 @@ ok("the controls are ON SCREEN", !!edit && edit.w > 0 && edit.h > 0, edit);
 ok("🔴 and it SAYS revenue counts won only",
    /count(s)? .*won.* only|counts <?b?>?won/.test(edit?.warn || "") ||
      /won/.test(edit?.warn || ""), edit?.warn);
+
+// ── 8 · ROUND 115c ITEM 4 · ATTRIBUTE AN EXISTING LEAD ────────────────────
+console.log("\n8 · 🔴 ITEM 4 — CREDIT AN EXISTING CASE, CREATING NOTHING");
+/** Every write the browser makes, so "nothing is created" is checkable. */
+const writes = [];
+page.on("request", (r) => {
+  if (["POST", "PUT", "PATCH"].includes(r.method()) && r.url().includes("/api/"))
+    writes.push({ m: r.method(), u: r.url().split("/api/")[1].split("?")[0],
+                  // ⚠️ NOT TRUNCATED. The ssoKey blob is ~250 chars on its own,
+                  // so a 220-char slice cut the body off before `customFields`
+                  // and the assertion failed on a request that was correct.
+                  body: r.postData() || "" });
+});
+await frame.click(".rfdrawer .x");
+await page.waitForTimeout(400);
+await frame.click('.rftable tbody tr:first-child');
+await frame.waitForSelector(".rfdrawer", { timeout: 15000 });
+await frame.click('.rfdrawer button:has-text("Log a referral")');
+await frame.waitForSelector(".movebox", { timeout: 15000 });
+
+const rrModes = await frame.$$eval(".movebox .rfmode label", (e) =>
+  e.map((x) => x.textContent.trim()));
+console.log(`  modes offered: ${JSON.stringify(rrModes)}`);
+ok("🔴 an existing-lead path is offered",
+   rrModes.some((m) => /already in GoHighLevel/i.test(m)), rrModes);
+
+await frame.click('.movebox .rfmode label:has-text("already in GoHighLevel") input');
+await page.waitForTimeout(400);
+const asks = await frame.$$eval(".movebox input[id],.movebox select[id],.movebox textarea[id]",
+  (e) => e.map((x) => x.id));
+console.log(`  fields now asked for: ${JSON.stringify(asks)}`);
+ok("🔴 it stops asking for a name, phone and value",
+   !asks.some((f) => /^rr-(first|last|phone|value|note|pipe)$/.test(f)), asks);
+ok("and it asks for a contact instead", asks.includes("rr-find"), asks);
+
+await frame.fill("#rr-find", "Michelle");
+await page.waitForTimeout(2500);
+await frame.click(".movebox .rfhits .rfhit");
+await page.waitForTimeout(2000);
+const cases = await frame.$$eval(".movebox .rfhits .rfhit", (e) =>
+  e.map((x) => x.textContent.replace(/\s+/g, " ").trim()));
+console.log(`  their cases: ${cases.length}`);
+for (const c of cases.slice(0, 3)) console.log(`     ${c.slice(0, 80)}`);
+ok("🔴 their existing cases are listed", cases.length > 0, cases.length);
+ok("🔴 and one already credited to this partner SAYS so",
+   cases.some((c) => /already credited/i.test(c)), cases.slice(0, 3));
+
+writes.length = 0; // only count what the attribution itself sends
+await frame.click(".movebox .rfhits .rfhit");
+await page.waitForTimeout(300);
+await frame.click('.moveacts button:has-text("Credit this case")');
+await page.waitForTimeout(2000);
+console.log(`  writes sent: ${writes.map((w) => `${w.m} ${w.u}`).join(", ")}`);
+console.log(`  body (ssoKey elided): ${(writes[0]?.body || "")
+  .replace(/"ssoKey":"[^"]*"/, '"ssoKey":"…"')}`);
+ok("🔴 EXACTLY ONE write", writes.length === 1, writes);
+ok("🔴 and it is a PUT to an opportunity, not a create",
+   writes[0]?.m === "PUT" && /^opportunities\//.test(writes[0]?.u || ""), writes[0]);
+ok("🔴 carrying only the Referring Partner field",
+   /customFields/.test(writes[0]?.body || "") &&
+   !/firstName|lastName|action/.test(writes[0]?.body || ""), writes[0]?.body);
 
 await page.screenshot({ path: "scripts/partner-picker.png" });
 console.log(`\n${pass} passed, ${fail} failed`);
