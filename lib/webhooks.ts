@@ -21,6 +21,12 @@ export type WebhookEventName =
   | "opportunity.moved"
   | "opportunity.assigned"
   | "opportunity.created"
+  /**
+   * ⚠️ ROUND 124 — A DELETE IS THE ONE EVENT A CONSUMER CANNOT RECONSTRUCT.
+   * Every other event leaves a record behind that can be re-read; this one does
+   * not, so anything mirroring this pipeline needs to be told.
+   */
+  | "opportunity.deleted"
   | "field.changed"
   | "note.added"
   | "follower.added"

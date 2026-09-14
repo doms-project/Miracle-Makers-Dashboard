@@ -15,6 +15,7 @@
 // Run: npx tsx scripts/round118-proof.mjs
 // ---------------------------------------------------------------------------
 import http from "node:http";
+import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (n, c, got) => {
@@ -216,55 +217,26 @@ ok("⚠️ but Referral Partner does NOT reach an applicant panel",
 const partner = asClient.find((s) => s.label === "Referral Partner");
 ok("its fields come with it", partner?.fields.length === 2, partner?.fields.map((f) => f.name));
 
-// ═══ 3 · THE ATTRIBUTION FOLDER MOVE ══════════════════════════════════════
-console.log("\n3 · 🔴 CREATE Referral Attribution, MOVE THE FIELDS, TICK IT ON");
-// ⚠️ THREE REQUESTS NOW, not one — round 119, item 1. Returning every step at
-// the end is what made a slow run indistinguishable from a hang.
-const runAttrib = async () => {
-  const steps = [];
-  let folderId = "";
-  let lastStatus = 200;
-  for (const step of ["folder", "fields", "tick"]) {
-    const r = await post(PIPES, { action: "attribution-folder", step, folderId: folderId || undefined });
-    lastStatus = r.status;
-    const j = await r.json();
-    if (j.folderId) folderId = j.folderId;
-    if (Array.isArray(j.results)) for (const x of j.results) steps.push({ step, ...x });
-    else steps.push({ step, ok: j.ok !== false, detail: j.detail || j.error || "" });
-    if (!r.ok) break;
-  }
-  return { steps, folderId, status: lastStatus };
-};
-const attrib = await runAttrib();
-const attribRes = { status: attrib.status };
-for (const s of attrib.steps || [])
-  console.log(`  ${s.ok ? "ok  " : "FAIL"} [${s.step}] ${s.detail}`);
-ok("the run succeeded", attribRes.status === 200, attrib);
-ok("🔴 a folder was created", !!attrib.folderId, attrib.folderId);
-ok("🔴 Referring Partner moved into it",
-   fields.find((f) => f.id === "f_ref")?.parentId === attrib.folderId, fields[0]);
-ok("🔴 Event Source moved into it",
-   fields.find((f) => f.id === "f_evsrc")?.parentId === attrib.folderId, fields[1]);
-// ⚠️ THE THREE WAIVER FIELDS MUST NOT MOVE. That is the whole reason for a
-// second folder — Waiver Type is not attribution.
-ok("⚠️ Waiver Type stayed in Referral Detail",
-   fields.find((f) => f.id === "f_waiver")?.parentId === "9OZdxXFfJsdNGR7qsQKQ", fields[2]);
-const cfg3 = JSON.parse(customValue.value);
-console.log(`  ticked on: ${Object.entries(cfg3.pipelines)
-  .filter(([, e2]) => e2.folders.includes(attrib.folderId))
-  .map(([k]) => k).join(", ") || "(none)"}`);
-ok("🔴 ticked onto BOTH client pipelines",
-   cfg3.pipelines.pipe_oltl.folders.includes(attrib.folderId) &&
-   cfg3.pipelines.pipe_pp.folders.includes(attrib.folderId), cfg3.pipelines);
-
-console.log("\n  …and running it a second time:");
-const madeBefore = folderSeq;
-const again = await runAttrib();
-for (const s of again.steps || []) console.log(`  ${s.ok ? "ok  " : "FAIL"} [${s.step}] ${s.detail}`);
-ok("🔴 NO second folder was created — round 93's orphan cannot recur",
-   folderSeq === madeBefore, { madeBefore, now: folderSeq });
-ok("and it says so rather than pretending it did the work",
-   (again.steps || []).some((s) => /Reused|already/i.test(s.detail)), again.steps);
+// ═══ 3 · ⬜ RETIRED IN ROUND 124 ══════════════════════════════════════════
+console.log("\n3 · ⬜ THE ATTRIBUTION MOVE IS FINISHED, AND ITS CONTROL IS DELETED");
+console.log("  This drove the three-step run end to end: folder created, both");
+console.log("  fields moved, Waiver Type left alone, ticked onto every client");
+console.log("  pipeline. It did its job — the account is in that state and the");
+console.log("  live run is recorded in report 121b.");
+console.log("  ⚠️ Round 124 removed the button AND the route action: a completed");
+console.log("  one-time migration left as a control is a hazard, because the next");
+console.log("  person to press it moves two fields back with no explanation.");
+{
+  const adminSrc = readFileSync("app/api/admin/pipelines/route.ts", "utf8");
+  const screen = readFileSync("components/PipelineAdmin.tsx", "utf8");
+  // ⚠️ REPLACED, NOT DELETED. A section that vanishes is indistinguishable from
+  // one somebody dropped because it went red.
+  ok("🔴 the action is gone from the route", !/case "attribution-folder"/.test(adminSrc), "it survives");
+  ok("🔴 the button is gone from the screen",
+     !/Create Referral Attribution and move the fields/.test(screen), "it survives");
+  ok("⚠️ and the REASONING is kept — the part that stops somebody undoing it",
+     /so attribution can be shown on a client record without/.test(screen), "the sentence is gone");
+}
 
 // ═══ 4 · OWNERSHIP DECIDED ONCE ═══════════════════════════════════════════
 console.log("\n4 · 🔴 /api/clients SENDS NO OWNER; THE WORKFLOW DOES");

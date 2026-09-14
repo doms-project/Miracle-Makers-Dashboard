@@ -307,7 +307,11 @@ ok("one collapsed row is a row, not a panel", shape.rowHeight < 60, shape);
 console.log("\nK · 🔴 WHICH PICKER LISTS THIS PIPELINE");
 await frame.click('.pflist .pfrow:has(summary:has-text("Events")) > summary');
 await page.waitForTimeout(400);
-const scopeSel = '.pfrow:has(summary:has-text("Events")) .pfscopeedit select';
+// ⚠️ THE SCOPE SELECT BY ITS OWN ID, NOT "the select inside .pfscopeedit".
+// Round 124 added a Role select in the same wrapper and this counted its
+// options too — a selector broad enough to catch a sibling is a selector that
+// will keep catching the next one.
+const scopeSel = '.pfrow:has(summary:has-text("Events")) select[id^="pfscope-"]';
 const opts = await frame.$$eval(`${scopeSel} option`, (os) =>
   os.map((o) => ({ value: o.value, label: o.textContent.trim() })));
 console.log("  options on screen:");

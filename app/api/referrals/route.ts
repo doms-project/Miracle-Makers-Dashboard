@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import {
   getSelectedPipelines,
+  getPipelineConfig,
+  getOpportunitiesInPipeline,
+  listPipelines,
   firstStage,
   getEditableFieldDefs,
   getOltlOpportunities,
@@ -25,6 +28,7 @@ import { isAdminSession } from "@/lib/visibility";
 import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
+import { pipelineWithRole } from "@/lib/pipelineConfig";
 import type { ApiError } from "@/lib/types";
 import {
   PARTNER_FIELDS,
@@ -139,10 +143,16 @@ interface Body {
     | "contact-opps"
     | "partner-notes"
     /** ROUND 123 — and this one carried up to SIXTY of them. */
-    | "touch";
+    | "touch"
+    /** ROUND 124 — an attendee's Event Outcome / Event Attended. */
+    | "attendee-field";
   contactId?: string;
   /** The explicit "measure the next 60" batch. Contact ids, intersected server-side. */
   touchFor?: unknown[];
+  /** attendee-field — which of the two, and what to write. */
+  field?: string;
+  value?: unknown;
+  expectedVersion?: string;
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -184,21 +194,46 @@ interface Body {
  * at all until this round — and with none, this returns undefined and the Events
  * tab says so rather than guessing which pipeline holds the events.
  */
-async function eventsPipeline() {
-  // 🔴 CLIENT **AND** "none" — round 116, item K, and this is the whole cost of
-  // that item. Events is scoped `client` today ONLY so that this lookup can find
-  // it; the moment an admin sets it to "listed by no picker" — which is exactly
-  // what item K exists to let them do — a client-only search returns undefined
-  // and the Events tab says "no events pipeline is configured". The screen that
-  // fixed one thing would have broken another silently.
+async function eventsPipeline(): Promise<{
+  pipe: { id: string; name: string; stages: { id: string; name: string; position?: number }[] } | undefined;
+  /** How it was found, so the screen can say what to fix. */
+  via: "role" | "name" | "none";
+}> {
+  // 🔴 ROUND 124 · ITEM 2 — BY ID FROM THE CONFIG FIRST, BY NAME ONLY AFTER.
   //
-  // ⚠️ NO EXTRA REQUEST. Both calls read the same memoized pipeline list and the
-  // same cached config; the second is two array filters.
+  // This was `/^events?$/i` against the trimmed NAME across the client and
+  // "none" pickers, and that is the last string-matched pipeline lookup in the
+  // app. It breaks two ways, both silently:
+  //
+  //   a rename        "Events & Outreach" matches nothing; the tab empties
+  //   a scope change  an admin setting it to CAREGIVER — which the Pipelines
+  //                   screen offers — removes it from both searches
+  //
+  // ⚠️ AND THE NAME MATCH IS KEPT, NOT REPLACED. Nobody has set the role yet,
+  // so removing the fallback would empty the tab today and keep it empty until
+  // an admin happened to visit a settings screen. The role wins when it is set;
+  // the name answers until then; and `via` says which, so the tab can tell
+  // "nobody has marked it" apart from "nothing is named Events".
+  const [cfg, all] = await Promise.all([getPipelineConfig(), listPipelines()]);
+  const byRole = pipelineWithRole(cfg, "events");
+  if (byRole) {
+    const hit = all.find((p) => p.id === byRole);
+    // ⚠️ A ROLE POINTING AT A PIPELINE THAT NO LONGER EXISTS IS NOT A MATCH,
+    // and it must not fall through to the name search either: silently finding
+    // a different pipeline than the one an admin marked is worse than saying
+    // nothing was found.
+    if (hit) return { pipe: hit, via: "role" };
+    return { pipe: undefined, via: "none" };
+  }
+  // ⚠️ CLIENT **AND** "none" — round 116, item K. Events is scoped `client`
+  // today ONLY so this lookup can find it; the moment an admin sets it to
+  // "listed by no picker" a client-only search returns undefined.
   const [client, unlisted] = await Promise.all([
     getSelectedPipelines("client"),
     getSelectedPipelines("none"),
   ]);
-  return [...client, ...unlisted].find((p) => /^events?$/i.test(p.name.trim()));
+  const named = [...client, ...unlisted].find((p) => /^events?$/i.test(p.name.trim()));
+  return named ? { pipe: named, via: "name" } : { pipe: undefined, via: "none" };
 }
 
 /**
@@ -347,12 +382,16 @@ export async function GET(request: Request) {
       // ⚠️ NOT FETCHED IN touch-only MODE. Measuring the next batch of partners
       // has nothing to do with opportunity fields or the Events pipeline, and
       // reading them anyway is how a cheap request stops being cheap.
-      const [oppDefs, evPipe] = light
-        ? ([[], undefined] as [typeof contactDefs, undefined])
+      const [oppDefs, evFound] = light
+        ? ([[], { pipe: undefined, via: "none" as const }] as [
+            typeof contactDefs,
+            Awaited<ReturnType<typeof eventsPipeline>>,
+          ])
         : await Promise.all([
             getEditableFieldDefs("opportunity"),
             eventsPipeline(),
           ]);
+      const evPipe = evFound.pipe;
 
       // 🔴 BY NAME, WITH THE BRIEF'S ID AS A CROSS-CHECK — never the id alone.
       // Ids differ per account; names do not. The fallback is what keeps this
@@ -598,9 +637,22 @@ export async function GET(request: Request) {
       const evCost = oppIdOf(EVENT_FIELDS.cost.name, EVENT_FIELDS.cost.id);
       const evVenue = oppIdOf(EVENT_FIELDS.venue.name, EVENT_FIELDS.venue.id);
       const evDiv = oppIdOf(EVENT_FIELDS.division.name, EVENT_FIELDS.division.id);
+      // 🔴 ROUND 124 · ITEM 2 — READ BY ID, NOT SIFTED OUT OF THE CLIENT BOARD.
+      //
+      // This filtered `records`, which is `getOltlOpportunities()` — scope
+      // "client". So an Events pipeline found under the "none" scope (round
+      // 116's whole point) or marked by role and scoped anything else was
+      // located and never fetched: the lookup said "configured" and the list
+      // came back empty. **That is the empty Events tab**, and it is not a
+      // rename. A lookup and a fetch disagreeing about which pipelines exist is
+      // worse than either being wrong alone, because the screen looks fine.
+      //
+      // ⚠️ ONE EXTRA SEARCH, AND ONLY WHEN A PIPELINE WAS FOUND. It is the
+      // same paged search the board makes per pipeline, so the shape and the
+      // rate-limit cost are both known quantities.
+      const evRecords = evPipe ? await getOpportunitiesInPipeline(evPipe) : [];
       const events: RawEvent[] = evPipe
-        ? records
-            .filter((r) => r.pipelineId === evPipe.id)
+        ? evRecords
             .map((r) => ({
               id: r.id,
               name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled event",
@@ -662,6 +714,12 @@ export async function GET(request: Request) {
           meta: {
             eventsPipelineConfigured: !!evPipe,
             eventsPipelineName: evPipe?.name || "",
+            // ⚠️ HOW IT WAS FOUND — round 124, item 2. "role" means an admin
+            // marked it and a rename cannot break it; "name" means it is still
+            // being matched on the string "Events" and one rename away from
+            // silence; "none" means nothing answered at all. The tab says a
+            // different sentence for each, because each needs a different fix.
+            eventsPipelineVia: evFound.via,
             /** "" when no field links an attendee to an event — see above. */
             attendeeEventField,
             oppEventField,
@@ -806,7 +864,7 @@ export async function POST(request: Request) {
           );
 
         const pipelines = await getSelectedPipelines("client");
-        const evPipe = await eventsPipeline();
+        const { pipe: evPipe } = await eventsPipeline();
         const choices = pipelines.filter((p) => p.id !== evPipe?.id);
         // 🔴 RESOLVED, NEVER HARDCODED. The brief says "creates an opportunity
         // in Private Pay"; section 9 forbids hardcoded pipeline ids. So the
@@ -971,7 +1029,7 @@ export async function POST(request: Request) {
             { error: "An event needs a name.", status: 400 } as ApiError,
             { status: 400 },
           );
-        const evPipe = await eventsPipeline();
+        const { pipe: evPipe } = await eventsPipeline();
         if (!evPipe)
           return NextResponse.json(
             {
@@ -1021,25 +1079,114 @@ export async function POST(request: Request) {
         if (Number(body.cost) > 0)
           put(EVENT_FIELDS.cost.name, EVENT_FIELDS.cost.id, Number(body.cost));
 
-        // ⚠️ AN EVENT HAS NO CONTACT. GoHighLevel wants one on an opportunity,
-        // so the HOST's contact is used when there is one — which is also true:
-        // the partner is who this event belongs to. With no host there is
-        // nothing to attach, and that is said rather than invented.
-        if (!hostId)
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔴 ROUND 124 · ITEM 1 — THE VENUE IS THE CONTACT.
+        //
+        // GoHighLevel allows ONE opportunity per contact per pipeline. The
+        // event's contact was the HOST PARTNER, so a partner could host exactly
+        // one event ever: Riddle Hospital's second was refused, and a
+        // spreadsheet of past events would have created a handful and silently
+        // dropped the rest.
+        //
+        // ⚠️ THE VENUE IS A REAL PLACE WITH A REAL NAME, which is why this is
+        // not the fake contact round 107 refused to invent. "Delco Expo Centre"
+        // is a contact record somebody could ring.
+        //
+        // ⚠️ EVENT HOST IS UNCHANGED AND STAYS THE PARTNER. It was already a
+        // custom field; nothing that reads it ("Events worked", "Run by")
+        // changes. What changes is which contact the opportunity hangs off.
+        //
+        // 🔴 AND THE HOST IS NO LONGER REQUIRED. It was required only because
+        // GoHighLevel needed a contact and the partner was the only one to
+        // hand. An event the agency runs itself now has somewhere to live.
+        // ═══════════════════════════════════════════════════════════════════
+        const venue = (body.venue || "").trim();
+        if (!venue)
           return NextResponse.json(
             {
-              error: "An event needs a host partner.",
+              error: "An event needs a venue.",
               detail:
-                "GoHighLevel attaches every opportunity to a contact, and for an event that is the organisation running it. Add the event from that partner's panel.",
+                "GoHighLevel attaches every opportunity to a contact, and for an event that is the place it is held. The venue becomes a contact record so a partner can host more than one event.",
               status: 400,
             } as ApiError,
             { status: 400 },
           );
 
+        // 🔴 THE REMAINING COLLISION, CHECKED BEFORE ANYTHING IS WRITTEN. One
+        // contact per venue means one EVENT per venue, so a second event at the
+        // same place still collides — option (a). It is refused with a message
+        // that says what to do, rather than by GoHighLevel's duplicate error.
+        //
+        // ⚠️ CHECKED ON THE VENUE NAME, NOT ON THE CONTACT. That is the thing
+        // somebody actually meant, and it holds even if the contact lookup
+        // below picks a different record than last time.
+        const existingEvents = await getOpportunitiesInPipeline(evPipe);
+        const venueField = oppDefs.find(
+          (d) => norm(d.name) === norm(EVENT_FIELDS.venue.name),
+        )?.id || EVENT_FIELDS.venue.id;
+        const clash = existingEvents.find(
+          (r) => norm(String(r.cf?.[venueField] ?? "")) === norm(venue),
+        );
+        if (clash)
+          return NextResponse.json(
+            {
+              error: `${venue} already hosts an event.`,
+              detail: `"${clash.oppName || "an existing event"}" is recorded there, and GoHighLevel allows one opportunity per contact per pipeline. Rename the venue for this one — "${venue} (Spring)" — or record it under a different venue. Nothing was created.`,
+              refusal: true,
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+
+        // ── the venue's contact ────────────────────────────────────────────
+        // ⚠️ REUSE BEFORE CREATE, so a venue whose only event was deleted does
+        // not accumulate a second contact record.
+        //
+        // 🔴 AND NEVER REUSE A PARTNER. Venue names and partner names overlap
+        // constantly — "Riddle Hospital" is both a plausible venue and an
+        // actual partner on this account — and attaching the event to the
+        // PARTNER's contact is the exact bug this item exists to remove. The
+        // partner list is read and excluded rather than hoped about.
+        const defsV = await getEditableFieldDefs("contact");
+        const rtV =
+          defsV.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
+          PARTNER_FIELDS.recordType.id;
+        const [nameHits, partnersNow] = await Promise.all([
+          searchContacts(venue),
+          ghlSearchContacts(rtV, PARTNER_RECORD_TYPE),
+        ]);
+        const partnerIds = new Set(partnersNow.rows.map((r) => r.id));
+        const reuse = nameHits.find(
+          (c) => norm(c.name) === norm(venue) && c.id !== hostId && !partnerIds.has(c.id),
+        );
+        let venueContactId = reuse?.id || "";
+        if (!venueContactId) {
+          // ⚠️ NO Record Type. The picklist holds "Referral Partner" and "Event
+          // Attendee" and nothing else; writing a third value into a
+          // SINGLE_OPTIONS field is unverified against this account, and a
+          // venue must not read as either of the two that exist. Leaving it
+          // unset keeps the venue out of both searches, which is correct — the
+          // app never lists venues.
+          const made = await upsertContact({
+            name: venue,
+            source: "Event venue",
+          });
+          venueContactId = made.id;
+        }
+        if (!venueContactId)
+          return NextResponse.json(
+            {
+              error: "The venue's contact record could not be created.",
+              detail: `GoHighLevel returned no contact id for "${venue}". Nothing was created.`,
+              status: 502,
+            } as ApiError,
+            { status: 502 },
+          );
+
         const oppId = await createOpportunity({
           pipelineId: evPipe.id,
           stageId,
-          contactId: hostId,
+          contactId: venueContactId,
           name,
           ...(Number(body.cost) > 0 ? { monetaryValue: 0 } : {}),
           customFields: cf,
@@ -1057,6 +1204,8 @@ export async function POST(request: Request) {
           ok: true,
           eventId: oppId,
           pipelineName: evPipe.name,
+          venueContactId,
+          venueReused: !!reuse,
           skipped: missing,
         });
       }
@@ -1106,6 +1255,95 @@ export async function POST(request: Request) {
           defsT.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
           PARTNER_FIELDS.recordType.id;
         return measureTouches(ids, { recordType: rtT });
+      }
+
+      // ═══════════════════════════════════════════════════════════════════
+      // 🔴 ROUND 124 — AN ATTENDEE'S OWN FIELDS. **AND THIS IS A LIVE BUG FIX,
+      // NOT A NEW FEATURE.**
+      //
+      // The Event Outcome dropdown wrote to `/api/contacts/{a.id}/fields`, and
+      // round 122 justified that with "no new write path — that route already
+      // exists". It does. It takes an **OPPORTUNITY id**, not a contact id:
+      // `gate()` calls getOpportunityById() and borrows the opportunity's
+      // visibility rule before touching its contact. An attendee is a contact
+      // with no opportunity, so every one of those writes got
+      // `404 Record not found`.
+      //
+      // ⚠️ SO THE OUTCOME DROPDOWN HAS NEVER WORKED. The path LOOKED right
+      // because the URL says "contacts"; nothing in the name says the id is an
+      // opportunity's. Found by driving the route in round 124's proof.
+      //
+      // ⚠️ AND THE FIX IS NOT TO LET THAT ROUTE TAKE A CONTACT ID. Its whole
+      // defence is that permission is borrowed from a record the caller can
+      // already see; accepting a bare contact id would make it a way to write
+      // any contact on the account. An attendee has no opportunity to borrow
+      // from, so the check here is the one `partnerNotes` uses: **the contact
+      // must actually be an Event Attendee**, verified server-side, and only
+      // the two attendee fields can be written.
+      // ═══════════════════════════════════════════════════════════════════
+      if (body.action === "attendee-field") {
+        const cid = clean(body.contactId);
+        const which = body.field === "event" ? "event" : "outcome";
+        if (!cid)
+          return NextResponse.json(
+            { error: "No attendee asked for.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        const defsA = await getEditableFieldDefs("contact");
+        const pickA = (names: readonly string[], fallbackId: string) =>
+          defsA.find((d) => names.some((n) => norm(d.name) === norm(n)))?.id ||
+          (defsA.some((d) => d.id === fallbackId) ? fallbackId : "");
+        const rtA =
+          defsA.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
+          PARTNER_FIELDS.recordType.id;
+        const target =
+          which === "event"
+            ? pickA(ATTENDEE_EVENT_FIELD_NAMES, "")
+            : defsA.find((d) => norm(d.name) === norm(ATTENDEE_FIELDS.outcome.name))?.id ||
+              ATTENDEE_FIELDS.outcome.id;
+        if (!target)
+          return NextResponse.json(
+            {
+              error:
+                which === "event"
+                  ? "There is no Event Attended field on this account."
+                  : "There is no Event Outcome field on this account.",
+              detail: "Nothing was changed.",
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        const read = await getContactCustomFields(cid);
+        const rt = read.values[rtA];
+        const rtStr = Array.isArray(rt) ? rt.map(String).join(", ") : String(rt ?? "");
+        // ⚠️ A RECORD-TYPE CHECK, NOT AN ACCESS ONE — the same shape and the
+        // same reason as partnerNotes: without it, a contact id from a browser
+        // is a way to write fields on contacts this screen has nothing to do
+        // with.
+        if (!new RegExp(ATTENDEE_RECORD_TYPE, "i").test(rtStr))
+          return NextResponse.json(
+            {
+              error: "That contact is not an event attendee.",
+              detail: `Its ${PARTNER_FIELDS.recordType.name} is "${rtStr || "(not set)"}". Only an attendee's event fields are writable here.`,
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        const expected = clean(body.expectedVersion);
+        if (expected && read.version && expected !== read.version)
+          return NextResponse.json(
+            {
+              error: "Somebody else changed this attendee while you were looking at it.",
+              detail: "Nothing was changed. Refresh to see their version, then try again.",
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        await updateContactCustomFields(cid, [
+          { id: target, value: typeof body.value === "string" ? body.value : "" },
+        ]);
+        const after = await getContactCustomFields(cid);
+        return NextResponse.json({ ok: true, version: after.version });
       }
 
       if (body.action === "partner-notes") {

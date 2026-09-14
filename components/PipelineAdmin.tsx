@@ -496,6 +496,42 @@ export default function PipelineAdmin({
       announce(j.config);
     }
   };
+  /**
+   * 🔴 ROUND 124 · ITEM 2 — THE EVENTS ROLE, AND IT IS EXCLUSIVE.
+   *
+   * ⚠️ NOT `saveEntry`. One entry at a time cannot express "at most one
+   * pipeline holds this": ticking a second would leave two, and nothing
+   * reading the config could say which is the Events pipeline. So the write
+   * strips the role from EVERY entry and then sets it on the chosen one — one
+   * save, one consistent state, and no window in which two exist.
+   *
+   * ⚠️ AND A PIPELINE WITH NO STORED ENTRY CANNOT HOLD A ROLE, because an
+   * entry needs a scope and guessing one is what pipelineConfig.ts:60 forbids.
+   * The control is offered only on a configured row and says so.
+   */
+  const setEventsRole = async (pipelineId: string, on: boolean) => {
+    if (!data) return;
+    const pipelines: Record<string, StoredPipelineEntry> = {};
+    for (const [id, e] of Object.entries(data.config.pipelines)) {
+      const { role: _drop, ...rest } = e;
+      pipelines[id] =
+        on && id === pipelineId ? { ...rest, role: "events" } : (rest as StoredPipelineEntry);
+    }
+    const j = await post(
+      { action: "save-config", config: { ...data.config, seeded: true, pipelines } },
+      pipelineId,
+    );
+    if (j) {
+      setRowMsg({
+        id: pipelineId,
+        ok: on
+          ? "Marked as the Events pipeline. The Events tab now finds it by id."
+          : "No longer the Events pipeline.",
+      });
+      setData({ ...data, config: j.config });
+      announce(j.config);
+    }
+  };
   const removeEntry = async (pipelineId: string) => {
     if (!data) return;
     const rest = { ...data.config.pipelines };
@@ -612,106 +648,20 @@ export default function PipelineAdmin({
   };
 
   /**
-   * ITEM 3 — run the attribution move and SHOW EVERY STEP.
+   * 🔴 ROUND 124 · ITEM 5 — `runAttribution` AND ITS STEP LOG ARE DELETED.
    *
-   * ⚠️ THE STEPS ARE KEPT EVEN WHEN IT FAILS. The route returns them inside the
-   * error body precisely so a partial run is readable: "the folder was created,
-   * the first field moved, the second did not" is actionable, and "it failed"
-   * is not. That was round 93's orphan, from the outside.
+   * ⚠️ REMOVED, NOT LEFT UNREACHABLE. A finished one-time migration sitting in
+   * the file with no caller is the same hazard as the button was, one layer
+   * down: the next person to read it cannot tell it is spent, and the obvious
+   * thing to do with an unused function is wire it back up. The route's
+   * `attribution-folder` action goes with it for the same reason.
+   *
+   * What the migration DID is recorded where it matters — as the note on this
+   * screen explaining why the two attribution fields have a folder of their
+   * own, and in report 121b, which has the live run.
    */
-  const [attribSteps, setAttribSteps] = useState<
-    { step: string; ok: boolean; detail: string }[] | null
-  >(null);
 
-  /** The step in flight, named — so the button is never silent. */
-  const [attribNow, setAttribNow] = useState("");
-
-  /**
-   * 🔴 THREE REQUESTS, NOT ONE — round 119, item 1.
-   *
-   * ⚠️ IT SHOWED "1." AND THEN NOTHING, and the reason was structural: the
-   * route returned every step at the END, so a slow run and a dead run looked
-   * identical. The step log existed only once the work was over, which is the
-   * one moment it is no longer useful.
-   *
-   * Now each step is its own request and renders the moment it lands. A run
-   * that dies part-way has REPORTED what it did, and clicking again resumes —
-   * every step is idempotent.
-   */
-  const runAttribution = async () => {
-    setAttribSteps([]);
-    setBusy(true);
-    setBusyAction("attribution-folder");
-    setSaveErr(null);
-    setSaved("");
-    const add = (step: string, ok: boolean, detail: string) =>
-      setAttribSteps((prev) => [...(prev || []), { step, ok, detail }]);
-    try {
-      let folderId = "";
-      // ⚠️ NAMED IN THE PRESENT TENSE, because the button has to say what is
-      // happening while it happens — not afterwards.
-      const labels: Record<string, string> = {
-        folder: "creating the folder…",
-        fields: "moving Referring Partner and Event Source…",
-        tick: "ticking it onto the client pipelines…",
-      };
-      for (const step of ["folder", "fields", "tick"] as const) {
-        setAttribNow(labels[step]);
-        const res = await fetch("/api/admin/pipelines", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...ssoHeader() },
-          body: JSON.stringify({
-            ssoKey: ssoBlob ?? undefined,
-            action: "attribution-folder",
-            step,
-            folderId: folderId || undefined,
-          }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          // 🔴 THE STEPS THAT DID SUCCEED STAY ON SCREEN. "The folder was
-          // created, the first field moved, the second did not" is actionable;
-          // "it failed" is round 93's orphan seen from the outside.
-          add(step, false, String(j.detail || j.error || `Step failed (${res.status}).`));
-          throw apiError(res, j);
-        }
-        if (j.folderId) folderId = j.folderId;
-        if (Array.isArray(j.results)) for (const r of j.results) add(step, r.ok, r.detail);
-        else add(step, j.ok !== false, String(j.detail || "Done."));
-        // 🔴 ROUND 121 · ITEM 1 — A STEP THAT DEPENDS ON AN EARLIER ONE MUST NOT
-        // RUN WHEN IT FAILED. Live, both field moves failed and the tick ran
-        // anyway: an EMPTY folder went onto five client pipelines, which is
-        // round 93's orphan in a new shape. The tick exists to show those two
-        // fields; with neither moved it has nothing to show.
-        if (step === "fields" && Array.isArray(j.results) && j.results.length &&
-            j.results.every((r: { ok?: boolean }) => r.ok === false)) {
-          add(
-            "tick",
-            false,
-            "Not ticked — neither field moved, so the folder is empty and " +
-              "ticking it onto every client pipeline would add a section with " +
-              "nothing in it. Fix the move above, then run this again.",
-          );
-          setSaved("");
-          return;
-        }
-        if (j.config) {
-          setData((d) => (d ? { ...d, config: j.config } : d));
-          announce(j.config);
-        }
-      }
-      setSaved("Referral Attribution is in place.");
-      await load(); // the folder is new, so the section list has to be re-read
-    } catch (e) {
-      setSaveErr(e);
-    } finally {
-      setAttribNow("");
-      setBusy(false);
-      setBusyAction("");
-    }
-  };
-
-  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
+  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
   const deletePipelineRow = async (p: PipelineRow) => {
     const j = await post({ action: "delete-pipeline", pipelineId: p.id }, p.id);
     if (!j || !data) return;
@@ -1543,6 +1493,36 @@ export default function PipelineAdmin({
                     </span>
                   </div>
                 ) : null}
+                {/* 🔴 ROUND 124 · ITEM 2 — THE ROLE, AND IT IS OFFERED ON EVERY
+                    SCOPE. The Events pipeline was found by matching the NAME
+                    "Events" across the client and "none" pickers, so a rename
+                    or a scope change emptied the Events tab with nothing on
+                    screen to say why. This records the ID instead — the same
+                    shape as Recruiting group, and the last string-matched
+                    pipeline lookup in the app.
+                    ⚠️ ONLY ON A CONFIGURED ROW. A role needs an entry, and an
+                    entry needs a scope. */}
+                {entry ? (
+                  <div className="pfgroupedit">
+                    <label htmlFor={`pfrole-${p.id}`}>Role</label>
+                    <select
+                      id={`pfrole-${p.id}`}
+                      value={entry.role === "events" ? "events" : ""}
+                      disabled={busy}
+                      onChange={(e) => void setEventsRole(p.id, e.target.value === "events")}
+                    >
+                      <option value="">No special role</option>
+                      <option value="events">The Events pipeline</option>
+                    </select>
+                    <span className="ihint">
+                      Where the Referrals screen reads events from. Only one
+                      pipeline can hold it — choosing it here takes it off
+                      whichever had it. Unset, the Events tab falls back to
+                      matching the name &ldquo;Events&rdquo;, which a rename
+                      breaks.
+                    </span>
+                  </div>
+                ) : null}
                 <span className="ihint">
                   {/* 🔴 THE RULE, IN ONE SENTENCE: hide from BROWSING surfaces,
                       never from ADMIN ones. Verified in the code, not assumed —
@@ -1757,53 +1737,36 @@ export default function PipelineAdmin({
         />
       ) : null}
 
-      {/* ── ROUND 118 · ITEM 3 — THE ATTRIBUTION FOLDER MOVE, WATCHABLE ──── */}
+      {/* ══════════════════════════════════════════════════════════════════
+          🔴 ROUND 124 · ITEM 5 — THE BUTTON IS GONE. THE REASONING IS NOT.
+          //
+          This was a ONE-TIME MIGRATION and it is complete: the folder exists,
+          both fields are in it, and it is ticked onto all five client
+          pipelines. The button could only ever say "already done".
+          //
+          ⚠️ AND IT WAS A HAZARD. Somebody pressing it in six months, after
+          those folders have been deliberately reorganised, would have had two
+          fields moved back with nothing on screen explaining why.
+          //
+          🔴 THE SENTENCE IS THE VALUE. The button was how it got done; the
+          reasoning is what stops the next person undoing it. So it stays here,
+          as a note on the screen that owns folder layout, rather than as a
+          control that re-runs a finished job.
+          ══════════════════════════════════════════════════════════════════ */}
       <div className="istep" style={{ marginTop: 20 }}>Referral attribution</div>
       <div className="pfgovern">
         <p>
-          <b>Referring Partner is on the Events pipeline only.</b> It sits in
-          <b> Referral Detail</b> beside Waiver Type, Authorized Units and
-          Referral Decline Reason — waiver administration, which is a different
-          job. A folder is ticked or not ticked as a whole, so attribution
-          cannot be shown on a client record without dragging waiver fields onto
-          it too.
-        </p>
-        <p>
-          This creates <b>Referral Attribution</b>, moves <b>Referring
-          Partner</b> and <b>Event Source</b> into it, and ticks it onto every
-          client pipeline. ⚠️ <b>Nothing is deleted</b> — the fields keep their
-          values and Referral Detail keeps its other three.
+          <b>Referring Partner</b> and <b>Event Source</b> live in{" "}
+          <b>Referral Attribution</b>, separate from Referral Detail&apos;s
+          waiver fields, so attribution can be shown on a client record without
+          dragging waiver administration onto it.
         </p>
         <p className="ihint">
-          {/* 🔴 ROUND 93 LEFT AN ORPHAN when createFieldFolder failed, and the
-              defence is not a try/catch — it is saying which step got how far.
-              Running it twice is safe: an existing folder is reused and a field
-              already moved is skipped. */}
-          Each step is reported below as it happens. Running it again is safe —
-          it reuses the folder and skips anything already moved.
+          A folder is ticked or not ticked as a whole — that is why the two
+          attribution fields needed a folder of their own. If you reorganise
+          these folders, keep that separation or attribution stops being
+          showable on a client record without Waiver Type beside it.
         </p>
-      </div>
-      <div className="pfattrib">
-        <button
-          type="button"
-          className="pfprimary"
-          disabled={busy}
-          onClick={() => void runAttribution()}
-        >
-          {busy && busyAction === "attribution-folder"
-            ? attribNow || "Working…"
-            : "Create Referral Attribution and move the fields"}
-        </button>
-        {attribSteps ? (
-          <ol className="pfsteps">
-            {attribSteps.map((s, i) => (
-              <li key={i} className={s.ok ? "ok" : "bad"}>
-                <span className="pfstepwhat">{s.step}</span>
-                <span className="pfstepdetail">{s.detail}</span>
-              </li>
-            ))}
-          </ol>
-        ) : null}
       </div>
 
       {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}

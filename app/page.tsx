@@ -1484,6 +1484,17 @@ export default function Dashboard() {
    */
   const refCache = useRef<ReferralsPayload | null>(null);
   /**
+   * 🔴 ROUND 124 · ITEM 3 — THE RECORD BEING DELETED, AND THE ASK.
+   *
+   * ⚠️ NOT A window.confirm(). ConfirmDialog.tsx:14 records why, and it is not
+   * a style preference: this dashboard runs in a GoHighLevel iframe, and a
+   * sandbox without `allow-modals` makes confirm() return FALSE with no prompt
+   * — so the caller bails and nothing happens, silently.
+   */
+  const [delRec, setDelRec] = useState<OpportunityRecord | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delErr, setDelErr] = useState<unknown>(null);
+  /**
    * ⚠️ STABLE ON PURPOSE. This is a dependency inside the section; an inline
    * arrow would change identity on every render of this page and re-fire the
    * mirror effect each time. And a REF rather than state because nothing here
@@ -1835,6 +1846,41 @@ export default function Dashboard() {
   // version stamping; only the pipeline family differs. Loaded lazily the first
   // time the section is opened, and refreshed by the same Refresh button —
   // never on focus (see the note above the initial-load effect).
+  /**
+   * 🔴 ROUND 124 · ITEM 3 — DELETE ONE CASE.
+   *
+   * ⚠️ THE SERVER DECIDES, NOT THIS. The admin gate is in the route; hiding the
+   * button is convenience, and a rep who reaches the endpoint directly is
+   * refused there.
+   *
+   * ⚠️ THE RECORD LEAVES BOTH LISTS AND THE PANEL CLOSES, rather than a
+   * reload: a full reload here would redraw the board from a payload that may
+   * not have propagated yet and the deleted row could flicker back.
+   */
+  const deleteRecord = useCallback(async () => {
+    const rec = delRec;
+    if (!rec) return;
+    setDelBusy(true);
+    setDelErr(null);
+    try {
+      const res = await fetch(`/api/opportunities/${encodeURIComponent(rec.id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssoKey: ssoRef.current.blob ?? undefined }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean } | ApiError;
+      if (!res.ok) throw apiError(res, j);
+      setData((d) => d.filter((r) => r.id !== rec.id));
+      setCgData((d) => d.filter((r) => r.id !== rec.id));
+      setSelId(null);
+      setDelRec(null);
+    } catch (e) {
+      setDelErr(e);
+    } finally {
+      setDelBusy(false);
+    }
+  }, [delRec]);
+
   const loadCaregivers = useCallback(async () => {
     // Same three properties as load() above, for the same reasons — see the
     // block comment there. This loader had ALL THREE defects, not one.
@@ -7107,6 +7153,41 @@ export default function Dashboard() {
       ) : null}
 
       {/* Add Lead (item 3) */}
+      {/* 🔴 ROUND 124 · ITEM 3 — THE APP'S OWN CONFIRM, NAMING THE RECORD. */}
+      {delRec ? (
+        <ConfirmDialog
+          title="Delete this case?"
+          danger
+          body={
+            <>
+              <p style={{ margin: "0 0 10px" }}>
+                Removes <b>{delRec.oppName || `${delRec.first} ${delRec.last}`.trim() || "this record"}</b>{" "}
+                from <b>{delRec.pipelineName || "its pipeline"}</b>.
+              </p>
+              {/* 🔴 THE CASE, NOT THE PERSON — said plainly, because this is the
+                  distinction somebody is about to rely on. */}
+              <p style={{ margin: "0 0 10px" }}>
+                The contact stays in GoHighLevel with their notes, their other
+                cases and their history. Nothing here can delete a person.
+              </p>
+              {/* 🔴 AND SAY WHAT IS LOST. */}
+              <p className="fnote">
+                Its source and referral attribution go with it — this lead will
+                not appear in any count again. This cannot be undone.
+              </p>
+            </>
+          }
+          confirmLabel="Delete this case"
+          busy={delBusy}
+          error={delErr}
+          onConfirm={() => void deleteRecord()}
+          onCancel={() => {
+            setDelRec(null);
+            setDelErr(null);
+          }}
+        />
+      ) : null}
+
       {addCgOpen ? (
         <AddCaregiverDialog
           ssoBlob={sso.blob}
@@ -8197,6 +8278,33 @@ export default function Dashboard() {
                 everything the dashboard doesn't cover. */}
             {isAdminViewer ? (
               <div className="panelfoot">
+                {/* 🔴 ROUND 124 · ITEM 3 — DELETE THE CASE, ADMIN ONLY.
+                    ⚠️ AND WHERE MARK LOST IS THE RIGHT ANSWER, SAY SO. A rep
+                    who looks for delete and finds nothing should be told why
+                    rather than left hunting: a lost lead with a reason tells
+                    you why leads fail; a deleted one tells you nothing. */}
+                {isAdminViewer ? (
+                  <button
+                    type="button"
+                    // ⚠️ THE EXISTING DANGER BUTTON, NOT A NEW CLASS. Round
+                    // 120 shipped `.moveacts` and `.savemsg.ok` used everywhere
+                    // and defined nowhere; `.pfdangerbtn` is already styled and
+                    // already means "this destroys something".
+                    className="pfdangerbtn"
+                    onClick={() => {
+                      setDelErr(null);
+                      setDelRec(selected);
+                    }}
+                    title="Removes this opportunity. The contact stays in GoHighLevel."
+                  >
+                    Delete this case
+                  </button>
+                ) : (
+                  <span className="hint">
+                    Mark it lost with a reason rather than deleting it — a lost
+                    lead with a reason tells you why leads fail.
+                  </span>
+                )}
                 <span className="hint">
                   Full record, comms &amp; files live in GoHighLevel
                 </span>
