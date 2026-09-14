@@ -264,17 +264,158 @@ function isGhlTimeout(status: number, body: string): boolean {
 // obey it, capped so a long value can't hang the request past the serverless
 // timeout. Otherwise a flat 1.2s, which clears a 10-second window's worth of
 // burst without making a failure feel like a hang.
-function retryAfterMs(res: Response): number {
-  const h = Number(res.headers.get("retry-after"));
-  if (Number.isFinite(h) && h > 0) return Math.min(h * 1000, 4000);
-  return 1200;
-}
+// ⚠️ `retryAfterMs` LIVED HERE and is gone — superseded by rateLimitWaitMs
+// below, which reads the interval header instead of falling back to a flat
+// 1.2s guess. Deleted rather than left beside its replacement: two backoff
+// helpers is how half the call sites end up on the old one.
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 117 · ITEM 2 — THE RATE-LIMIT HEADERS ARE AUTHORITATIVE. READ THEM.
+//
+// ✅ MEASURED LIVE BY THE OWNER, against this account, with a Private
+// Integration Token — which matters because GoHighLevel's docs scope the
+// published limits to OAuth and do not publish a PIT figure:
+//
+//   x-ratelimit-max                     100
+//   x-ratelimit-remaining                99
+//   x-ratelimit-interval-milliseconds 10000
+//   x-ratelimit-limit-daily          200000
+//   x-ratelimit-daily-remaining      198091
+//
+// 🔴 SO A PIT GETS THE SAME BURST BUDGET AND REPORTS IT IN THE SAME HEADERS.
+// GHL's own guidance is to read them "rather than counting requests yourself".
+// Round 89 paced the import loop on an ASSUMED latency; the header makes it
+// exact and, more usefully, makes it OBSERVED rather than modelled.
+//
+// 🔴 THE DAILY CEILING IS A NON-ISSUE. A heavy day of paginated sweeps used
+// 1,909 of 200,000. The 10-second burst is the only real constraint, and it is
+// the one this code paces against.
+// ═══════════════════════════════════════════════════════════════════════════
+export interface RateLimitSnapshot {
+  max: number | null;
+  remaining: number | null;
+  intervalMs: number | null;
+  dailyLimit: number | null;
+  dailyRemaining: number | null;
+  /** When this was read, so a caller can tell a stale snapshot from a fresh one. */
+  at: number;
+}
+
+let lastRateLimit: RateLimitSnapshot | null = null;
+
+/** The most recent headers GoHighLevel sent, or null before the first call. */
+export function getRateLimitSnapshot(): RateLimitSnapshot | null {
+  return lastRateLimit;
+}
+
+function num(res: Response, name: string): number | null {
+  const v = Number(res.headers.get(name));
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Record what the response told us. Called on EVERY response, success or
+ * failure — the headers come back on both, and a 429's headers are the most
+ * informative ones there are.
+ */
+function readRateLimit(res: Response): void {
+  const max = num(res, "x-ratelimit-max");
+  const remaining = num(res, "x-ratelimit-remaining");
+  if (max == null && remaining == null) return; // not a GHL response we can read
+  lastRateLimit = {
+    max,
+    remaining,
+    intervalMs: num(res, "x-ratelimit-interval-milliseconds"),
+    dailyLimit: num(res, "x-ratelimit-limit-daily"),
+    dailyRemaining: num(res, "x-ratelimit-daily-remaining"),
+    at: Date.now(),
+  };
+}
+
+/**
+ * 🔴 BACKOFF FROM THE HEADER, NOT FROM A GUESS.
+ *
+ * The window is `x-ratelimit-interval-milliseconds` — 10,000 on this account.
+ * Waiting the whole interval is what actually guarantees the bucket has
+ * refilled, but a serverless request cannot spend 30 seconds sleeping across
+ * three attempts, so each wait is a FRACTION of the window that grows with the
+ * attempt, capped hard.
+ *
+ * ⚠️ AND `Retry-After` STILL WINS WHEN GHL SENDS IT. It is the server telling
+ * us specifically; the interval is only how long the window is.
+ */
+function rateLimitWaitMs(res: Response, attempt: number): number {
+  const explicit = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(explicit) && explicit > 0)
+    return Math.min(explicit * 1000, 6000);
+  const interval = num(res, "x-ratelimit-interval-milliseconds") ?? 10000;
+  // 1/5, then 2/5 of the window: 2s then 4s at GHL's 10s. Capped at 6s so three
+  // attempts cannot outlive the function.
+  const wait = Math.round((interval * attempt) / 5);
+  return Math.min(Math.max(wait, 800), 6000);
+}
+
+/**
+ * 🔴 AVOID THE 429 RATHER THAN RECOVER FROM IT — using `x-ratelimit-remaining`.
+ *
+ * ⚠️ A MITIGATION, AND I AM NOT GOING TO OVERSTATE IT. We do not know where the
+ * 10-second window STARTED, only how much is left in it, and other processes on
+ * the same account share the budget. So this cannot eliminate a 429; it removes
+ * the self-inflicted ones, where this app's own next burst walks into a wall it
+ * was just told about. The retry is the guarantee.
+ *
+ * ⚠️ AND THE PAUSE IS SMALL ON PURPOSE. Sleeping the full interval to be safe
+ * would turn every heavy screen into a ten-second hang — worse than the 429 it
+ * avoids.
+ */
+const RL_FLOOR = 5;
+async function pauseIfNearLimit(): Promise<void> {
+  const s = lastRateLimit;
+  if (!s || s.remaining == null) return;
+  // A snapshot older than the window tells us nothing about the window we are
+  // in now. Reading it would pace against history.
+  const interval = s.intervalMs ?? 10000;
+  if (Date.now() - s.at > interval) return;
+  if (s.remaining > RL_FLOOR) return;
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[ghl] ${s.remaining} of ${s.max ?? "?"} requests left in this ${interval}ms window — pausing briefly.`,
+  );
+  await sleep(Math.min(Math.round(interval / 10), 1200));
+}
+
+/**
+ * The message a 429 reaches a person as, once retries are spent.
+ *
+ * 🔴 NOT A RAW 429. "GoHighLevel returned 429 for /opportunities/search" tells
+ * somebody who did nothing wrong to do something they cannot do. This says what
+ * happened and what to do, and keeps the numbers in `detail` for the log.
+ */
+function rateLimitError(pathname: string, attempts: number): GhlError {
+  const s = lastRateLimit;
+  return new GhlError(
+    "GoHighLevel is rate-limiting us. Try again in a few seconds.",
+    429,
+    `${pathname} was refused with 429 after ${attempts} attempts. ` +
+      (s
+        ? `Last headers: ${s.remaining ?? "?"} of ${s.max ?? "?"} left in a ` +
+          `${s.intervalMs ?? "?"}ms window; ${s.dailyRemaining ?? "?"} of ` +
+          `${s.dailyLimit ?? "?"} left today.`
+        : "No rate-limit headers were returned.") +
+      " This is a burst limit, not a quota problem — nothing is wrong with the account.",
+  );
+}
+
+/** Total attempts for a retryable 429: the first, plus two more. */
+const RL_ATTEMPTS = 3;
 
 async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
+  // 🔴 ITEM 2 — look at what the LAST response said before making this one.
+  await pauseIfNearLimit();
   try {
     res = await fetch(url, { headers: headers(), cache: "no-store" });
   } catch (e) {
@@ -284,6 +425,7 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
       e instanceof Error ? e.message : String(e),
     );
   }
+  readRateLimit(res);
   if (!res.ok) {
     let raw = "";
     try {
@@ -294,14 +436,22 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
     let detail = ghlMessage(raw).slice(0, 500);
     const meta = ghlErrorMeta(raw);
 
-    if (res.status === 429 && attempt === 1) {
-      const wait = retryAfterMs(res);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[ghl] 429 on ${new URL(url).pathname} — rate limited. Retrying once in ${wait}ms.`,
-      );
-      await sleep(wait);
-      return ghlGet<T>(path, 2);
+    // 🔴 ITEM 2 — A GET IS ALWAYS SAFE TO RETRY. It creates nothing, so
+    // repeating it can only cost time. Three attempts, spaced from the header.
+    if (res.status === 429) {
+      if (attempt < RL_ATTEMPTS) {
+        const wait = rateLimitWaitMs(res, attempt);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ghl] 429 on ${new URL(url).pathname} — attempt ${attempt} of ` +
+            `${RL_ATTEMPTS}, retrying in ${wait}ms. ` +
+            `remaining=${lastRateLimit?.remaining ?? "?"}`,
+        );
+        await sleep(wait);
+        return ghlGet<T>(path, attempt + 1);
+      }
+      // 🔴 ONLY NOW does it become an error, and it says what it is.
+      throw rateLimitError(new URL(url).pathname, RL_ATTEMPTS);
     }
 
     // ONE retry, then give up. Retrying further would turn a GHL wobble into a
@@ -346,14 +496,45 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * 🔴 ITEM 2 — HOW A RETRYABLE WRITE IS DISTINGUISHED FROM A DANGEROUS ONE.
+ *
+ * The rule is the METHOD, with one narrow opt-in:
+ *
+ *   PUT / PATCH   RETRIED. Every one this app makes sets a DESIRED STATE — a
+ *                 stage, an owner, a field value. Applying it twice reaches the
+ *                 same place, so a retry after a 429 that actually landed is a
+ *                 no-op.
+ *   POST          NOT RETRIED, ever, by default. A POST here CREATES: a
+ *                 contact, an opportunity, a pipeline, a field, a note. If the
+ *                 first attempt reached GoHighLevel and only the RESPONSE was
+ *                 lost — which a 429 at a proxy looks exactly like — a retry
+ *                 makes a SECOND one. The import wizard's duplicate check would
+ *                 catch some contacts; NOTHING protects a partner, an event or
+ *                 a pipeline from being created twice.
+ *
+ * ⚠️ SO A 429 ON A POST SURFACES IMMEDIATELY, with the honest message. That is
+ * the right trade: "try again in a few seconds" costs one click, a duplicate
+ * partner costs somebody an afternoon and is not always noticed.
+ *
+ * `idempotent: true` is the opt-in for a POST that is provably not a create —
+ * it must be justified at the call site, not assumed here.
+ */
+function retryableWrite(method: string, idempotent?: boolean): boolean {
+  if (idempotent) return true;
+  return method === "PUT" || method === "PATCH";
+}
+
 async function ghlSend<T>(
   method: "PUT" | "POST" | "PATCH",
   path: string,
   body: unknown,
   attempt = 1,
+  opts?: { idempotent?: boolean },
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
+  await pauseIfNearLimit();
   try {
     res = await fetch(url, {
       method,
@@ -385,14 +566,29 @@ async function ghlSend<T>(
     // increment or an append — so applying it twice reaches the same place.
     // The one exception is note creation, which appends; a duplicated note is
     // visible and harmless, whereas a lost one is not.
-    if (res.status === 429 && attempt === 1) {
-      const wait = retryAfterMs(res);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[ghl] 429 on ${method} ${new URL(url).pathname} — rate limited. Retrying once in ${wait}ms.`,
+    if (res.status === 429) {
+      const safe = retryableWrite(method, opts?.idempotent);
+      if (safe && attempt < RL_ATTEMPTS) {
+        const wait = rateLimitWaitMs(res, attempt);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ghl] 429 on ${method} ${new URL(url).pathname} — attempt ${attempt} ` +
+            `of ${RL_ATTEMPTS}, retrying in ${wait}ms.`,
+        );
+        await sleep(wait);
+        return ghlSend<T>(method, path, body, attempt + 1, opts);
+      }
+      if (!safe)
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ghl] 429 on ${method} ${new URL(url).pathname} — NOT retried: a ` +
+            "POST here creates a record, and a retry after a 429 that landed " +
+            "server-side would duplicate it. Surfacing it instead.",
+        );
+      throw rateLimitError(
+        `${method} ${new URL(url).pathname}`,
+        safe ? RL_ATTEMPTS : 1,
       );
-      await sleep(wait);
-      return ghlSend<T>(method, path, body, 2);
     }
 
     if (isGhlTimeout(res.status, raw) && attempt === 1) {
@@ -400,7 +596,7 @@ async function ghlSend<T>(
       console.warn(
         `[ghl] 401 "Command timed out" on ${method} ${new URL(url).pathname} — GoHighLevel's own timeout, not auth. Retrying once.`,
       );
-      return ghlSend<T>(method, path, body, 2);
+      return ghlSend<T>(method, path, body, 2, opts);
     }
     if (isGhlTimeout(res.status, raw)) {
       throw new GhlError(

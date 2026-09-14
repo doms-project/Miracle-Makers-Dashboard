@@ -2122,29 +2122,55 @@ function LogTouchDialog({
           </button>
         </div>
         <div className="movebody">
-          <div className="irow">
-            <label htmlFor="rf-ttype">Type</label>
-            <select
-              id="rf-ttype"
-              value={touchType}
-              onChange={(e) => setTouchType(e.target.value)}
-            >
-              {TOUCH_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="irow">
-            <label htmlFor="rf-touch">What happened</label>
-            <textarea
-              id="rf-touch"
-              rows={4}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Called the discharge planner. Two families to follow up next week."
-            />
+          {/* 🔴 ROUND 117 · ITEM 1 — the same shape as "Log a referral".
+              ⚠️ ONE SHORT FIELD AND NO PARTNER FOR IT. Rather than invent a
+              field to fill the second cell, it carries what the first one
+              MEANS — which is the "not enough detail" fault, answered where the
+              question is asked rather than in a paragraph underneath. */}
+          <div className="rfgroup">
+            <div className="rfglab">The touch</div>
+            <div className="rfdhint">
+              <b>A touch is contact with a person, in either direction</b> — a
+              call, a visit, an email they answered. A voicemail counts; a
+              newsletter they were on a list for does not.
+            </div>
+            <div className="irow2">
+              <div>
+                <label htmlFor="rf-ttype">Type</label>
+                <select
+                  id="rf-ttype"
+                  value={touchType}
+                  onChange={(e) => setTouchType(e.target.value)}
+                >
+                  {TOUCH_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="rfpaircell">
+                🔴 <b>Logging this restarts the cadence clock.</b> The partner
+                drops out of the due queue and comes back when their tier&apos;s
+                interval is up.
+              </div>
+            </div>
+            <div className="irow">
+              <label htmlFor="rf-touch">What happened</label>
+              <textarea
+                id="rf-touch"
+                rows={4}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Called the discharge planner. Two families to follow up next week."
+              />
+            </div>
+            <div className="rfdhint">
+              ⚠️ <b>Write what the next person needs</b>, not that you called.
+              &ldquo;Left a message&rdquo; and &ldquo;Two families to follow up
+              Tuesday&rdquo; both clear the clock; only one is worth reading in
+              six weeks.
+            </div>
           </div>
           <div className="rfdhint">
             Written as a note on the partner&apos;s contact in GoHighLevel, which
@@ -2319,6 +2345,12 @@ function AddPartnerDialog({
           </button>
         </div>
         <div className="movebody">
+          {/* 🔴 ROUND 117 · ITEM 1 — THREE GROUPS, NOT ELEVEN STACKED ROWS.
+              Who they are · How we work them · Notes. The headings are what
+              let somebody scan for the part they are changing instead of
+              reading the whole form from the top. */}
+          <div className="rfgroup">
+            <div className="rfglab">Who they are</div>
           <div className="rfmode">
             <label>
               {/* ⚠️ `name` MAKES THEM A GROUP. Without it these are two
@@ -2444,90 +2476,129 @@ function AddPartnerDialog({
               which is the one case where they have somewhere to go. */}
           {mode === "existing" && picked ? null : (
             <>
-              <div className="irow">
-                <label htmlFor="rf-first">Contact first name</label>
-                <input id="rf-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
-                <label htmlFor="rf-last">Last name</label>
-                <input id="rf-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+              {/* 🔴 ROUND 117 · ITEM 1 — PAIRED, NOT STACKED. These were already
+                  two-per-`.irow`, but `.movebody .irow input{width:100%}` gives
+                  every control its own line, so four fields became eight rows of
+                  one line's worth of content each. `.irow2` is the grid 115c
+                  built for exactly this. */}
+              <div className="irow2">
+                <div>
+                  <label htmlFor="rf-first">Contact first name</label>
+                  <input id="rf-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="rf-last">Last name</label>
+                  <input id="rf-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+                </div>
               </div>
-              <div className="irow">
-                <label htmlFor="rf-email">Email</label>
-                <input
-                  id="rf-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-                <label htmlFor="rf-phone">Phone</label>
-                <input
-                  id="rf-phone"
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
+              <div className="irow2">
+                <div>
+                  <label htmlFor="rf-email">Email</label>
+                  <input
+                    id="rf-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="rf-phone">Phone</label>
+                  <input
+                    id="rf-phone"
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="rfdhint">
+                ⚠️ <b>A named contact is optional.</b> The row reads as the
+                organisation either way — this is who to ask for when you call,
+                and it can be filled in later from the record.
               </div>
             </>
           )}
-          <div className="irow">
-            <label htmlFor="rf-cat">Category</label>
-            <select id="rf-cat" value={cat} onChange={(e) => setCat(e.target.value)}>
-              <option value="">Not set</option>
-              {categories.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-            <label htmlFor="rf-tier">Tier</label>
-            <select id="rf-tier" value={tier} onChange={(e) => setTier(e.target.value)}>
-              {tiers.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                  {CADENCE[t] ? ` · every ${CADENCE[t]} days` : ""}
-                </option>
-              ))}
-            </select>
           </div>
-          <div className="irow">
-            <label htmlFor="rf-div">Division</label>
-            <select id="rf-div" value={div} onChange={(e) => setDiv(e.target.value)}>
-              {divisions.map((d) => (
-                <option key={d} value={d}>
-                  {d === "All" ? "All — appears under every division" : d}
-                </option>
-              ))}
-            </select>
-            <label htmlFor="rf-owner">Owner</label>
-            <select
-              id="rf-owner"
-              value={owner}
-              onChange={(e) => setOwner(e.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {owners.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
+          <div className="rfgroup">
+            <div className="rfglab">How we work them</div>
+            {/* ⚠️ THE BRIEF'S OWN HINTS, KEPT — and moved ABOVE the fields they
+                describe. A tier explained underneath is explained after it has
+                already been guessed. */}
+            <div className="rfdhint">
+              <b>Tier sets the contact cadence</b> — A every 14 days, B monthly,
+              C quarterly, prospect every 21 — and that is the only thing it
+              does. <b>Owner</b> is who holds the relationship: it decides whose
+              due queue this lands in and who sees it.
+            </div>
+            <div className="irow2">
+              <div>
+                <label htmlFor="rf-cat">Category</label>
+                <select id="rf-cat" value={cat} onChange={(e) => setCat(e.target.value)}>
+                  <option value="">Not set</option>
+                  {categories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="rf-tier">Tier</label>
+                <select id="rf-tier" value={tier} onChange={(e) => setTier(e.target.value)}>
+                  {tiers.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                      {CADENCE[t] ? ` · every ${CADENCE[t]} days` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="rfdhint">
+              <b>Category can be left Not set.</b> It groups partners on the
+              sources table and nothing depends on it — set it later from the
+              record when the relationship has a shape.
+            </div>
+            <div className="irow2">
+              <div>
+                <label htmlFor="rf-div">Division</label>
+                <select id="rf-div" value={div} onChange={(e) => setDiv(e.target.value)}>
+                  {divisions.map((d) => (
+                    <option key={d} value={d}>
+                      {d === "All" ? "All — appears under every division" : d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="rf-owner">Owner</label>
+                <select
+                  id="rf-owner"
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                >
+                  <option value="">Unassigned</option>
+                  {owners.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
-          {/* ⚠️ THE BRIEF'S OWN HINTS, KEPT. Each one answers a question the
-              field otherwise invites: why an organisation and not a person, what
-              a tier actually does, and what an owner controls. */}
-          <div className="rfdhint">
-            <b>Tier sets the contact cadence.</b> A is every 14 days, B monthly,
-            C quarterly, prospect every 21. <b>Owner</b> is who holds this
-            relationship — it drives who sees it and whose queue it lands in.
-          </div>
-          <div className="irow">
-            <label htmlFor="rf-notes">Notes</label>
-            <textarea
-              id="rf-notes"
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Two discharge planners. Prefers a Tuesday call."
-            />
+          <div className="rfgroup">
+            <div className="rfglab">Notes</div>
+            <div className="irow">
+              <label htmlFor="rf-notes">Notes</label>
+              <textarea
+                id="rf-notes"
+                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Two discharge planners. Prefers a Tuesday call."
+              />
+            </div>
           </div>
           <div className="rfdhint">
             ⚠️ A category or tier this GoHighLevel account has no option for is
@@ -2968,6 +3039,10 @@ function LogReferralDialog({
               "+ Add partner". */}
           {partner && mode === "existing" ? null : (
           <>
+          {/* 🔴 ROUND 117 · ITEM 1 — the same headings the other three now
+              carry. `.rfglab` separates itself, so a form whose blocks are
+              conditional gains grouping without being re-nested. */}
+          <div className="rfglab">Who the referral is for</div>
           {/* Two short fields, one line. See `.irow2`. */}
           <div className="irow2">
             <div>
@@ -3028,6 +3103,7 @@ function LogReferralDialog({
             />
           </div>
 
+          <div className="rfglab">Where it goes</div>
           <div className="irow">
             <label htmlFor="rr-pipe">File in</label>
             <select
@@ -3371,45 +3447,72 @@ function AddEventDialog({
           </button>
         </div>
         <div className="movebody">
-          <div className="irow">
-            <label htmlFor="re-name">Event name</label>
-            <input
-              id="re-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Delco Senior Expo"
-            />
+          {/* 🔴 ROUND 117 · ITEM 1 — two groups, short fields paired, and the
+              cost hint moved ABOVE the field it explains. */}
+          <div className="rfgroup">
+            <div className="rfglab">The event</div>
+            <div className="irow">
+              <label htmlFor="re-name">Event name</label>
+              <input
+                id="re-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Delco Senior Expo"
+              />
+            </div>
+            <div className="irow2">
+              <div>
+                <label htmlFor="re-venue">Venue</label>
+                <input id="re-venue" value={venue} onChange={(e) => setVenue(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="re-date">Date</label>
+                <input id="re-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+            </div>
           </div>
-          <div className="irow">
-            <label htmlFor="re-date">Date</label>
-            <input id="re-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <label htmlFor="re-cost">Cost</label>
-            <input
-              id="re-cost"
-              type="number"
-              min={0}
-              step={50}
-              value={cost}
-              onChange={(e) => setCost(e.target.value)}
-              placeholder="450"
-            />
-          </div>
-          <div className="rfdhint">
-            ⚠️ Event cost is a one-off — a booth is paid once — so it is never
-            shown as a monthly figure, unlike referral value.
-          </div>
-          <div className="irow">
-            <label htmlFor="re-venue">Venue</label>
-            <input id="re-venue" value={venue} onChange={(e) => setVenue(e.target.value)} />
-            <label htmlFor="re-div">Division</label>
-            <select id="re-div" value={div} onChange={(e) => setDiv(e.target.value)}>
-              <option value="">Not set</option>
-              {divisions.map((d) => (
-                <option key={d} value={d}>
-                  {d === "All" ? "All — appears under every division" : d}
-                </option>
-              ))}
-            </select>
+          <div className="rfgroup">
+            <div className="rfglab">What it cost, and whose it is</div>
+            {/* 🔴 WHAT THE COST IS FOR. It is not bookkeeping — it is the
+                numerator of cost per legitimate lead, which is the only number
+                that says whether an expo was worth going to. A blank cost does
+                not make an event look cheap; it makes it uncountable. */}
+            <div className="rfdhint">
+              <b>Cost drives cost per legitimate lead</b> — the whole spend
+              divided by the referrals this event actually produced. Include the
+              booth, the travel and the materials; a round figure is fine, and it
+              can be corrected later. ⚠️ Leaving it empty does not read as free,
+              it drops the event out of that calculation entirely.
+            </div>
+            <div className="irow2">
+              <div>
+                <label htmlFor="re-cost">Cost</label>
+                <input
+                  id="re-cost"
+                  type="number"
+                  min={0}
+                  step={50}
+                  value={cost}
+                  onChange={(e) => setCost(e.target.value)}
+                  placeholder="450"
+                />
+              </div>
+              <div>
+                <label htmlFor="re-div">Division</label>
+                <select id="re-div" value={div} onChange={(e) => setDiv(e.target.value)}>
+                  <option value="">Not set</option>
+                  {divisions.map((d) => (
+                    <option key={d} value={d}>
+                      {d === "All" ? "All — appears under every division" : d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="rfdhint">
+              ⚠️ Event cost is a <b>one-off</b> — a booth is paid once — so it is
+              never shown as a monthly figure, unlike referral value.
+            </div>
           </div>
           <div className="rfdhint">
             Creates an opportunity in the Events pipeline with <b>{partner.org}</b>{" "}
