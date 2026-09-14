@@ -1486,6 +1486,37 @@ export default function PipelineAdmin({
                     </option>
                   ))}
                 </select>
+                {/* 🔴 ROUND 120 · ITEM 1 — WHICH RECRUITING GROUP.
+                    ⚠️ ONLY FOR A CAREGIVER PIPELINE. All five applicant
+                    pipelines are caregiver-scope, so scope cannot tell the two
+                    families apart and this is the second axis. A client
+                    pipeline has no recruiting group and is not asked. */}
+                {entry?.scope === "caregiver" ? (
+                  <div className="pfgroupedit">
+                    <label htmlFor={`pfgroup-${p.id}`}>Recruiting group</label>
+                    <select
+                      id={`pfgroup-${p.id}`}
+                      value={entry.group ?? "caregiver"}
+                      disabled={busy}
+                      onChange={(e) =>
+                        void saveEntry(p.id, {
+                          ...entry,
+                          group: e.target.value === "staff" ? "staff" : "caregiver",
+                        })
+                      }
+                    >
+                      <option value="caregiver">Caregivers — applicants</option>
+                      <option value="staff">Staff — hires</option>
+                    </select>
+                    <span className="ihint">
+                      {/* ⚠️ SAY WHAT THE DEFAULT IS. An unset pipeline reads as
+                          Caregivers, which is a decision this screen made on
+                          the admin's behalf and should therefore admit to. */}
+                      Which half of the Recruiting section lists it. Unset reads
+                      as Caregivers.
+                    </span>
+                  </div>
+                ) : null}
                 <span className="ihint">
                   {/* 🔴 THE RULE, IN ONE SENTENCE: hide from BROWSING surfaces,
                       never from ADMIN ones. Verified in the code, not assumed —

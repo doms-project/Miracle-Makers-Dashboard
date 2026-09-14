@@ -93,6 +93,32 @@ export interface StoredPipelineEntry {
    * carry `"exclude":[]` into a custom value with a length limit.
    */
   exclude?: string[];
+  /**
+   * 🔴 WHICH RECRUITING GROUP — round 120, item 1.
+   *
+   * ⚠️ SCOPE CANNOT ANSWER THIS. All five applicant pipelines are
+   * caregiver-scope: the two caregiver ones and the three staff ones. So the
+   * Recruiting switcher needs a second axis, and this is it.
+   *
+   * 🔴 WHY A STORED FIELD AND NOT A NAME MATCH OR AN ID LIST:
+   *   name match   breaks the day somebody renames a pipeline, and this
+   *                account renames things
+   *   id list      hardcoded ids are the thing every round since 90 has been
+   *                removing
+   *   this         an admin sets it once, on the screen that already owns every
+   *                other per-pipeline decision, and it survives a rename
+   *
+   * ⚠️ ABSENT MEANS "caregiver", DELIBERATELY. 187 applicants sit in the two
+   * caregiver pipelines and nothing is in the staff ones yet, so an unset
+   * pipeline defaulting to caregiver shows the records that exist rather than
+   * hiding them behind a setting nobody has touched. The cost is that the
+   * three new staff pipelines read as Caregivers until an admin says otherwise
+   * — visible, empty, and one dropdown away from correct.
+   *
+   * ⚠️ ONLY MEANINGFUL WHEN scope IS "caregiver". A client pipeline has no
+   * recruiting group and the screen does not offer one.
+   */
+  group?: "caregiver" | "staff";
 }
 
 export interface StoredPipelineConfig {
@@ -208,12 +234,19 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
     const folders = Array.isArray(e.folders)
       ? e.folders.map((f) => String(f ?? "").trim()).filter(Boolean)
       : [];
+    const group = e.group === "staff" ? "staff" : e.group === "caregiver" ? "caregiver" : null;
     const exclude = Array.isArray(e.exclude)
       ? [...new Set(e.exclude.map((f) => String(f ?? "").trim()).filter(Boolean))]
       : [];
     // Omitted when empty — see the field comment. An `exclude: []` on every one
     // of ten pipelines is 150 wasted bytes in a value with a size limit.
-    pipelines[id] = exclude.length ? { scope, folders, exclude } : { scope, folders };
+    // ⚠️ OMITTED WHEN ABSENT, like `exclude`. A `group` on every entry that
+    // has not been decided would make "nobody chose" indistinguishable from
+    // "somebody chose caregiver".
+    const base: StoredPipelineEntry = { scope, folders };
+    if (exclude.length) base.exclude = exclude;
+    if (group) base.group = group;
+    pipelines[id] = base;
   }
   const folderNames: Record<string, string> = {};
   const fn = rec.folderNames;
@@ -231,6 +264,20 @@ export function serialisePipelineConfig(c: StoredPipelineConfig): string {
     pipelines: c.pipelines,
     folderNames: c.folderNames || {},
   });
+}
+
+/**
+ * The recruiting group for one pipeline, defaulting to "caregiver".
+ *
+ * ⚠️ ONE PLACE, so the default cannot drift. Round 113 broke the caregiver tile
+ * and round 114 the client board for the same reason: a rule each consumer had
+ * to remember.
+ */
+export function recruitingGroup(
+  c: StoredPipelineConfig | null,
+  pipelineId: string,
+): "caregiver" | "staff" {
+  return c?.pipelines?.[pipelineId]?.group === "staff" ? "staff" : "caregiver";
 }
 
 /** Field ids excluded for one pipeline, as a Set. Empty when there are none. */

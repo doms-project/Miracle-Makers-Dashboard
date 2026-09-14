@@ -378,7 +378,10 @@ await page.waitForTimeout(300);
 const cgLanded = page.waitForResponse(
   (r) => /scope=caregiver/.test(r.url()), { timeout: 60000 },
 );
-await frame.click('.railsec[title="Caregiver and DSP applicants"]');
+// ⚠️ ROUND 120 RENAMED THIS RAIL ENTRY to Recruiting, and its title with it.
+// Matched on the visible LABEL rather than the tooltip: the label is what the
+// brief specified and what a person reads, so it is the more stable anchor.
+await frame.click('.railsec:has-text("Recruiting")');
 await cgLanded;
 await page.waitForTimeout(900);
 await openPipelines();

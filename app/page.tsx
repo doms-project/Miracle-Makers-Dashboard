@@ -1516,6 +1516,15 @@ export default function Dashboard() {
   // cannot appear in them — there is no filter to forget.
   const [cgData, setCgData] = useState<OpportunityRecord[]>([]);
   const [cgPipelines, setCgPipelines] = useState<{ id: string; name: string }[]>([]);
+  /**
+   * 🔴 ROUND 120 · ITEM 1 — WHICH RECRUITING GROUP THE SECTION IS SHOWING.
+   *
+   * ⚠️ DEFAULT "caregiver": 187 records are there and none is in staff yet.
+   */
+  const [cgGroup, setCgGroup] = useState<"caregiver" | "staff" | "all">("caregiver");
+  const [cgGroupOpen, setCgGroupOpen] = useState(false);
+  /** Pipelines explicitly marked staff. Absent = caregiver — one default, one place. */
+  const [pipelineGroups, setPipelineGroups] = useState<Record<string, "caregiver" | "staff">>({});
   const [cgStagesByPipeline, setCgStagesByPipeline] = useState<
     Record<string, { id: string; name: string }[]>
   >({});
@@ -1808,6 +1817,7 @@ export default function Dashboard() {
       setCgPipelines(b.pipelines || []);
       setCgStagesByPipeline(b.stagesByPipeline || {});
       setCgHomeIds(b.viewer?.homePipelineIds || []);
+      if (b.pipelineGroups) setPipelineGroups(b.pipelineGroups);
       setCgLoaded(true);
     } catch (e) {
       if (!isCurrent()) return;
@@ -2287,9 +2297,17 @@ export default function Dashboard() {
       case "resources":
         return { title: "Resources", sub: "Shared documents and folders" };
       case "caregivers":
+        // 🔴 ROUND 120 · ITEM 1 — RECRUITING, and the subtitle follows the
+        // switcher. The title itself is rendered as the heading-as-control
+        // below; this is the fallback text and the subtitle source.
         return {
-          title: "Caregiver applicants",
-          sub: "Applicants across the recruiting pipelines",
+          title: "Recruiting",
+          sub:
+            cgGroup === "staff"
+              ? "Staff hires across your division"
+              : cgGroup === "all"
+                ? "Applicants and staff hires across your division"
+                : "Caregiver and DSP applicants across your division",
         };
       case "referrals":
         return {
@@ -2305,7 +2323,7 @@ export default function Dashboard() {
           sub: "Enrollments across your division · contacts, comms and settings stay in GoHighLevel",
         };
     }
-  }, [view, headerLabel]);
+  }, [view, headerLabel, cgGroup]);
 
 
   // Owner/follower picker label: "Name — DIV". No division mapped renders "—"
@@ -3254,10 +3272,25 @@ export default function Dashboard() {
   // neither.
   const cgVisiblePipelines = useMemo(() => {
     const home = new Set(cgHomeIds);
-    return isAdminViewer || !home.size
-      ? cgPipelines
-      : cgPipelines.filter((p) => home.has(p.id));
-  }, [cgPipelines, cgHomeIds, isAdminViewer]);
+    const mine =
+      isAdminViewer || !home.size
+        ? cgPipelines
+        : cgPipelines.filter((p) => home.has(p.id));
+    // 🔴 ROUND 120 · ITEM 1 — THE SWITCHER FILTERS HERE AND NOWHERE ELSE.
+    //
+    // ⚠️ THIS IS THE SOURCE. `cgActivePipeline` derives from this list, and
+    // every consumer — the picker, the stage chips, the tiles, the board, the
+    // list, sort, group, search and the count — keys off `cgActivePipeline`.
+    // So one filter moves the whole tab.
+    //
+    // 🔴 THE ALTERNATIVE IS WHAT BROKE 113 AND 114: a predicate every consumer
+    // has to remember. The caregiver tile forgot it once and the client board
+    // forgot it again. A list that is already filtered cannot be forgotten.
+    if (cgGroup === "all") return mine;
+    return mine.filter(
+      (p) => (pipelineGroups[p.id] === "staff" ? "staff" : "caregiver") === cgGroup,
+    );
+  }, [cgPipelines, cgHomeIds, isAdminViewer, cgGroup, pipelineGroups]);
 
   const cgActivePipeline = useMemo(
     () =>
@@ -4718,12 +4751,13 @@ export default function Dashboard() {
         </button>
         <button
           className={railWhere === "caregivers" ? "railsec active" : "railsec"}
-          title="Caregiver and DSP applicants"
+          title="Caregiver applicants and staff hires"
           type="button"
           onClick={() => setView("caregivers")}
         >
           <IconPeople />
-          <span>Caregivers</span>
+          {/* ROUND 120 · ITEM 1 — the section covers both families now. */}
+          <span>Recruiting</span>
         </button>
         {/* 🔴 A RAIL SECTION, NOT A TAB INSIDE CLIENTS. A referral partner is
             not an enrolment and not an applicant: it is a third kind of record,
@@ -4832,10 +4866,67 @@ export default function Dashboard() {
                 screen they are on nor anything they can do there. Each admin
                 screen names itself and says what it is for; the board keeps the
                 header it had. */}
-            <h1>
-              <span className="pipe" /> {screenHeader.title}
-            </h1>
-            <small>{screenHeader.sub}</small>
+            {/* 🔴 ROUND 120 · ITEM 1 — THE SAME CONTROL THE REFERRALS SECTION
+                HAS, REUSED. Not a <select> beside a title: a button that looks
+                like the heading with a listbox under it, so it reads as a
+                heading and behaves as a control. `.rfhead`/`.rfdiv`/`.rfdivpop`
+                are the classes ReferralsSection already uses — borrowed, not
+                copied, so the two switchers cannot drift apart. */}
+            {view === "caregivers" ? (
+              <div className="rfhead cghead">
+                <button
+                  type="button"
+                  className="rfdiv"
+                  aria-haspopup="listbox"
+                  aria-expanded={cgGroupOpen}
+                  onClick={() => setCgGroupOpen((o) => !o)}
+                  title="Switch between applicants and staff — everything below changes with it"
+                >
+                  <span className="rfdivname">
+                    <span className="pipe" /> {screenHeader.title}
+                  </span>
+                  <svg className="rfcar" viewBox="0 0 10 6" aria-hidden="true">
+                    <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                  </svg>
+                </button>
+                {cgGroupOpen ? (
+                  <ul className="rfdivpop" role="listbox" aria-label="Recruiting group">
+                    {(
+                      [
+                        ["caregiver", "Caregivers", "the two applicant pipelines"],
+                        ["staff", "Staff", "the three staff pipelines"],
+                        ["all", "All", "everything in recruiting"],
+                      ] as const
+                    ).map(([k, label, hint]) => (
+                      <li key={k} role="option" aria-selected={k === cgGroup}>
+                        <button
+                          type="button"
+                          className={k === cgGroup ? "on" : ""}
+                          onClick={() => {
+                            setCgGroup(k);
+                            setCgGroupOpen(false);
+                          }}
+                        >
+                          <span>
+                            {label}
+                            <span className="cghint">{hint}</span>
+                          </span>
+                          {k === cgGroup ? <span className="rftick">✓</span> : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <small>{screenHeader.sub}</small>
+              </div>
+            ) : (
+              <>
+                <h1>
+                  <span className="pipe" /> {screenHeader.title}
+                </h1>
+                <small>{screenHeader.sub}</small>
+              </>
+            )}
           </div>
           <div className="spacer" />
           <div
@@ -5951,6 +6042,12 @@ export default function Dashboard() {
           // other route here does. Hiding it from non-admins would have been a
           // permission invented in the UI.
           <ReferralsSection
+            /* 🔴 ROUND 120 · ITEM 3. `canOpenRecord` is the honest half: a
+               referral can point at an opportunity this viewer's payload does
+               not contain, and a name that opens nothing is worse than a name
+               that was never a link. */
+            onOpenRecord={(id) => setSelId(id)}
+            canOpenRecord={(id) => data.some((r) => r.id === id)}
             ssoBlob={sso.blob}
             /* 🔴 FINDING 12 — the section used to mount and fire immediately
                with a null blob, so every visitor got a 401 error card that

@@ -183,6 +183,8 @@ export interface OpportunitiesResponse {
   pipelineFolders?: Record<string, string[]>;
   /** ITEM Q — field ids hidden per pipeline. Only pipelines that hide something. */
   pipelineExclusions?: Record<string, string[]>;
+  /** ITEM 1 — pipelines explicitly marked "staff". Absent = caregiver. */
+  pipelineGroups?: Record<string, "caregiver" | "staff">;
   // folderId -> its NAME. The only place a folder name can live: GoHighLevel
   // returns parentName empty on every field and refuses the folder endpoint
   // for opportunity/contact objects.

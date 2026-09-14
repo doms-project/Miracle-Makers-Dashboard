@@ -68,6 +68,8 @@ async function buildResponse(
   // Separately fetched, they could arrive a frame later and the panel would draw
   // a field the admin hid.
   let pipelineExclusions: Record<string, string[]> | undefined;
+  // 🔴 ITEM 1 — the recruiting group, so the switcher filters at SOURCE.
+  let pipelineGroups: Record<string, "caregiver" | "staff"> | undefined;
   try {
     const cfg = await getPipelineConfig();
     pipelineFolders = Object.fromEntries(
@@ -76,6 +78,14 @@ async function buildResponse(
     folderNames = cfg.folderNames;
     // ⚠️ ONLY THE PIPELINES THAT EXCLUDE SOMETHING. Ten empty arrays on every
     // payload to say "nothing is hidden anywhere" is the common case.
+    // ⚠️ ONLY THE PIPELINES EXPLICITLY MARKED "staff". Absent means caregiver
+    // (pipelineConfig.ts), so sending every entry would put the default in two
+    // places — which is how round 113 and 114 both broke.
+    pipelineGroups = Object.fromEntries(
+      Object.entries(cfg.pipelines)
+        .filter(([, e]) => e.group === "staff")
+        .map(([id]) => [id, "staff" as const]),
+    );
     pipelineExclusions = Object.fromEntries(
       Object.entries(cfg.pipelines)
         .filter(([, e]) => e.exclude?.length)
@@ -85,6 +95,7 @@ async function buildResponse(
     pipelineFolders = undefined;
     folderNames = undefined;
     pipelineExclusions = undefined;
+    pipelineGroups = undefined;
   }
 
   const meta = {
@@ -93,6 +104,7 @@ async function buildResponse(
     fieldDefs,
     pipelineFolders,
     pipelineExclusions,
+    pipelineGroups,
     folderNames,
     pipelines,
     stagesByPipeline,
