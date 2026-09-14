@@ -1067,6 +1067,14 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .contactbar .cbitem.none{color:var(--ink-3);font-weight:500;}
 /* A pipeline that failed to load — louder than a hint, quieter than an error
    page, because the rest of the screen is still valid data. */
+/* A stat tile that is also a control — round 114. It keeps the tile's own
+   look; this only strips the button chrome and marks the selected state. */
+.statbtn{appearance:none;border:1px solid var(--line);font:inherit;text-align:left;
+  cursor:pointer;color:inherit;}
+.statbtn:hover:not(:disabled){border-color:var(--plum-line);}
+.statbtn:disabled{cursor:default;opacity:.55;}
+.statbtn.on{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+
 .loadwarn{margin:0 22px 12px;padding:9px 13px;border:1px solid #f0c9c9;background:#fdf2f2;border-radius:9px;font-size:12px;color:#7a2727;}
 .loadwarn b{font-weight:700;}
 .loadwarn .linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#7a2727;text-decoration:underline;cursor:pointer;}
