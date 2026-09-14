@@ -184,6 +184,48 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     !!name.trim() && !!scope && stages.some((s) => s.trim()) && picked.size > 0 && !busy;
 
   // ── PER-PIPELINE FOLDER EDITING ────────────────────────────────────────
+  /**
+   * 🔴 A STORED FOLDER MAY BE A KEY *OR* A RAW ID — round 113, item J.
+   *
+   * `StoredPipelineEntry.folders` is documented as hybrid (pipelineConfig.ts:47):
+   * a folder created in code has a key like "shared", one created at runtime has
+   * only its GoHighLevel id. The checkbox asked `folders.includes(s.key)` and
+   * `s.key` is "the code key when there is one, the raw id otherwise" — so an
+   * entry written by an API SCRIPT, which knows only ids, ticks nothing at all.
+   *
+   * ⚠️ REPRODUCED, NOT REASONED. scripts/section-grid-proof.mjs renders three
+   * rows — screen-written, script-written, unconfigured — and the middle one
+   * showed `3 section(s)` in its header with ZERO boxes ticked, which is exactly
+   * what Events does live.
+   *
+   * Accepting both spellings is the read fix; `normaliseFolders` below is the
+   * write fix, so an edited entry stops being ambiguous.
+   */
+  const isTicked = (entry: StoredPipelineEntry | undefined, s: Section) =>
+    !!entry && (entry.folders.includes(s.key) || entry.folders.includes(s.id));
+
+  /**
+   * Toggle one section, writing back in the KEY spelling and dropping the id
+   * spelling of the same folder so the entry converges on one form.
+   */
+  const normaliseFolders = (
+    entry: StoredPipelineEntry | undefined,
+    s: Section,
+    sections: Section[],
+  ): string[] => {
+    const on = isTicked(entry, s);
+    const keep = (entry?.folders ?? []).filter((tok) => {
+      // Drop BOTH spellings of the folder being toggled…
+      if (tok === s.key || tok === s.id) return false;
+      return true;
+    });
+    // …and rewrite every other token to its key spelling where one exists, so
+    // the whole entry is migrated by any single edit rather than half of it.
+    const byId = new Map(sections.map((x) => [x.id, x.key]));
+    const migrated = keep.map((tok) => byId.get(tok) ?? tok);
+    return on ? migrated : [...migrated, s.key];
+  };
+
   const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
     if (!data) return;
     const next: StoredPipelineConfig = {
@@ -798,10 +840,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
               </div>
               <div className="pfseclist">
                 {data.sections.map((s) =>
-                  sectionRow(s, !!entry?.folders.includes(s.key), () => {
-                    const cur = new Set(entry?.folders ?? []);
-                    if (cur.has(s.key)) cur.delete(s.key);
-                    else cur.add(s.key);
+                  sectionRow(s, isTicked(entry, s), () => {
                     // 🔴 DO NOT INVENT A SCOPE — round 112, item 9.
                     // This was `entry?.scope ?? "client"`, so ticking a single
                     // section on a pipeline that had NO stored entry silently
@@ -822,7 +861,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
                     }
                     void saveEntry(p.id, {
                       scope: entry.scope,
-                      folders: [...cur],
+                      folders: normaliseFolders(entry, s, data.sections),
                     });
                   }),
                 )}

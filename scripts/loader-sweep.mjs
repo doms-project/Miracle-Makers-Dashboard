@@ -100,6 +100,24 @@ for (const f of files) {
   });
 }
 
+// ── 6 · A SCROLLING FLEX CHILD WITH NO EXPLICIT MINIMUM ───────────────────
+// Three separate symptoms from one rule: `.rfhits` collapsed to 0px, `.rfdbd`
+// cut off its last row, `.movebody` clipped a modal at Owner. A flex item that
+// scrolls needs `min-height:0`, or its automatic minimum keeps it at content
+// size and the parent clips whatever does not fit.
+const cssLines = readFileSync("app/globals.css", "utf8").split("\n");
+cssLines.forEach((l, i) => {
+  if (/^\s*\/\*|^\s*\*/.test(l)) return;
+  if (!/overflow(-y)?\s*:\s*(auto|scroll)/.test(l)) return;
+  // Only a FLEX ITEM is at risk, and only when it does not say its own minimum.
+  if (!/flex\s*:/.test(l)) return;
+  if (/min-height\s*:\s*0/.test(l)) return;
+  flag("A SCROLLING FLEX CHILD WITH NO min-height:0",
+       "app/globals.css", i + 1, l,
+       "its automatic minimum keeps it at content size — add min-height:0 or " +
+       "the parent clips what does not fit (rounds 112-113, three symptoms).");
+});
+
 // ── 5 · A TICKBOX SIZED AS A TEXT INPUT ───────────────────────────────────
 // CSS-side rather than TS-side: any `.irow input` style that sets a width or a
 // minimum will be inherited by checkboxes and radios placed in that row.

@@ -5246,7 +5246,7 @@ export default function Dashboard() {
                   <div className="sub">
                     {cgStats.unassigned === 0
                       ? "every applicant has a recruiter"
-                      : `of ${cgVisible.length} shown · nobody is calling them`}
+                      : `of ${cgFocused.length} shown · nobody is calling them`}
                   </div>
                 </div>
                 <div className="stat blk">
@@ -5444,9 +5444,24 @@ export default function Dashboard() {
                     <option value="pipeline">Pipeline</option>
                   </select>
                 </div>
+                {/* 🔴 THE COUNT MUST NAME WHAT IT COUNTS. It read `cgVisible`
+                    — the set BEFORE the tile filter — so with a recruiter
+                    focused it said 187 beside a list showing 1. Now it reports
+                    the shown set, and says what it is a subset OF whenever a
+                    tile is narrowing it: two numbers that agree, and neither of
+                    them silently the wrong one. */}
                 <span className="count">
-                  {cgVisible.length} applicant
-                  {cgVisible.length === 1 ? "" : "s"}
+                  {cgFocus ? (
+                    <>
+                      {cgFocused.length} shown · {cgVisible.length} applicant
+                      {cgVisible.length === 1 ? "" : "s"} before this filter
+                    </>
+                  ) : (
+                    <>
+                      {cgVisible.length} applicant
+                      {cgVisible.length === 1 ? "" : "s"}
+                    </>
+                  )}
                 </span>
               </div>
               {/* ITEM A3 — STAGE CHIPS. Counted against `cgPreStage` (everything
@@ -5536,8 +5551,13 @@ export default function Dashboard() {
                         : cgSorted.map((r) => renderCgRow(r))}
                     </tbody>
                   </table>
-                  {cgVisible.length === 0 ? (
-                    <div className="empty">No applicants match this filter.</div>
+                  {cgFocused.length === 0 ? (
+                    <div className="empty">
+                      No applicants match this filter.
+                      {/* ⚠️ It guarded on `cgVisible`, so a TILE that matched
+                          nothing left an empty table and no sentence — the rows
+                          were gone and nothing said why. */}
+                    </div>
                   ) : null}
                 </div>
               ) : (
@@ -5560,7 +5580,16 @@ export default function Dashboard() {
                 {cgStages
                   .filter((st) => !cgStage || st === cgStage)
                   .map((st) => {
-                  const inCol = cgVisible.filter((r) => r.stage === st);
+                  // 🔴 cgFocused, NOT cgVisible — round 113, item A.
+                  // `cgFocused` is the set after a stat tile is clicked, and it
+                  // was CORRECT all along: the LIST consumed it and narrowed
+                  // properly. The BOARD stopped one step short of it, so
+                  // clicking "Chris Miracle Makers · 1" lit the tile, wrote the
+                  // banner, offered the escape hatch — and drew all 184 cards.
+                  // A filter that silently does nothing is worse than none: a
+                  // recruiter reads 184 cards under Chris's name and concludes
+                  // Chris has 184 applicants, the exact opposite of the tile.
+                  const inCol = cgFocused.filter((r) => r.stage === st);
                   return (
                     <BoardColumn key={st} stage={st} count={inCol.length}>
                       {inCol.length ? (

@@ -309,6 +309,39 @@ console.log(`  ${JSON.stringify(failed)}`);
 ok("🔴 a failed search is NAMED, not silently 'no matches'",
    /could not|couldn|failed|unavailable/i.test(failed.hint || ""), failed);
 
+// ── 5b · ROUND 113 ITEM H · PROMOTE MUST NOT RE-ASK FOR THE CONTACT ───────
+console.log("\n5b · 🔴 ITEM H — PICKING A CONTACT, THEN WHAT IS ASKED FOR");
+await page.unroute("**/api/referrals?only=contacts*");
+await frame.fill("#rf-find", "Riddle");
+await page.waitForTimeout(2500);
+await frame.click(".rfhits .rfhit");           // choose Riddle Hospital
+await page.waitForTimeout(400);
+const promote = await frame.evaluate(() => {
+  const box = document.querySelector(".addbox");
+  const body = box.querySelector(".movebody");
+  const ids = [...box.querySelectorAll("input[id],select[id],textarea[id]")].map((e) => e.id);
+  const last = box.querySelector(".movebody > *:last-child");
+  const lb = last?.getBoundingClientRect();
+  const bb = body.getBoundingClientRect();
+  body.scrollTop = body.scrollHeight;
+  const after = last?.getBoundingClientRect();
+  return {
+    confirmed: !!box.querySelector(".rfpicked"),
+    fields: ids,
+    scrollable: body.scrollHeight > body.clientHeight + 1,
+    lastReachable: !!after && after.bottom <= bb.bottom + 2,
+  };
+});
+console.log(`  ${JSON.stringify(promote)}`);
+ok("the confirmation is shown", promote.confirmed, promote);
+ok("🔴 first name, last name, email and phone are NOT asked for",
+   !promote.fields.some((f) => /rf-(first|last|email|phone)$/.test(f)), promote.fields);
+ok("🔴 but the PARTNER fields still are",
+   ["rf-cat", "rf-tier", "rf-div"].every((f) => promote.fields.includes(f)),
+   promote.fields);
+ok("🔴 and the modal reaches its end — Notes is not past the fold",
+   promote.lastReachable, promote);
+
 // ── 6 · THE DRAWER — ITEMS 2, 3 AND 4 ─────────────────────────────────────
 console.log("\n6 · 🔴 THE ATTRIBUTED CASES — NAMED, EDITABLE, REACHABLE");
 await frame.click('.addbox .previewhead .x');
