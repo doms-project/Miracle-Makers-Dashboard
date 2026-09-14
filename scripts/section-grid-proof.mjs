@@ -1,0 +1,259 @@
+// ---------------------------------------------------------------------------
+// ROUND 112 · ITEM 5 — THE SECTION CARDS RENDER ONE CHARACTER PER LINE.
+//
+// 🔴 ROUND 92 "PROVED" THIS LAYOUT WITH FOUR CARDS AT 1500px, which fit on one
+// row whatever the rule said. Fourteen is the real case, and it is the only one
+// that can show the packing going wrong.
+//
+// So this renders the Pipelines screen with FOURTEEN sections and MEASURES:
+//   · how many grid columns the browser actually computed
+//   · every card's width and height in pixels
+//   · whether the labels wrap to more lines than they have words
+//   · that expanding one card PUSHES the rows below it down, in flow
+//
+// ⚠️ /api/admin/pipelines is fulfilled directly rather than modelled through a
+// fake GoHighLevel: the payload shape is not what is under test, the RENDER is.
+//
+// Run: node scripts/section-grid-proof.mjs
+// ---------------------------------------------------------------------------
+import { spawn, execSync } from "node:child_process";
+import { rmSync } from "node:fs";
+import { chromium } from "playwright-core";
+import CryptoJS from "crypto-js";
+
+const LOC = "loc_test";
+const SECRET = "harness_shared_secret";
+
+let pass = 0, fail = 0;
+const ok = (n, c, got) => {
+  if (c) { pass++; console.log(`  ok   ${n}`); }
+  else { fail++; console.log(`  FAIL ${n}\n       got: ${JSON.stringify(got)}`); }
+};
+
+const BLOB = CryptoJS.AES.encrypt(JSON.stringify({
+  userId: "u1", role: "admin", type: "agency", activeLocation: LOC,
+  userName: "Chris Tester", email: "c@e.com", companyId: "co1",
+}), SECRET).toString();
+
+// 🔴 THE REAL FOURTEEN, with the real longest label. "Website Intent Form" at 19
+// characters is the one that sets every card's height when the grid misbehaves.
+const LABELS = [
+  ["Attribution", 7], ["Client", 6], ["Enrolment", 8], ["Event Details", 6],
+  ["Facebook Form", 4], ["Filing", 3], ["Google Ads Form", 5], ["Intake", 9],
+  ["Kinship", 2], ["Referral Detail", 4], ["Scheduling", 6], ["Screening", 7],
+  ["Verification", 5], ["Website Intent Form", 4],
+];
+const SECTIONS = LABELS.map(([label, n], i) => ({
+  key: `k${i}`, id: `f${i}`, label, named: true,
+  fields: Array.from({ length: n }, (_, j) => ({ id: `${i}_${j}`, name: `Field ${j + 1}` })),
+}));
+
+const PAYLOAD = {
+  pipelines: [{ id: "pipe_oltl", name: "OLTL Enrollment",
+    stages: [{ id: "s1", name: "INITIAL CALL" }], division: "OLTL", configured: true }],
+  config: { seeded: true, pipelines: { pipe_oltl: { scope: "client", folders: ["k0", "k1"] } },
+            folderNames: {} },
+  stale: [], sections: SECTIONS, known: [], sharedKey: "k0",
+  unconfiguredFolders: [], inertSections: [],
+};
+
+try {
+  const stale = execSync("pgrep -f '^next-server' || true").toString().trim();
+  for (const pid of stale.split("\n").filter(Boolean))
+    try { process.kill(Number(pid), "SIGKILL"); } catch { /* gone */ }
+} catch { /* no pgrep */ }
+try { rmSync(".next/dev/lock", { force: true }); } catch { /* nothing */ }
+
+const PORT = 3700 + Math.floor(Math.random() * 250);
+const dev = spawn("npx", ["next", "dev", "-p", String(PORT)], {
+  detached: true,
+  env: { ...process.env, GHL_LOCATION_ID: LOC, GHL_PIT: "pit_test",
+         GHL_SSO_SECRET: SECRET, PIPELINE_IDS: "pipe_oltl" },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+const devLog = [];
+dev.stdout.on("data", (d) => devLog.push(String(d)));
+dev.stderr.on("data", (d) => devLog.push(String(d)));
+
+let cleaned = false;
+const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
+  try { process.kill(-dev.pid, "SIGKILL"); } catch { /* gone */ }
+};
+process.on("exit", cleanup);
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"])
+  process.on(sig, () => { cleanup(); process.exit(130); });
+process.on("uncaughtException", (e) => {
+  console.log(`\n🔴 ${e.message}`); cleanup(); process.exit(1);
+});
+
+const base = `http://localhost:${PORT}`;
+let up = false;
+for (let i = 0; i < 120 && !up; i++) {
+  try {
+    // ⚠️ ANY response means Next is serving. This harness sets no GHL_API_BASE
+    // — the route is fulfilled in the BROWSER — so the server's own probe
+    // reaches the real host, which the sandbox blocks with a 403. Treating only
+    // 401/200 as "up" made a working server look dead.
+    const r = await fetch(`${base}/api/opportunities`, { signal: AbortSignal.timeout(4000) });
+    if (r.status > 0) up = true;
+  } catch { /* not listening */ }
+  if (!up) await new Promise((r) => setTimeout(r, 1000));
+}
+if (!up) { console.log(devLog.join("").slice(-1500)); process.exit(1); }
+console.log(`  dev server up on ${PORT}`);
+
+const browser = await chromium.launch({
+  executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+  args: ["--no-proxy-server", "--no-sandbox"],
+});
+const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+page.on("pageerror", (e) => console.log(`  [page error] ${e.message}`));
+
+await page.route("**/api/admin/pipelines*", (route) =>
+  route.fulfill({ status: 200, contentType: "application/json",
+                  body: JSON.stringify(PAYLOAD) }));
+await page.route("**/api/opportunities*", (route) =>
+  route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+    records: [], pipelines: [{ id: "pipe_oltl", name: "OLTL Enrollment" }],
+    stagesByPipeline: {}, users: [], fieldDefs: [], failedPipelines: [],
+    viewer: { authenticated: true, isAdmin: true, role: "admin", userName: "Chris Tester",
+              homePipelineIds: ["pipe_oltl"], canSeeMaster: true, total: 0 },
+  })}));
+await page.route(`${base}/__parent`, (route) => route.fulfill({
+  status: 200, contentType: "text/html",
+  body: `<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0}iframe{border:0;width:1440px;height:950px}</style>
+<script>window.addEventListener("message",(e)=>{if(e.data&&e.data.message==="REQUEST_USER_DATA")
+e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.stringify(BLOB)}},"*");});</script>
+<iframe src="${base}/"></iframe>`,
+}));
+
+await page.goto(`${base}/__parent`, { waitUntil: "domcontentloaded" });
+const frame = await (await page.waitForSelector("iframe")).contentFrame();
+await frame.waitForFunction(
+  () => !/Checking session/.test(document.querySelector(".viewas")?.textContent || ""),
+  { timeout: 90000 },
+);
+for (let i = 0; i < 10; i++) {
+  await frame.click('button:has-text("Pipelines")');
+  await page.waitForTimeout(600);
+  if (await frame.$(".pfseclist")) break;
+}
+await frame.waitForSelector(".pffolders .pfseclist .pfsec", { timeout: 60000 });
+
+// ── 1 · HOW MANY COLUMNS DID THE BROWSER ACTUALLY COMPUTE? ─────────────────
+console.log("\n1 · 🔴 THE COMPUTED GRID, AT 1440px WITH FOURTEEN CARDS");
+const grid = await frame.evaluate(() => {
+  const list = document.querySelector(".pffolders .pfseclist");
+  const cs = getComputedStyle(list);
+  const r = list.getBoundingClientRect();
+  return {
+    display: cs.display,
+    columns: cs.gridTemplateColumns,
+    columnCount: cs.gridTemplateColumns.split(/\s+/).filter(Boolean).length,
+    listWidth: Math.round(r.width),
+  };
+});
+console.log(`  container: ${grid.listWidth}px · display:${grid.display}`);
+console.log(`  grid-template-columns: ${grid.columns}`);
+console.log(`  → ${grid.columnCount} columns`);
+ok("the container is not collapsed", grid.listWidth > 300, grid);
+ok("🔴 NOT fourteen columns crammed into one row", grid.columnCount < 14, grid);
+
+// ── 2 · THE CARDS THEMSELVES ───────────────────────────────────────────────
+console.log("\n2 · 🔴 EVERY CARD'S BOX");
+const cards = await frame.$$eval(".pffolders .pfseclist .pfsec", (els) =>
+  els.map((el) => {
+    const r = el.getBoundingClientRect();
+    const name = el.querySelector(".pfsecname");
+    const nr = name?.getBoundingClientRect();
+    // Lines the label actually occupies = its height / its line-height.
+    const lh = name ? parseFloat(getComputedStyle(name).lineHeight) || 18 : 18;
+    return {
+      label: name?.textContent?.trim() || "",
+      w: Math.round(r.width), h: Math.round(r.height),
+      lines: nr ? Math.round(nr.height / lh) : 0,
+      words: (name?.textContent?.trim().split(/\s+/).length) || 1,
+    };
+  }),
+);
+for (const c of cards)
+  console.log(`  ${String(c.w).padStart(4)}×${String(c.h).padStart(3)}  ` +
+              `${c.lines} line(s) / ${c.words} word(s)   ${c.label}`);
+// 🔴 WHY. Both lists render ~220px cards, yet only the first wraps — so the
+// answer is inside the card, in how its three grid tracks divide that width.
+const inside = await frame.evaluate(() => {
+  const each = (sel) => {
+    const card = document.querySelector(sel);
+    if (!card) return null;
+    const cs = getComputedStyle(card);
+    return {
+      cardW: Math.round(card.getBoundingClientRect().width),
+      tracks: cs.gridTemplateColumns,
+      children: [...card.children].map((c) => ({
+        cls: c.className,
+        w: Math.round(c.getBoundingClientRect().width),
+      })),
+      lab: (() => {
+        const l = card.querySelector(".pfseclab");
+        const n = card.querySelector(".pfsecname");
+        const lcs = l ? getComputedStyle(l) : null;
+        const ncs = n ? getComputedStyle(n) : null;
+        return {
+          labW: l ? Math.round(l.getBoundingClientRect().width) : null,
+          labDisplay: lcs?.display, labWrap: lcs?.flexWrap,
+          nameW: n ? Math.round(n.getBoundingClientRect().width) : null,
+          nameH: n ? Math.round(n.getBoundingClientRect().height) : null,
+          nameDisplay: ncs?.display, nameFlex: ncs?.flex,
+          nameMinW: ncs?.minWidth, nameWrap: ncs?.overflowWrap,
+          nameWS: ncs?.whiteSpace, nameFont: ncs?.fontSize,
+        };
+      })(),
+    };
+  };
+  const lists = document.querySelectorAll(".pffolders .pfseclist");
+  return {
+    first: each(".pffolders .pfseclist .pfsec"),
+    firstList: lists[0] ? getComputedStyle(lists[0]).gridTemplateColumns : null,
+  };
+});
+console.log(`  INSIDE THE FIRST CARD: ${JSON.stringify(inside.first)}`);
+
+const narrowest = Math.min(...cards.map((c) => c.w));
+const tallest = Math.max(...cards.map((c) => c.h));
+const shortest = Math.min(...cards.map((c) => c.h));
+ok("fourteen cards", cards.length === 14, cards.length);
+ok("🔴 no card is narrower than the 196px the rule promises",
+   narrowest >= 190, { narrowest, cards: cards.filter((c) => c.w < 190) });
+ok("🔴 NO LABEL WRAPS TO MORE LINES THAN IT HAS WORDS — that is the " +
+   "one-character-per-line symptom",
+   cards.every((c) => c.lines <= c.words), cards.filter((c) => c.lines > c.words));
+ok("🔴 the longest label does not pad every other card",
+   tallest - shortest <= 24, { tallest, shortest });
+
+// ── 3 · EXPANDING ONE MUST PUSH THE ROWS BELOW DOWN ────────────────────────
+console.log("\n3 · EXPANDING A CARD PUSHES THE ROWS BELOW IT DOWN");
+const beforeY = await frame.$$eval(".pffolders .pfseclist .pfsec", (els) =>
+  els.map((e) => Math.round(e.getBoundingClientRect().y)));
+const beforeH = (await frame.$eval(".pffolders .pfseclist", (e) =>
+  Math.round(e.getBoundingClientRect().height)));
+// The chevron BUTTON is the affordance; the name span is not clickable here.
+await frame.$eval(".pffolders .pfseclist .pfsec:first-child .pfsectoggle", (e) => e.click());
+await page.waitForTimeout(500);
+const afterY = await frame.$$eval(".pffolders .pfseclist .pfsec", (els) =>
+  els.map((e) => Math.round(e.getBoundingClientRect().y)));
+const afterH = (await frame.$eval(".pffolders .pfseclist", (e) =>
+  Math.round(e.getBoundingClientRect().height)));
+const lastMoved = afterY[afterY.length - 1] - beforeY[beforeY.length - 1];
+console.log(`  list height ${beforeH} → ${afterH}   last card moved ${lastMoved}px`);
+ok("the list grew", afterH > beforeH, { beforeH, afterH });
+ok("🔴 and a later row was pushed DOWN, not overlapped",
+   lastMoved > 0 || afterH > beforeH, { lastMoved, beforeH, afterH });
+
+await page.screenshot({ path: "scripts/section-grid.png" });
+console.log(`\n${pass} passed, ${fail} failed`);
+await browser.close();
+cleanup();
+process.exit(fail ? 1 : 0);

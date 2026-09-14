@@ -177,7 +177,12 @@ export default function PipelineAccessTab({
     (u) => !isAdmin(u) && !(grants[u.id]?.length),
   ).length;
 
-  if (loading)
+  // ⚠️ ONLY WITH NOTHING TO SHOW. Round 111 split every error wall but left the
+  // SPINNERS alone here, so pressing Save (which reloads) replaced the whole
+  // grant grid with "Loading pipeline access…" — the same wall-instead-of-strip
+  // mistake in the loading state. Found by scripts/loader-sweep.mjs, which is
+  // the entire reason that script is committed rather than remembered.
+  if (loading && !users.length)
     return (
       <div className="statewrap">
         <div className="statecard">

@@ -524,7 +524,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
             stops an applicant reaching a client caller. */}
         <div className="ihint">
           Caregiver pipelines never appear on the client board, the client kanban or the
-          master view. This cannot be changed afterwards from here.
+          master view. It can be changed later under Configured pipelines below.
         </div>
       </div>
 
@@ -751,14 +751,77 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
                   {entry ? `${entry.folders.length} section(s)` : "Shared only"}
                 </span>
               </summary>
+              {/* 🔴 SCOPE IS EDITABLE AFTER ALL — round 112, item 9.
+                  The create form says "This cannot be changed afterwards from
+                  here", and that was true of the SCREEN, not of the data: the
+                  `save-config` action writes the whole stored entry, scope
+                  included, and this editor was already re-sending it on every
+                  folder tick. So the only thing missing was a control.
+                  ⚠️ IT MOVES A WHOLE PIPELINE between the client and applicant
+                  sections, which is why it asks first and says so. Nothing is
+                  written to GoHighLevel's pipeline itself — this is the stored
+                  MM Pipeline Folders value, and it is reversible here. */}
+              <div className="pfscopeedit">
+                <label htmlFor={`pfscope-${p.id}`}>Scope</label>
+                <select
+                  id={`pfscope-${p.id}`}
+                  value={entry?.scope ?? ""}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const next = e.target.value as "client" | "caregiver" | "";
+                    if (!next) return;
+                    if (entry && next !== entry.scope &&
+                        !window.confirm(
+                          `Move "${p.name}" to the ${next === "caregiver"
+                            ? "Caregivers" : "Clients"} section?\n\n` +
+                          `Its records leave the ${entry.scope === "caregiver"
+                            ? "Caregivers" : "Clients"} board and appear there ` +
+                          `instead. Nothing in GoHighLevel changes, and you can ` +
+                          `move it back.`,
+                        )) {
+                      e.target.value = entry.scope;
+                      return;
+                    }
+                    void saveEntry(p.id, {
+                      scope: next,
+                      folders: entry?.folders ?? [],
+                    });
+                  }}
+                >
+                  <option value="">Choose a scope…</option>
+                  <option value="client">Client</option>
+                  <option value="caregiver">Caregiver</option>
+                </select>
+                <span className="ihint">
+                  Decides which section its records appear in. Reversible.
+                </span>
+              </div>
               <div className="pfseclist">
                 {data.sections.map((s) =>
                   sectionRow(s, !!entry?.folders.includes(s.key), () => {
                     const cur = new Set(entry?.folders ?? []);
                     if (cur.has(s.key)) cur.delete(s.key);
                     else cur.add(s.key);
+                    // 🔴 DO NOT INVENT A SCOPE — round 112, item 9.
+                    // This was `entry?.scope ?? "client"`, so ticking a single
+                    // section on a pipeline that had NO stored entry silently
+                    // stamped it `client`. That is almost certainly how "Events"
+                    // became client-scoped: it was created by an API script
+                    // rather than through this screen, so it had no entry, and
+                    // the first folder tick chose for everybody. A scope is a
+                    // decision; it is now asked for rather than assumed.
+                    if (!entry) {
+                      setSaveErr(
+                        new Error(
+                          `"${p.name}" has no scope yet. Choose Client or Caregiver ` +
+                            `above before ticking sections — picking one for you is ` +
+                            `how a pipeline ends up in the wrong section.`,
+                        ),
+                      );
+                      return;
+                    }
                     void saveEntry(p.id, {
-                      scope: entry?.scope ?? "client",
+                      scope: entry.scope,
                       folders: [...cur],
                     });
                   }),

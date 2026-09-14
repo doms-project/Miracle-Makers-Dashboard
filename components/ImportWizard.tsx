@@ -674,7 +674,9 @@ export default function ImportWizard({
     return true;
   };
 
-  if (metaErr)
+  // Same rule: a failed RE-read of the import metadata must not delete a wizard
+  // the user is halfway through. Only a first load with nothing to show.
+  if (metaErr && !meta)
     return (
       <div className="statewrap">
         <div className="statecard">

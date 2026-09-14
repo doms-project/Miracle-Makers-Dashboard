@@ -51,6 +51,27 @@ export const maxDuration = 60;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 TRIM FIRST, THEN TEST. The optional contact fields were written as
+//
+//     ...(body.email ? { email: body.email.trim() } : {})
+//
+// which TESTS THE RAW VALUE AND SENDS THE TRIMMED ONE. A field holding only
+// spaces is truthy, trims to "", and GoHighLevel answers
+//
+//     422 POST /contacts/upsert — email must be an email
+//
+// 🔴 AND THE ORGANISATION CASE MADE THAT THE DEFAULT PATH. "Add partner → New
+// organisation" has no reason to carry an email, the comment at the promote
+// branch says so out loud ("an organisation with neither"), and a form field
+// that has been focused and left is not necessarily empty — one stray space is
+// enough. So the most ordinary way to use the feature was the failing one.
+//
+// `clean` is the whole fix: whitespace-only is ABSENT, not empty. Every optional
+// string sent to GoHighLevel goes through it.
+// ═══════════════════════════════════════════════════════════════════════════
+const clean = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
 /** Whole days since an ISO timestamp. NULL when there is no usable date. */
 const daysSince = (iso: string): number | null => {
   const t = Date.parse(iso || "");
@@ -422,6 +443,9 @@ export async function GET(request: Request) {
       const referrals: RawReferral[] = records
         .map((r) => ({
           id: r.id,
+          // Same fallback chain the events list uses one block down, so an
+          // opportunity with no name still identifies its contact.
+          name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled case",
           partnerId: String(r.cf?.[refField] ?? "").trim(),
           status: r.status,
           value: r.monetaryValue || 0,
@@ -680,12 +704,14 @@ export async function POST(request: Request) {
           );
 
         // WRITE 1 — the client's contact.
+        const cPhone = clean(body.phone);
+        const cEmail = clean(body.email);
         const contact = await upsertContact({
-          firstName: (body.firstName || "").trim(),
-          lastName: (body.lastName || "").trim(),
+          firstName: clean(body.firstName),
+          lastName: clean(body.lastName),
           name: who,
-          ...(body.phone ? { phone: body.phone.trim() } : {}),
-          ...(body.email ? { email: body.email.trim() } : {}),
+          ...(cPhone ? { phone: cPhone } : {}),
+          ...(cEmail ? { email: cEmail } : {}),
         });
         if (!contact.id)
           return NextResponse.json(
@@ -936,12 +962,13 @@ export async function POST(request: Request) {
           cf.push({ id: evDef.id, value: (body.eventId || "").trim() });
         else if (!evDef) missing.push("the field linking an attendee to an event");
 
+        const aEmail = clean(body.email);
         const c = await upsertContact({
           firstName,
-          lastName: (body.lastName || "").trim(),
-          name: `${firstName} ${(body.lastName || "").trim()}`.trim() || phone,
+          lastName: clean(body.lastName),
+          name: `${firstName} ${clean(body.lastName)}`.trim() || phone,
           ...(phone ? { phone } : {}),
-          ...(body.email ? { email: body.email.trim() } : {}),
+          ...(aEmail ? { email: aEmail } : {}),
           ...(cf.length ? { customFields: cf } : {}),
         });
         if (!c.id)
@@ -1011,7 +1038,8 @@ export async function POST(request: Request) {
         const existingId = (body.contactId || "").trim();
         if (existingId) {
           if (cf.length) await updateContactCustomFields(existingId, cf);
-          if (body.owner) await setContactOwner(existingId, body.owner.trim());
+          const promoteOwner = clean(body.owner);
+          if (promoteOwner) await setContactOwner(existingId, promoteOwner);
           return NextResponse.json({
             ok: true,
             contactId: existingId,
@@ -1021,15 +1049,18 @@ export async function POST(request: Request) {
         }
 
         // 🔴 A CONTACT AND NOTHING ELSE. A partner is not a case.
+        const pEmail = clean(body.email);
+        const pPhone = clean(body.phone);
+        const pOwner = clean(body.owner);
         const c = await upsertContact({
-          firstName: (body.firstName || "").trim(),
-          lastName: (body.lastName || "").trim(),
+          firstName: clean(body.firstName),
+          lastName: clean(body.lastName),
           name: org,
-          ...(body.email ? { email: body.email.trim() } : {}),
-          ...(body.phone ? { phone: body.phone.trim() } : {}),
+          ...(pEmail ? { email: pEmail } : {}),
+          ...(pPhone ? { phone: pPhone } : {}),
           // 🔴 THE OWNER IS THE POINT OF THE FIELD, per the brief: "who holds
           // this relationship. Drives who sees it and whose queue it lands in."
-          ...(body.owner ? { assignedTo: body.owner.trim() } : {}),
+          ...(pOwner ? { assignedTo: pOwner } : {}),
           ...(cf.length ? { customFields: cf } : {}),
         });
         if (!c.id)

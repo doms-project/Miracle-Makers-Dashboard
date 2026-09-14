@@ -44,6 +44,8 @@ export default function ReferredBy({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const box = useRef<HTMLDivElement | null>(null);
+  /** Which load() is current — see the sequence guard inside it. */
+  const loadSeq = useRef(0);
 
   const current = String(rec.cf?.[fieldId] ?? "").trim();
   const match = partners?.find((p) => p.id === current);
@@ -56,18 +58,34 @@ export default function ReferredBy({
    */
   const load = useCallback(async () => {
     if (partners) return;
+    // 🔴 SEQUENCED — round 111 verification sweep. `if (partners) return` looks
+    // like a once-only guard, and it is NOT one while the first load is still in
+    // flight: `ssoBlob` going null → blob rebuilds this callback and re-fires the
+    // effect with `partners` still null. Two requests, the first without a
+    // credential, and the loser used to win — so a 401 could blank a list that
+    // had just loaded and print "Couldn't load partners — Sign-in required"
+    // under a search box. The reported bug, in a dropdown.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
     try {
       const j = await apiFetch<{ partners: Partner[] }>(
         "/api/referrals?only=partners",
         { ssoBlob },
       );
+      if (!isCurrent()) return;
+      setLoadErr("");
       setPartners(j.partners || []);
     } catch (e) {
+      if (!isCurrent()) return;
       // 🔴 NAMED, NOT SWALLOWED. Without this the row would read "—" for a
       // record that genuinely has a partner set, which is the same lie as
       // finding 16.
       setLoadErr(e instanceof Error ? e.message : String(e));
-      setPartners([]);
+      // ⚠️ Resolve the loading sentinel WITHOUT discarding a list that already
+      // loaded. `null` means "not asked yet" and the picker would otherwise say
+      // "Loading partners…" for ever; a plain `setPartners([])` would throw away
+      // names that are still perfectly good.
+      setPartners((p) => p ?? []);
     }
   }, [partners, ssoBlob]);
 
@@ -155,9 +173,14 @@ export default function ReferredBy({
             placeholder="Search referral partners…"
           />
           <div className="refbylist">
+            {/* A failed RELOAD sits above the names it failed to replace. Only
+                a failure with nothing loaded takes the whole list's place. */}
+            {loadErr && partners?.length ? (
+              <div className="refbyempty">Couldn&apos;t refresh — {loadErr}</div>
+            ) : null}
             {partners === null ? (
               <div className="refbyempty">Loading partners…</div>
-            ) : loadErr ? (
+            ) : loadErr && !partners.length ? (
               <div className="refbyempty">Couldn&apos;t load partners — {loadErr}</div>
             ) : !hits.length ? (
               <div className="refbyempty">

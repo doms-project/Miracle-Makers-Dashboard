@@ -3598,8 +3598,14 @@ export default function Dashboard() {
     [selected, fieldDefs, pipelineFolders, folderNames],
   );
 
+  // 🔴 ON THE BLOB. Gated on `status === "ready"`, this sent NO CREDENTIAL in the
+  // window between the blob arriving and the decrypt landing — and the note
+  // DELETE below has no body, so the header is its only credential. Deleting
+  // your own note in that window answered "Sign-in required." Found in the
+  // round-111 verification sweep, after the round-111 fix: the same defect as
+  // load(), in the last place still spelling it the old way.
   const ssoHeader = (): Record<string, string> =>
-    sso.status === "ready" ? { "x-ghl-sso-key": sso.blob } : {};
+    sso.blob ? { "x-ghl-sso-key": sso.blob } : {};
 
   const addNote = async () => {
     const v = noteDraft.trim();
