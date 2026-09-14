@@ -322,6 +322,23 @@ export interface EnrichedPartner extends RawPartner {
   shown: number;
   won: number;
   revenue: number;
+  /**
+   * 🔴 APPLICANTS THIS PARTNER SENT — round 122, item 2. A SEPARATE COUNT,
+   * never folded into `refs` or `revenue`.
+   *
+   * ⚠️ A NURSING SCHOOL SENDS PEOPLE WHO WANT JOBS, not people who want care.
+   * Both are referrals in the ordinary sense of the word and neither is the
+   * other: $5,500/mo and 3 hires do not add, and a source that sends only
+   * applicants must not read as a partner who produces no revenue.
+   *
+   * 🔴 THE ONLY THING THAT MAKES THIS SAFE IS THAT `revenue` NEVER SEES THEM.
+   * Rounds 118 and 120 deferred this twice for exactly that risk — a second sum
+   * threaded through the same reducers. The fix is not care: it is that
+   * applicants arrive in their OWN list and no arithmetic reads both.
+   */
+  applicants: number;
+  /** Of those, the ones hired — status "won" on an applicant pipeline. */
+  hired: number;
   winRate: number;
   lastRefAgo: number | null;
 }
@@ -330,8 +347,20 @@ export interface EnrichedPartner extends RawPartner {
 export function enrichPartner(
   p: RawPartner,
   referrals: RawReferral[],
+  /**
+   * 🔴 A SECOND LIST, NOT A WIDER FIRST ONE — round 122, item 2.
+   *
+   * ⚠️ PASSING APPLICANTS IN `referrals` WOULD PUT THEM IN `revenue`, silently,
+   * through the reducer four lines down. A separate parameter is what makes
+   * that impossible rather than merely unintended. Defaults to empty so every
+   * existing caller is unchanged.
+   */
+  applicantRefs: RawReferral[] = [],
 ): EnrichedPartner {
   const mine = referrals.filter((o) => o.partnerId === p.id);
+  // ⚠️ NEVER MERGED INTO `mine`. Every figure below — refs, refs90, won,
+  // revenue, winRate — reads `mine`, and this list is deliberately not in it.
+  const mineCg = applicantRefs.filter((o) => o.partnerId === p.id);
   const won = mine.filter((o) => o.status === "won");
   const dated = mine.filter((o): o is RawReferral & { ago: number } => o.ago != null);
   const recent = dated.filter((o) => o.ago <= 90);
@@ -355,6 +384,10 @@ export function enrichPartner(
     shown: mine.filter((o) => o.visible).length,
     won: won.length,
     revenue: won.reduce((a, o) => a + o.value, 0),
+    applicants: mineCg.length,
+    // ⚠️ `.value` IS NOT READ HERE, ON PURPOSE. An applicant opportunity may
+    // carry a monetaryValue and it does not mean revenue.
+    hired: mineCg.filter((o) => o.status === "won").length,
     winRate: mine.length ? Math.round((won.length / mine.length) * 100) : 0,
     lastRefAgo: lastRef,
   };
@@ -440,6 +473,10 @@ export function partnerKpis(list: EnrichedPartner[]) {
     refs90: list.reduce((a, p) => a + p.refs90, 0),
     won: list.reduce((a, p) => a + p.won, 0),
     revenue: list.reduce((a, p) => a + p.revenue, 0),
+    // 🔴 SEPARATE TOTALS, SEPARATE TILES. Summed here only so the header can
+    // show them beside revenue — never added to it.
+    applicants: list.reduce((a, p) => a + p.applicants, 0),
+    hired: list.reduce((a, p) => a + p.hired, 0),
     /** Referrals with no creation date, so absent from every 90-day figure. */
     undatedRefs: list.reduce((a, p) => a + p.undated, 0),
     overdue: known.filter((p) => p.isOverdue).length,

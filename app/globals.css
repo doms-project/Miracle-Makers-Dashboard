@@ -1903,3 +1903,11 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 
 /* ROUND 121b · ITEM 3 — "the pipelines are empty", said once, above the board. */
 .cgempty{margin:6px 0 0;font-size:11.5px;color:var(--ink-3);}
+
+/* ANALYSIS 104 · 19 — a focus ring on the controls that just became reachable.
+   ⚠️ A CONTROL THAT CAN BE FOCUSED AND DOES NOT SAY SO is only half-reachable:
+   a keyboard user can operate it and cannot see where they are. */
+.rftable th[tabindex]:focus-visible,
+.rftable tr[role="button"]:focus-visible,
+.rfdrawer:focus-visible{outline:2px solid var(--plum);outline-offset:-2px;}
+.rftable th[tabindex]{cursor:pointer;}

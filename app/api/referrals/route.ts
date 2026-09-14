@@ -134,7 +134,10 @@ interface Body {
     | "log-touch"
     | "log-referral"
     | "add-attendee"
-    | "add-event";
+    | "add-event"
+    /** ITEM 15 — READS, by POST, so a contact id stays out of the URL. */
+    | "contact-opps"
+    | "partner-notes";
   contactId?: string;
   firstName?: string;
   lastName?: string;
@@ -192,6 +195,77 @@ async function eventsPipeline() {
     getSelectedPipelines("none"),
   ]);
   return [...client, ...unlisted].find((p) => /^events?$/i.test(p.name.trim()));
+}
+
+/**
+ * 🔴 ITEM 15 — ONE IMPLEMENTATION, REACHED BY POST.
+ *
+ * The cases held by one contact, filtered by what this viewer may see. Lifted
+ * out of the GET handler so there is exactly one copy: two copies of an access
+ * filter is how one of them ends up missing it.
+ *
+ * ⚠️ THE ACCESS FILTER IS THE LOAD-BEARING PART. A contact id arrives from the
+ * browser, and without `applyAccess` anyone could list opportunities they may
+ * not see by typing a name into a picker.
+ */
+async function contactOpps(
+  cid: string,
+  session: { userId?: string; role?: string; type?: string } | null,
+  isAdmin: boolean,
+): Promise<NextResponse> {
+  // ⚠️ `.records` — getOltlOpportunities returns the whole payload shape
+  // (records plus pipelines, stages, users, defs), not a bare array.
+  const { records: all } = await getOltlOpportunities();
+  const refId =
+    (await getEditableFieldDefs("opportunity")).find(
+      (d) => norm(d.name) === norm("Referring Partner"),
+    )?.id || REFERRING_PARTNER_FIELD;
+  const mine = applyAccess(all, { userId: session?.userId || "", isAdmin });
+  return NextResponse.json(
+    {
+      referringPartnerField: refId,
+      opportunities: mine
+        .filter((r) => r.contactId === cid)
+        .map((r) => ({
+          id: r.id,
+          name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled case",
+          pipelineName: r.pipelineName,
+          stage: r.stage,
+          status: r.status,
+          /** Already attributed? The picker says so rather than silently overwriting. */
+          partnerId: String(r.cf?.[refId] ?? "").trim(),
+        })),
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+/**
+ * One partner's touch history. ITEM 15 — reached by POST so the contact id
+ * stays out of the URL; the partner check is unchanged.
+ */
+async function partnerNotes(id: string, F: { recordType: string }): Promise<NextResponse> {
+  const read = await getContactCustomFields(id);
+  const rt = read.values[F.recordType];
+  const rtStr = Array.isArray(rt) ? rt.map(String).join(", ") : String(rt ?? "");
+  // ⚠️ A PARTNER CHECK, NOT AN ACCESS ONE, and it stays. Notes are read here
+  // only for partners; a contact id from the browser must not become a way to
+  // read anyone's notes.
+  if (norm(rtStr) !== norm(PARTNER_RECORD_TYPE))
+    return NextResponse.json(
+      {
+        error: "That contact is not a referral partner.",
+        detail: `Its ${PARTNER_FIELDS.recordType.name} is "${rtStr || "(not set)"}". Notes are only read here for partners.`,
+        status: 403,
+        refusal: true,
+      } as ApiError,
+      { status: 403 },
+    );
+  const notes = (await listContactNotes(id)).map((n) => {
+    const { type, text } = parseTouch(n.txt);
+    return { ...n, type, txt: text };
+  });
+  return NextResponse.json({ notes }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function GET(request: Request) {
@@ -321,41 +395,10 @@ export async function GET(request: Request) {
       // work and filters by contactId. A per-contact opportunity search would
       // be a request per keystroke-chosen contact against a 100-per-10s budget,
       // to learn something already in memory.
-      if (only === "contact-opps") {
-        const cid = (url.searchParams.get("contactId") || "").trim();
-        if (!cid) return NextResponse.json({ opportunities: [] });
-        // ⚠️ `.records` — getOltlOpportunities returns the whole payload shape
-        // (records plus pipelines, stages, users, defs), not a bare array.
-        const { records: all } = await getOltlOpportunities();
-        const refId = (
-          await getEditableFieldDefs("opportunity")
-        ).find((d) => norm(d.name) === norm("Referring Partner"))?.id
-          || REFERRING_PARTNER_FIELD;
-        // ⚠️ THE ACCESS FILTER STILL APPLIES. A contact id arrives from the
-        // browser, and without this anyone could list opportunities they may
-        // not see by typing a name into a picker.
-        const mine = applyAccess(all, {
-          userId: session?.userId || "",
-          isAdmin: isAdminSession(session?.role, session?.type),
-        });
-        return NextResponse.json(
-          {
-            referringPartnerField: refId,
-            opportunities: mine
-              .filter((r) => r.contactId === cid)
-              .map((r) => ({
-                id: r.id,
-                name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled case",
-                pipelineName: r.pipelineName,
-                stage: r.stage,
-                status: r.status,
-                /** Already attributed? The picker says so rather than silently overwriting. */
-                partnerId: String(r.cf?.[refId] ?? "").trim(),
-              })),
-          },
-          { headers: { "Cache-Control": "no-store" } },
-        );
-      }
+      // 🔴 ITEM 15 — THE GET FORM IS GONE. Its body lives in `contactOpps()`
+      // below and is reached by POST, so the contact id never enters a URL.
+      // Removed rather than deprecated: leaving it would mean an id can still
+      // reach a log by whichever caller forgot to change.
 
       // ── just the partners, for the "Referred by" picker on a client record ─
       // ⚠️ ONE search call and nothing else: no notes, no opportunity sweep.
@@ -384,34 +427,11 @@ export async function GET(request: Request) {
       // the search would make the drawer fail wherever the search filter fails;
       // reading the contact's own Record Type is the same one request and is a
       // call this app already makes in production.
-      if (only === "notes") {
-        const id = (url.searchParams.get("contactId") || "").trim();
-        if (!id)
-          return NextResponse.json(
-            { error: "No partner asked for.", status: 400 } as ApiError,
-            { status: 400 },
-          );
-        const read = await getContactCustomFields(id);
-        const rt = read.values[F.recordType];
-        const rtStr = Array.isArray(rt) ? rt.map(String).join(", ") : String(rt ?? "");
-        if (norm(rtStr) !== norm(PARTNER_RECORD_TYPE))
-          return NextResponse.json(
-            {
-              error: "That contact is not a referral partner.",
-              detail: `Its ${PARTNER_FIELDS.recordType.name} is "${rtStr || "(not set)"}". Notes are only read here for partners.`,
-              status: 403,
-            } as ApiError,
-            { status: 403 },
-          );
-        const notes = (await listContactNotes(id)).map((n) => {
-          const { type, text } = parseTouch(n.txt);
-          return { ...n, type, txt: text };
-        });
-        return NextResponse.json(
-          { notes },
-          { headers: { "Cache-Control": "no-store" } },
-        );
-      }
+      // 🔴 ITEM 15 — THE GET FORM IS GONE HERE TOO. Its body is
+      // `partnerNotes()` above, reached by POST, so a partner's contact id
+      // never enters a URL. This one was missed on the first pass and the proof
+      // found it: an id-in-a-URL check has to read what is SENT, not what was
+      // intended to be fixed.
 
       // ── partners, by Record Type ───────────────────────────────────────────
       const partnerRes = await ghlSearchContacts(F.recordType, PARTNER_RECORD_TYPE);
@@ -513,6 +533,49 @@ export async function GET(request: Request) {
         }))
         .filter((o) => o.partnerId);
 
+      // ══ ROUND 122 · ITEM 2 — APPLICANTS, IN THEIR OWN LIST ════════════════
+      //
+      // 🔴 A SECOND FETCH, NOT A WIDER ONE. `getOltlOpportunities("client")`
+      // above feeds every revenue figure; adding applicant pipelines to it
+      // would put job applicants into `revenue` through a reducer nobody would
+      // think to check. The two lists never meet — see enrichPartner, which
+      // takes them as separate parameters for exactly this reason.
+      //
+      // ⚠️ WHAT IT COSTS: one more paginated read of the applicant pipelines
+      // (~187 records today) per Referrals load. Measured against the
+      // 100-per-10s budget that is a handful of searches, and it rides the same
+      // memoized pipeline list — but it is a real cost and it is why this was
+      // deferred twice rather than bolted on.
+      //
+      // ⚠️ AND IT NEVER FAILS THE PAGE. A partner who sends applicants is a
+      // nice-to-know; a Referrals screen that will not load because the
+      // applicant payload wobbled is not a trade worth making.
+      let applicantRefs: RawReferral[] = [];
+      try {
+        const { records: cgRecords } = await getOltlOpportunities("caregiver");
+        const cgVisible = new Set(
+          applyAccess(cgRecords, { userId: session?.userId || "", isAdmin }).map((r) => r.id),
+        );
+        applicantRefs = cgRecords
+          .map((r) => ({
+            id: r.id,
+            name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled applicant",
+            partnerId: String(r.cf?.[refField] ?? "").trim(),
+            status: r.status,
+            // ⚠️ ZERO, ALWAYS. An applicant opportunity may carry a
+            // monetaryValue in GoHighLevel and it is not revenue. Carrying the
+            // real number would leave a live grenade for the next person who
+            // sums a list without checking which one it is.
+            value: 0,
+            ago: daysSince(r.createdAt || ""),
+            eventId: "",
+            visible: cgVisible.has(r.id),
+          }))
+          .filter((o) => o.partnerId);
+      } catch {
+        applicantRefs = [];
+      }
+
       // ── events ─────────────────────────────────────────────────────────────
       const evDate = oppIdOf(EVENT_FIELDS.date.name, EVENT_FIELDS.date.id);
       const evCost = oppIdOf(EVENT_FIELDS.cost.name, EVENT_FIELDS.cost.id);
@@ -546,6 +609,8 @@ export async function GET(request: Request) {
         {
           partners,
           referrals,
+          // ITEM 2 — kept apart from `referrals` all the way to the screen.
+          applicantRefs,
           events,
           attendees,
           // ── everything the WRITE forms need, resolved once, server-side ────
@@ -640,7 +705,9 @@ export async function POST(request: Request) {
   return withGrants(async () => {
     try {
       const body = (await request.json()) as Body;
-      let session: { userId?: string } | null = null;
+      // ⚠️ role/type ARE READ NOW — item 15's read action needs to know whether
+      // this viewer is an admin, the same question the GET half asks.
+      let session: { userId?: string; role?: string; type?: string } | null = null;
       if (ssoConfigured()) {
         if (!body.ssoKey)
           return NextResponse.json(
@@ -984,6 +1051,47 @@ export async function POST(request: Request) {
       // refuse it outright, and if it does not, the record is UNDEDUPABLE — the
       // same person met at two events becomes two contacts for ever, and bulk
       // import multiplies that by however many were met.
+      // ═══════════════════════════════════════════════════════════════════
+      // 🔴 ROUND 122 · ITEM 15 — A CONTACT ID OUT OF THE URL.
+      //
+      // ⚠️ AND THE BRIEF'S PREMISE NEEDS ONE CORRECTION: there are no
+      // OPPORTUNITY ids in query strings. What was there is a CONTACT id —
+      // `/api/referrals?only=contact-opps&contactId=…` — which is the more
+      // sensitive of the two, because a contact is a person and an opportunity
+      // is a case. Opportunity ids appear in PATHS (`/api/opportunities/{id}`),
+      // which is a separate question answered in the report.
+      //
+      // 🔴 A FRAGMENT CANNOT WORK. `#…` is never transmitted to a server, so it
+      // is unusable for a read the server has to perform. A path segment is no
+      // better than a query string — both are the URL. A POST body is the only
+      // form that keeps the id out of access logs, browser history and any
+      // Referer header.
+      //
+      // ⚠️ THE COST IS THAT A READ IS NOW A POST, which is semantically odd and
+      // defeats HTTP caching. This route is `no-store` and `force-dynamic`, so
+      // there was no caching to lose — that is the whole of the trade here, and
+      // it would not be true of a cacheable endpoint.
+      // ═══════════════════════════════════════════════════════════════════
+      if (body.action === "contact-opps") {
+        const cid = clean(body.contactId);
+        if (!cid) return NextResponse.json({ opportunities: [] });
+        return contactOpps(cid, session, isAdminSession(session?.role, session?.type) || !session);
+      }
+
+      if (body.action === "partner-notes") {
+        const id = clean(body.contactId);
+        if (!id)
+          return NextResponse.json(
+            { error: "No partner asked for.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        const defsN = await getEditableFieldDefs("contact");
+        const rtId =
+          defsN.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
+          PARTNER_FIELDS.recordType.id;
+        return partnerNotes(id, { recordType: rtId });
+      }
+
       if (body.action === "add-attendee") {
         const firstName = (body.firstName || "").trim();
         const phone = (body.phone || "").trim();
@@ -1028,6 +1136,77 @@ export async function POST(request: Request) {
         else if (!evDef) missing.push("the field linking an attendee to an event");
 
         const aEmail = clean(body.email);
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔴 ROUND 122 · ITEM 1 — THE OVERWRITE, WHICH IS THE ACTUAL DATA LOSS.
+        //
+        // ⚠️ THE MODEL STORES ONE EVENT PER ATTENDEE. `Event Attended` is a
+        // single contact field, so a person can be recorded at exactly one
+        // event — and `upsertContact` MATCHES ON PHONE OR EMAIL. Meeting the
+        // same person at a second expo therefore rewrote their first
+        // attendance, silently, with no error and nothing on screen.
+        //
+        // 🔴 THAT IS WORSE THAN THE TWO DROPDOWNS ROUND 107 NAMED. Two
+        // dropdowns are two views of one value; this destroys the value.
+        //
+        // ⚠️ SO IT IS REFUSED, NOT MERGED. Merging would need a multi-value
+        // field this account does not have, and inventing one here — silently,
+        // inside a write — is the kind of model change round 122's item 4 is
+        // being held for. A refusal loses nothing and says exactly what it
+        // found.
+        // ═══════════════════════════════════════════════════════════════════
+        if (evDef && (body.eventId || "").trim()) {
+          const needle = phone || aEmail;
+          if (needle) {
+            try {
+              const hits = await searchContacts(needle);
+              // ⚠️ EXACTLY ONE MATCH, OR NOTHING. Two contacts sharing a phone
+              // is ambiguous, and guessing which one is about to be overwritten
+              // is not better than the overwrite.
+              const exact = hits.filter(
+                (h) =>
+                  (phone && h.phone && norm(h.phone) === norm(phone)) ||
+                  (aEmail && h.email && norm(h.email) === norm(aEmail)),
+              );
+              if (exact.length === 1) {
+                const cur = await getContactCustomFields(exact[0].id);
+                const already = String(cur.values?.[evDef.id] ?? "").trim();
+                if (already && already !== (body.eventId || "").trim()) {
+                  // ⚠️ The stored value IS the event's opportunity id — there is
+                  // no name on the contact to read, and fetching one to make a
+                  // refusal prettier is a request spent on decoration.
+                  const evName = already;
+                  return NextResponse.json(
+                    {
+                      error:
+                        `${exact[0].name || "This person"} is already recorded at another event, ` +
+                        "and a contact can only hold one. Adding them here would erase that — " +
+                        "so nothing was changed.",
+                      detail:
+                        `Their Event Attended currently points at ${evName}. GoHighLevel stores ` +
+                        "it as a single field on the contact, so the same person cannot be " +
+                        "recorded at two events until that changes. Log this meeting as a touch " +
+                        "on the partner instead, or clear their Event Attended in GoHighLevel " +
+                        "first if the earlier one was wrong.",
+                      status: 409,
+                      // A REFUSAL — round 119, item 3. The app declined on
+                      // purpose and the message is the instruction.
+                      refusal: true,
+                    } as ApiError,
+                    { status: 409 },
+                  );
+                }
+              }
+            } catch {
+              // ⚠️ A FAILED LOOK-UP IS NOT A CLEAR RESULT. It must not become a
+              // refusal (that would block a legitimate add over a GHL wobble)
+              // and it must not become permission either — so the write goes
+              // ahead exactly as it did before this guard existed, which is the
+              // behaviour we already had rather than a new failure mode.
+            }
+          }
+        }
+
         const c = await upsertContact({
           firstName,
           lastName: clean(body.lastName),
