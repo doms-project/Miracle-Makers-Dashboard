@@ -182,6 +182,8 @@ export default function AddClientDialog({
 
   // Debounced contact search on phone / email / name.
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Which search is current — see the sequence guard in the effect below. */
+  const searchSeq = useRef(0);
   useEffect(() => {
     if (chosen || dismissed) return;
     const q = (phone || email || defaultOppName).trim();
@@ -190,6 +192,12 @@ export default function AddClientDialog({
       return;
     }
     if (timer.current) clearTimeout(timer.current);
+    // ⚠️ THE DEBOUNCE CLEARS THE TIMER, NOT AN IN-FLIGHT REQUEST. Once the 400ms
+    // has elapsed the fetch is away, and a slower answer for "joh" could land
+    // after a faster one for "john" and put the wrong matches under the typed
+    // text. Same stale-response shape as the round-111 loaders, one screen over.
+    const seq = ++searchSeq.current;
+    const isCurrent = () => seq === searchSeq.current;
     timer.current = setTimeout(async () => {
       setSearching(true);
       try {
@@ -200,11 +208,12 @@ export default function AddClientDialog({
         const j = (await res.json().catch(() => ({}))) as {
           matches?: ContactMatch[];
         };
+        if (!isCurrent()) return;
         setMatches(res.ok ? j.matches || [] : []);
       } catch {
-        setMatches([]); // a failed search must never block creating a lead
+        if (isCurrent()) setMatches([]); // a failed search never blocks creating a lead
       } finally {
-        setSearching(false);
+        if (isCurrent()) setSearching(false);
       }
     }, 400);
     return () => {

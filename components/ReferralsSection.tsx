@@ -917,9 +917,12 @@ export default function ReferralsSection({
                   the estimated MONTHLY value, so the column is monthly
                   recurring revenue — the same number described two ways is how
                   a forecast ends up wrong by a factor of twelve. */}
-              Revenue is the monthly recurring value of won opportunities
-              attributed to the source. Showing {rows.length} of {all.length} ·
-              total {moneyMo(rows.reduce((a, p) => a + p.revenue, 0))}
+              Revenue is the monthly recurring value of <b>won</b> opportunities
+              attributed to a partner — <b>not the agency&apos;s revenue</b>:
+              Facebook, website and Google Ads leads have no partner to credit
+              and are counted nowhere on this screen. Showing {rows.length} of{" "}
+              {all.length} · total{" "}
+              {moneyMo(rows.reduce((a, p) => a + p.revenue, 0))}
               {activeFilters.length ? (
                 <>
                   {" · filtered by "}
@@ -1346,10 +1349,19 @@ export default function ReferralsSection({
                 value={kpis.totalSources}
                 desc={`${kpis.activeSources} referred in 90 days`}
               />
+              {/* 🔴 "REVENUE" ALONE IS A FALSE HEADLINE — round 112, item 8.
+                  Only a REFERRED case can carry a value: a Facebook, website or
+                  Google Ads lead has no partner to credit and no route in this
+                  app to set one, so its revenue is structurally absent from this
+                  number. Labelled "Revenue attributed" beside four other
+                  business-wide tiles, it reads as the agency's figure and is
+                  wrong by a large multiple. The label now names its own scope,
+                  and the description says what is missing rather than only what
+                  is counted. */}
               <Kpi
-                label="Revenue attributed"
+                label="Revenue from partners"
                 value={moneyMo(kpis.revenue)}
-                desc="monthly recurring, from won cases"
+                desc="won, monthly · excludes every non-referred case"
               />
               <Kpi
                 label="Touches overdue"
@@ -1443,6 +1455,7 @@ export default function ReferralsSection({
           onLog={() => setLogFor(open)}
           onLogReferral={() => setRefFor({ partner: open })}
           onAddEvent={() => setEventForPartner(open)}
+          onChanged={() => void load()}
         />
       ) : null}
 
@@ -1555,6 +1568,195 @@ function Bars({
 // ---------------------------------------------------------------------------
 // THE PARTNER DRAWER
 // ---------------------------------------------------------------------------
+
+/**
+ * ONE ATTRIBUTED CASE — named, and correctable in place. Round 112, items 2-4.
+ *
+ * 🔴 ITEM 4 · NAMED. The list read "3 days ago · won · $5,500/mo" four times
+ * over. A rep could not tell which client was which, and the two controls below
+ * make that intolerable: nobody edits an unnamed row confidently.
+ *
+ * 🔴 ITEM 2 · THE VALUE IS CORRECTABLE. "Log a referral" writes monetaryValue
+ * once and its own modal promises "it can be corrected when the assessment is
+ * done" — a promise nothing in the app kept.
+ *
+ * 🔴 ITEM 3 · STATUS BESIDE IT, AND IT IS THE SAME CONTROL THE RECORD PANEL
+ * ALREADY HAS, writing through the same route. A rep finishing a case sets both
+ * without leaving the partner, which is the pair that starts producing revenue
+ * data at all — the column reads near-zero until cases are marked won.
+ *
+ * ⚠️ NATIVE, NOT A CUSTOM FIELD. `monetaryValue` and `status` sit beside name
+ * and pipelineId, so the record panel's saveField path does NOT apply; this
+ * uses PUT /api/opportunities/{id}, which already accepts both and re-reads the
+ * record uncached after writing.
+ *
+ * 🔴 AND THE READ-BACK IS COMPARED, NOT ASSUMED. Round 103: `monetaryValue` was
+ * missing from createOpportunity and a spread hid its absence from TypeScript,
+ * so the value was silently dropped. A write that "succeeds" while changing
+ * nothing is the exact failure this feature would repeat, so what comes back is
+ * checked against what was sent and a mismatch is stated on the row.
+ */
+function AttributedRow({
+  opp,
+  ssoBlob,
+  onSaved,
+}: {
+  opp: RawReferral;
+  ssoBlob: string | null;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(String(opp.value || ""));
+  const [status, setStatus] = useState(opp.status);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  // The row re-renders from fresh payload data after a save; keep the controls
+  // in step with it rather than holding a stale draft.
+  useEffect(() => {
+    setVal(String(opp.value || ""));
+    setStatus(opp.status);
+  }, [opp.value, opp.status]);
+
+  const dirty = Number(val || 0) !== (opp.value || 0) || status !== opp.status;
+
+  const save = async () => {
+    const want = Number(val || 0);
+    if (!Number.isFinite(want) || want < 0) {
+      setErr("Enter a monthly figure in dollars, or 0.");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    setNote("");
+    try {
+      const j = await apiFetch<{ record?: { monetaryValue?: number; status?: string } }>(
+        `/api/opportunities/${encodeURIComponent(opp.id)}`,
+        {
+          method: "PUT",
+          ssoBlob,
+          body: JSON.stringify({
+            ssoKey: ssoBlob ?? undefined,
+            monetaryValue: want,
+            status,
+          }),
+        },
+      );
+      // 🔴 COMPARE THE READ-BACK. See the round-103 note above.
+      const got = j.record;
+      const gotVal = typeof got?.monetaryValue === "number" ? got.monetaryValue : null;
+      const gotStatus = typeof got?.status === "string" ? got.status : null;
+      const bad: string[] = [];
+      if (gotVal !== null && gotVal !== want)
+        bad.push(`value came back as ${moneyMo(gotVal)}, not ${moneyMo(want)}`);
+      if (gotStatus !== null && gotStatus !== status)
+        bad.push(`status came back as "${gotStatus}", not "${status}"`);
+      if (bad.length) {
+        // Revert the controls to what GoHighLevel actually holds — showing the
+        // typed value over a record that did not take it is the lie itself.
+        setErr(
+          `GoHighLevel accepted the request but did not store it: ${bad.join("; ")}. ` +
+            `Nothing here is reliable until that is understood — do not retype it.`,
+        );
+        if (gotVal !== null) setVal(String(gotVal || ""));
+        if (gotStatus !== null) setStatus(gotStatus);
+        return;
+      }
+      setNote("Saved.");
+      setEditing(false);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rfopp">
+      <div className="rfoppmain">
+        <span className="rfoppname" title={opp.name}>
+          {opp.name}
+        </span>
+        <span className="rfoppago">
+          {opp.ago === null ? "undated" : `${opp.ago}d ago`}
+        </span>
+        {editing ? null : (
+          <span
+            className={
+              opp.status === "won"
+                ? "rfoppstat rfgreen"
+                : opp.status === "lost" || opp.status === "abandoned"
+                  ? "rfoppstat rfred"
+                  : "rfoppstat"
+            }
+          >
+            {opp.status}
+            {opp.value ? ` · ${moneyMo(opp.value)}` : ""}
+          </span>
+        )}
+        <button
+          type="button"
+          className="linkbtn"
+          onClick={() => {
+            setEditing((v) => !v);
+            setErr("");
+            setNote("");
+          }}
+        >
+          {editing ? "cancel" : "edit"}
+        </button>
+      </div>
+
+      {editing ? (
+        <div className="rfoppedit">
+          <label>
+            Monthly value
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={val}
+              onChange={(e) => setVal(e.target.value)}
+              placeholder="0"
+            />
+          </label>
+          <label>
+            Status
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              {["open", "won", "lost", "abandoned"].map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="ibtn"
+            disabled={busy || !dirty}
+            onClick={() => void save()}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+          {/* ⚠️ REVENUE ONLY COUNTS `won`, and that is not guessable from the
+              control. Measured on the live account: 596 open, 2 won. The
+              revenue column reads near-zero until cases are marked, so the
+              person who can change that should be told what marking does. */}
+          <div className="rfdhint">
+            ⚠️ The revenue figures on this screen count <b>won</b> cases only.
+            An open case contributes its value to nothing until it is marked.
+          </div>
+        </div>
+      ) : null}
+
+      {err ? <div className="rfdhint rfdbad">{err}</div> : null}
+      {note ? <div className="rfdhint rfgreen">{note}</div> : null}
+    </div>
+  );
+}
+
 function PartnerDrawer({
   p,
   ssoBlob,
@@ -1566,6 +1768,7 @@ function PartnerDrawer({
   onLog,
   onLogReferral,
   onAddEvent,
+  onChanged,
 }: {
   p: EnrichedPartner;
   ssoBlob: string | null;
@@ -1578,6 +1781,8 @@ function PartnerDrawer({
   onLog: () => void;
   onLogReferral: () => void;
   onAddEvent: () => void;
+  /** A row edited its case — re-read so every figure above it agrees. */
+  onChanged: () => void;
 }) {
   const [notes, setNotes] = useState<
     { id: string; when: string; who: string; txt: string; type?: string }[] | null
@@ -1665,7 +1870,7 @@ function PartnerDrawer({
               <dd>{p.won}</dd>
               <dt>Win rate</dt>
               <dd>{p.refs ? `${p.winRate}%` : "—"}</dd>
-              <dt>Revenue attributed</dt>
+              <dt>Revenue from this partner</dt>
               <dd>{moneyMo(p.revenue)}</dd>
               <dt>Last referral</dt>
               <dd>{p.lastRefAgo === null ? "never" : `${p.lastRefAgo} days ago`}</dd>
@@ -1819,25 +2024,16 @@ function PartnerDrawer({
                 still count {mine.length === 1 ? "it" : "all of them"}.
               </div>
             ) : (
-              <dl className="rfkv">
+              <div className="rfopps">
                 {shownRows.slice(0, 12).map((o) => (
-                  <div key={o.id} className="rfkvrow">
-                    <dt>{o.ago === null ? "undated" : `${o.ago} days ago`}</dt>
-                    <dd
-                      className={
-                        o.status === "won"
-                          ? "rfgreen"
-                          : o.status === "lost"
-                            ? "rfred"
-                            : ""
-                      }
-                    >
-                      {o.status}
-                      {o.value ? ` · ${moneyMo(o.value)}` : ""}
-                    </dd>
-                  </div>
+                  <AttributedRow
+                    key={o.id}
+                    opp={o}
+                    ssoBlob={ssoBlob}
+                    onSaved={onChanged}
+                  />
                 ))}
-              </dl>
+              </div>
             )}
             {/* 🔴 THE SENTENCE, AND IT DESCRIBES WHAT IS SHOWN — NOT WHAT IS
                 WITHHELD.
@@ -2017,6 +2213,13 @@ function AddPartnerDialog({
   const [hits, setHits] = useState<{ id: string; name: string; email: string; phone: string }[]>([]);
   const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
   const [searching, setSearching] = useState(false);
+  /**
+   * 🔴 A FAILED SEARCH IS NOT AN EMPTY ONE. The catch below did
+   * `setHits([])`, so a 500, a 401 or a dropped connection all rendered
+   * "No contact matches" — telling the user to create a duplicate because the
+   * search broke. Three states, three sentences: searching, no matches, failed.
+   */
+  const [searchErr, setSearchErr] = useState("");
   const [org, setOrg] = useState("");
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
@@ -2046,10 +2249,14 @@ function AddPartnerDialog({
         { ssoBlob },
       )
         .then((j) => {
-          if (live) setHits(j.contacts || []);
+          if (!live) return;
+          setSearchErr("");
+          setHits(j.contacts || []);
         })
-        .catch(() => {
-          if (live) setHits([]);
+        .catch((e) => {
+          if (!live) return;
+          setHits([]);
+          setSearchErr(e instanceof Error ? e.message : String(e));
         })
         .finally(() => {
           if (live) setSearching(false);
@@ -2114,8 +2321,14 @@ function AddPartnerDialog({
         <div className="movebody">
           <div className="rfmode">
             <label>
+              {/* ⚠️ `name` MAKES THEM A GROUP. Without it these are two
+                  independent radios that merely look like a pair: arrow keys do
+                  not move between them and assistive tech announces two
+                  unrelated controls. React's `checked` kept them visually in
+                  step, which is exactly why it went unnoticed. */}
               <input
                 type="radio"
+                name="rfpartnermode"
                 checked={mode === "new"}
                 onChange={() => {
                   setMode("new");
@@ -2127,6 +2340,7 @@ function AddPartnerDialog({
             <label>
               <input
                 type="radio"
+                name="rfpartnermode"
                 checked={mode === "existing"}
                 onChange={() => setMode("existing")}
               />
@@ -2161,6 +2375,12 @@ function AddPartnerDialog({
                 <div className="rfhits">
                   {searching ? (
                     <div className="rfdhint">Searching…</div>
+                  ) : searchErr ? (
+                    <div className="rfdhint rfdbad">
+                      The contact search failed — {searchErr}. This is not the
+                      same as nobody matching, so do <b>not</b> add them as a new
+                      organisation until it works: you would create a duplicate.
+                    </div>
                   ) : !hits.length ? (
                     <div className="rfdhint">
                       No contact matches “{q.trim()}”. Switch to <b>New

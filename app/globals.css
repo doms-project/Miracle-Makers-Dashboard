@@ -297,8 +297,22 @@ tbody tr:last-child td{border-bottom:0;}
 .imeta{font-size:11px;color:var(--ink-3);margin-top:8px;}
 .irow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;}
 .irow label{font-size:11px;font-weight:700;color:var(--ink-2);}
-.irow select,.irow input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;min-width:150px;transition:border-color .12s;}
-.irow select:focus,.irow input:focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+/* 🔴 A TICKBOX IS NOT A TEXT INPUT — round 112, item 5.
+   This rule matched EVERY `input` inside an `.irow`, tickboxes included, and
+   `min-width:150px` is catastrophic for one: the section checklist lives in
+   `<div class="irow pffolders">`, so each checkbox demanded 150px of its 156px
+   label and left EIGHT PIXELS for the name. With `.pfsecname{overflow-wrap:
+   anywhere}` the label then wrapped ONE CHARACTER PER LINE, and the longest
+   ("Website Intent Form") set the height of all fourteen cards.
+   Measured, not guessed — scripts/section-grid-proof.mjs:
+     tracks 155.7px | 19.8px | 18.2px   nameW 8px   nameH 132px
+   The editor's copy of the same list is NOT inside an `.irow` and renders on
+   one line, which is the control case that confirms it.
+   ⚠️ Excluded by TYPE rather than patched at the call site, because the next
+   tickbox someone puts in an `.irow` would hit this again. */
+.irow select,.irow input:not([type="checkbox"]):not([type="radio"]){border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;min-width:150px;transition:border-color .12s;}
+.irow input[type="checkbox"],.irow input[type="radio"]{min-width:0;width:auto;flex:0 0 auto;margin:0;}
+.irow select:focus,.irow input:not([type="checkbox"]):not([type="radio"]):focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
 /* The batch tag box. Deliberately NOT styled like the source picker — one is a
    fixed vocabulary, the other is free text, and they must not read alike. */
 /* Base styling comes from `.irow input` — only the differences live here:
@@ -482,6 +496,12 @@ tbody tr:last-child td{border-bottom:0;}
 .pfrow > summary:hover{background:var(--row-hover);}
 .pfrow[open] > summary{background:var(--sel);}
 .pfrow .pfseclist{margin:0 12px 12px;border-radius:8px;}
+.pfscopeedit{display:flex;align-items:center;gap:9px;margin:10px 12px 4px;flex-wrap:wrap;}
+.pfscopeedit label{font-size:10.5px;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-3);}
+.pfscopeedit select{border:1px solid var(--line);border-radius:7px;padding:5px 8px;
+  font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
+.pfscopeedit .ihint{margin:0;font-size:11px;color:var(--ink-3);}
 .pfscope{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
 .pfcount{margin-left:auto;font-size:11px;color:var(--ink-3);}
 
@@ -702,7 +722,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .movebody{padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
 .movebody .irow{gap:4px;}
 .movebody .irow label{margin-top:6px;}
-.movebody .irow select,.movebody .irow input{width:100%;}
+/* Same exclusion: a 100%-wide tickbox is the same bug in a modal. */
+.movebody .irow select,.movebody .irow input:not([type="checkbox"]):not([type="radio"]){width:100%;}
 .movewarn{font-size:12px;line-height:1.55;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:9px;padding:11px 13px;}
 .movetoggle{display:flex;align-items:center;gap:8px;margin-top:9px;font-size:11.5px;font-weight:600;color:var(--ink-2);cursor:pointer;}
 .movetoggle input{margin:0;accent-color:var(--plum);}
@@ -1228,7 +1249,30 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
   font-size:21px;line-height:1;color:var(--ink-3)}
 .rfdmeta{font-size:12.5px;color:var(--ink-2);margin-top:3px;display:flex;align-items:center;
   gap:8px;flex-wrap:wrap}
-.rfdbd{flex:1;overflow-y:auto;padding:4px 20px 26px}
+/* ⚠️ min-height:0 IS NOT DECORATION. `.rfdrawer` is a column flex container and
+   this is its scrolling child; without an explicit 0 minimum a flex item will
+   not shrink below its content in every engine, and the last attributed row
+   ends up below the fold with no way to reach it. Same family as the `.rfhits`
+   collapse in item 6 — flex minimums decide whether content is reachable.
+   The bottom padding is generous for the same reason: the final row now carries
+   an edit control, and a row you can see but not click is not reachable. */
+.rfdbd{flex:1 1 0%;min-height:0;overflow-y:auto;padding:4px 20px 40px}
+
+/* ── ITEMS 2-4 · a named, correctable attributed case ────────────────────── */
+.rfopps{display:flex;flex-direction:column;gap:6px}
+.rfopp{border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:var(--bg)}
+.rfoppmain{display:flex;align-items:center;gap:8px;min-width:0}
+.rfoppname{flex:1 1 auto;min-width:0;font-size:12.5px;font-weight:600;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rfoppago{flex:0 0 auto;font-size:11px;color:var(--ink-3)}
+.rfoppstat{flex:0 0 auto;font-size:11.5px;color:var(--ink-2)}
+.rfoppedit{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin-top:8px}
+.rfoppedit label{display:flex;flex-direction:column;gap:3px;font-size:10.5px;
+  font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.rfoppedit input,.rfoppedit select{min-width:0;width:110px;border:1px solid var(--line);
+  border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px;background:var(--bg);
+  color:var(--ink)}
+.rfoppedit .rfdhint{flex:1 1 100%;margin-top:0}
 .rfdsec{padding:15px 0;border-bottom:1px solid var(--line-soft)}
 .rfdsec:last-child{border-bottom:0}
 .rfdsec h4{margin:0 0 9px;font-size:10.5px;font-weight:700;letter-spacing:.13em;
@@ -1358,8 +1402,16 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
   border-bottom:1px solid var(--line-soft)}
 .rfmode label{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);
   cursor:pointer}
-.rfhits{display:flex;flex-direction:column;gap:2px;max-height:210px;overflow-y:auto;
-  margin-bottom:10px}
+/* 🔴 flex:0 0 auto IS LOAD-BEARING — round 112, item 6.
+   .movebody is `display:flex;flex-direction:column` inside `.movebox{max-height:90vh}`.
+   A flex ITEM that scrolls has its `min-height:auto` computed to 0, so under any
+   space pressure this collapsed to HEIGHT ZERO — the three matching contacts were
+   in the DOM, correct, and 0px tall. Same class as the round-100 `.panel` bug:
+   rendered perfectly, impossible to see. Measured, not guessed:
+   scripts/partner-picker-proof.mjs reported {"w":484,"h":0} with hitCount 3. */
+.rfdbad{color:var(--bad,#7a2727)}
+.rfhits{flex:0 0 auto;display:flex;flex-direction:column;gap:2px;max-height:210px;
+  overflow-y:auto;margin-bottom:10px}
 .rfhit{display:flex;flex-direction:column;gap:1px;text-align:left;background:none;
   border:1px solid var(--line);border-radius:7px;padding:7px 10px;cursor:pointer;font:inherit}
 .rfhit:hover{background:var(--row-hover);border-color:var(--plum-line)}

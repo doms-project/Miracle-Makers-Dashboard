@@ -245,6 +245,20 @@ export interface RawPartner {
 
 export interface RawReferral {
   id: string;
+  /**
+   * 🔴 THE CLIENT'S NAME — round 112, item 4.
+   *
+   * The drawer listed "3 days ago · won · $5,500/mo" four times over and a rep
+   * could not tell which case was which. Items 2 and 3 then put EDITABLE
+   * controls on those rows, and nobody edits an unnamed row confidently.
+   *
+   * ⚠️ THIS DOES NOT BREACH THE BOUNDARY RULE. The same drawer already prints
+   * the partner's name, email and phone at the top: the rule is that client
+   * data is never STORED here, not that it is never SHOWN. This is fetched
+   * live from the opportunity, exactly as the partner's details are, and
+   * written nowhere.
+   */
+  name: string;
   partnerId: string;
   status: string;
   value: number;
