@@ -237,7 +237,10 @@ export default function ImportWizard({
       .then(async (res) => {
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw apiError(res, j);
-        if (!cancelled) setMeta(j as ImportMeta);
+        if (!cancelled) {
+          setMetaErr(null); // a success clears the previous attempt's error
+          setMeta(j as ImportMeta);
+        }
       })
       .catch((e) => {
         if (!cancelled) setMetaErr(e);

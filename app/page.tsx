@@ -1327,6 +1327,43 @@ function MasterColumn({
 // The count is in the heading either way, so nothing is hidden by surprise.
 const ORPHAN_OPEN_MAX = 8;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 NEVER RELAY "no SSO session was provided" WHEN WE PROVIDED ONE.
+//
+// /api/opportunities answers that when it receives no blob, and it is the RIGHT
+// sentence for the case the SERVER can see: from where it is standing, nobody
+// signed in. It becomes a lie the moment the CLIENT knows it sent a credential
+// — which is the only vantage point from which the difference is visible.
+//
+// The cause is fixed above (the request now carries the blob whenever one
+// exists). This is the second line of defence, and it earns its place: if a
+// 401 with this text ever reaches a screen that HAS a blob again, it will say
+// something true and diagnostic instead of instructing somebody to do the thing
+// they are already doing.
+// ═══════════════════════════════════════════════════════════════════════════
+const SERVER_NO_SSO = "no SSO session was provided";
+
+function honestAuthError(
+  body: ApiError | null,
+  status: number,
+  hadBlob: boolean,
+): ApiError {
+  const fallback: ApiError = {
+    error: `Request failed with status ${status}.`,
+  };
+  const err = body ?? fallback;
+  if (!hadBlob || status !== 401) return err;
+  if (!(err.detail || "").includes(SERVER_NO_SSO)) return err;
+  return {
+    ...err,
+    error: "GoHighLevel didn't accept this session.",
+    detail:
+      "Your sign-in was sent with this request and the dashboard server did not receive it. " +
+      "This is a configuration problem on our side, not something you can fix by signing in again — " +
+      "reload once, and if it persists it needs to be reported.",
+  };
+}
+
 export default function Dashboard() {
   // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
   // (or "none" when not embedded / not configured). Filtering is NOT wired yet
@@ -1562,36 +1599,67 @@ export default function Dashboard() {
   // so nothing captures a stale one.
   const ssoRef = useRef(sso);
   ssoRef.current = sso;
+  /**
+   * Which load is the current one, per loader. See the sequence guard inside
+   * load(). Every loader that can be re-fired while one is in flight needs its
+   * own: the applicant board and the resources pane are both re-fired by an
+   * `sso.blob` change exactly as the client board is.
+   */
+  const loadSeq = useRef(0);
+  const cgSeq = useRef(0);
+  const resSeq = useRef(0);
 
   const load = useCallback(async () => {
+    // 🔴 SEQUENCED. Two loads can be in flight at once — the effect re-fires
+    // when the blob arrives and again when the decrypt lands — and without a
+    // sequence number the SLOWER one wins whatever order they were started in.
+    // That is how a 401 from an early attempt ended up on screen BESIDE 595
+    // successfully loaded records: a stale response overwriting a newer one.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
+
     setLoading(true);
     setError(null);
     try {
-      // When the SSO session is ready, POST the still-encrypted blob so the
-      // SERVER re-derives identity and filters. The browser never sends a
-      // userId/role of its own. When not embedded, fall back to GET (the server
-      // serves the open view only if SSO isn't configured, else 401).
+      // 🔴 AUTHENTICATE ON THE BLOB, NOT ON THE DECRYPTED SESSION.
+      //
+      // This branched on `status === "ready"`, so between the blob ARRIVING and
+      // the display decrypt FINISHING it fell through to the unauthenticated
+      // GET — and the server answered, correctly for the case it was written
+      // for, "Open this dashboard inside GoHighLevel — no SSO session was
+      // provided." On a page that plainly had one.
+      //
+      // ⚠️ Round 107 moved every other ssoKey and header onto `sso.blob` and
+      // MISSED THIS ONE, which is why the false message survived round 109's
+      // gate: the gate stopped the request going out too early, and this line
+      // still stripped the credential off the request that did go out.
       const s = ssoRef.current;
-      const res =
-        s.status === "ready"
-          ? await fetch("/api/opportunities", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ssoKey: s.blob }),
-              cache: "no-store",
-            })
-          : await fetch("/api/opportunities", { cache: "no-store" });
+      const res = s.blob
+        ? await fetch("/api/opportunities", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ssoKey: s.blob }),
+            cache: "no-store",
+          })
+        : await fetch("/api/opportunities", { cache: "no-store" });
+      if (!isCurrent()) return; // a newer load has started; this answer is stale
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as ApiError | null;
-        setError(
-          body ?? {
-            error: `Request failed with status ${res.status}.`,
-          },
-        );
-        setData([]);
+        if (!isCurrent()) return;
+        // ⚠️ KEEP WHAT IS ON SCREEN. Blanking the list turned a failed REFRESH
+        // into a lost dashboard, and pairing that with an error card is how a
+        // user ends up reading "you are not signed in" over 595 records.
+        // `error` still drives the full-screen card, but only when there is
+        // nothing to show — see `loadFailed` at the render site.
+        setError(honestAuthError(body, res.status, !!s.blob));
         return;
       }
       const body = (await res.json()) as OpportunitiesResponse;
+      if (!isCurrent()) return;
+      // ✅ A SUCCESS CLEARS THE ERROR. It is set to null on entry too, but an
+      // out-of-order failure could land in between — so the success says so
+      // explicitly rather than relying on ordering.
+      setError(null);
       setData(body.records || []);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.pipelineFolders) setPipelineFolders(body.pipelineFolders);
@@ -1605,13 +1673,14 @@ export default function Dashboard() {
       setCanSeeMaster(!!body.viewer?.canSeeMaster);
       setFailedPipelines(body.failedPipelines || []);
     } catch (e) {
+      if (!isCurrent()) return;
       setError({
         error: "Could not reach the dashboard API.",
         detail: e instanceof Error ? e.message : String(e),
       });
-      setData([]);
+      // ⚠️ The records stay. See above.
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
     // ⚠️ `ssoRef`, not `sso`, so this callback's IDENTITY never changes.
     //
@@ -1664,39 +1733,53 @@ export default function Dashboard() {
   // time the section is opened, and refreshed by the same Refresh button —
   // never on focus (see the note above the initial-load effect).
   const loadCaregivers = useCallback(async () => {
+    // Same three properties as load() above, for the same reasons — see the
+    // block comment there. This loader had ALL THREE defects, not one.
+    const seq = ++cgSeq.current;
+    const isCurrent = () => seq === cgSeq.current;
+
     setCgLoading(true);
     setCgErr(null);
     try {
-      const res =
-        sso.status === "ready"
-          ? await fetch("/api/opportunities?scope=caregiver", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ssoKey: sso.blob }),
-              cache: "no-store",
-            })
-          : await fetch("/api/opportunities?scope=caregiver", { cache: "no-store" });
+      // 🔴 ON THE BLOB, not on the decrypted session. Identical to the bug in
+      // load(): between the blob arriving and the decrypt landing this sent an
+      // unauthenticated GET and relayed the server's (correct, and here false)
+      // "no SSO session was provided".
+      const s = ssoRef.current;
+      const res = s.blob
+        ? await fetch("/api/opportunities?scope=caregiver", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ssoKey: s.blob }),
+            cache: "no-store",
+          })
+        : await fetch("/api/opportunities?scope=caregiver", { cache: "no-store" });
       const body = (await res.json().catch(() => ({}))) as
         | OpportunitiesResponse
         | ApiError;
+      if (!isCurrent()) return;
       if (!res.ok) {
-        setCgErr(body as ApiError);
-        setCgData([]);
+        setCgErr(honestAuthError(body as ApiError, res.status, !!s.blob));
+        // ⚠️ The applicants stay. Blanking them made a failed refresh look like
+        // an empty pipeline, which is the one thing this board must never say
+        // by accident.
         return;
       }
       const b = body as OpportunitiesResponse;
+      setCgErr(null);
       setCgData(b.records || []);
       setCgPipelines(b.pipelines || []);
       setCgStagesByPipeline(b.stagesByPipeline || {});
       setCgHomeIds(b.viewer?.homePipelineIds || []);
       setCgLoaded(true);
     } catch (e) {
+      if (!isCurrent()) return;
       setCgErr({
         error: "Could not reach the dashboard API.",
         detail: e instanceof Error ? e.message : String(e),
       });
-      setCgData([]);
     } finally {
+      if (!isCurrent()) return;
       setCgLoading(false);
       // 🔴 ATTEMPTED, not SUCCEEDED. `cgLoaded` is only set on success — it
       // means "we have data" and several places read it that way — so a FAILED
@@ -1708,7 +1791,10 @@ export default function Dashboard() {
       // effect below reads it at fire time, not as a dependency.
       cgTried.current = true;
     }
-  }, [sso]);
+    // ⚠️ `ssoRef`, not `sso` — a stable identity. It listed `sso`, so every new
+    // session OBJECT rebuilt this callback, and the effect below depends on it:
+    // that is a second full ?scope=caregiver payload for nothing.
+  }, []);
 
   useEffect(() => {
     if (view === "caregivers" && !cgLoaded && !cgTried.current && ssoResolved(sso))
@@ -1732,11 +1818,16 @@ export default function Dashboard() {
 
   // Fetch the folder-scoped resources fresh (signed URLs are TTL'd).
   const loadResources = useCallback(async () => {
+    const seq = ++resSeq.current;
+    const isCurrent = () => seq === resSeq.current;
+
     setResLoading(true);
     setResErr(null);
     try {
       const headers: Record<string, string> = {};
-      if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
+      // Already on the blob — this one was converted in round 107. Kept as is.
+      const s = ssoRef.current;
+      if (s.blob) headers["x-ghl-sso-key"] = s.blob;
       const res = await fetch("/api/resources", { headers, cache: "no-store" });
       const j = (await res.json().catch(() => ({}))) as {
         resources?: ResFile[];
@@ -1745,7 +1836,11 @@ export default function Dashboard() {
         error?: string;
         detail?: string;
       };
+      if (!isCurrent()) return;
       if (!res.ok) throw apiError(res, j);
+      // A success clears the error rather than leaving the previous failure's
+      // card beside a freshly loaded list.
+      setResErr(null);
       setResources(j.resources || []);
       const secs = j.sections || [];
       setResSections(secs);
@@ -1758,11 +1853,15 @@ export default function Dashboard() {
       );
       setResLoaded(true);
     } catch (e) {
+      if (!isCurrent()) return;
+      // The files already listed are kept — `resources` is untouched here, so a
+      // failed re-signing leaves the previous (possibly expired) links on
+      // screen rather than an empty pane. See the render note at `resErr`.
       setResErr(e);
     } finally {
-      setResLoading(false);
+      if (isCurrent()) setResLoading(false);
     }
-  }, [sso]);
+  }, []);
 
   // Load the Resources tab once, when first opened — from EITHER section.
   // ITEM 3 — this used to test `view === "resources"` alone, which is the client
@@ -2024,6 +2123,7 @@ export default function Dashboard() {
             // `authorId` and `edited`, which the edit affordance needs.
             [selId]: j.notes || [],
           }));
+        if (!cancelled) setNotesErr(null);
       })
       .catch((e) => {
         if (!cancelled) setNotesErr(e);
@@ -3404,6 +3504,7 @@ export default function Dashboard() {
             setCErr(j);
             return;
           }
+          setCErr(null);
           setCFields({
             defs: j.fieldDefs || [],
             values: j.values || {},
@@ -3422,7 +3523,10 @@ export default function Dashboard() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [selected?.id, selected?.contactId, sso]);
+    // ⚠️ `sso.blob`, not `sso`. Listing the OBJECT re-fired this whole contact
+    // fetch every time the session object was replaced — a request per identity
+    // change, against a 100-per-10s limit, for a value that had not changed.
+  }, [selected?.id, selected?.contactId, sso.blob]);
 
   // Save ONE contact field. Sends the version we read with, so a contact edited
   // from another opportunity's panel in the meantime is refused, not clobbered.
@@ -4141,7 +4245,29 @@ export default function Dashboard() {
               </div>
             ) : null}
 
-            {resLoading ? (
+            {/* Same split as the two boards: a failed RE-load over files that
+                are already listed is a strip, not a wall. The links may have
+                expired — signed URLs are TTL'd — so it says which risk you are
+                looking at rather than blanking the pane. */}
+            {resErr && resources.length > 0 ? (
+              <div className="loadwarn">
+                <div>
+                  <b>Couldn&apos;t refresh resources.</b> The files below are
+                  from the last load that worked; their download links may have
+                  expired.{" "}
+                  <button
+                    type="button"
+                    className="linkbtn"
+                    onClick={() => loadResources()}
+                  >
+                    Try again
+                  </button>
+                </div>
+                <ErrorMessage error={resErr} className="errbody" />
+              </div>
+            ) : null}
+
+            {resLoading && resources.length === 0 ? (
               <div className="statewrap">
                 <div className="statecard">
                   <div className="spinner" />
@@ -4149,7 +4275,7 @@ export default function Dashboard() {
                   <p>Fetching documents from the shared Resources folder.</p>
                 </div>
               </div>
-            ) : resErr ? (
+            ) : resErr && resources.length === 0 ? (
               <div className="statewrap">
                 <div className="statecard">
                   <h3>
@@ -4327,6 +4453,37 @@ export default function Dashboard() {
     view === "master"
       ? view
       : "clients";
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // 🔴 AN ERROR OVER LOADED DATA IS A STRIP, NOT A WALL.
+  //
+  // Both renders of `error` were a full-screen card in the BODY slot, while the
+  // tiles, filters and count line render ABOVE it from `data`. So a failed
+  // refresh produced exactly what you saw: "595 shown · 595 in All pipelines"
+  // with "Sign-in required" underneath it. Two contradictory statements, both
+  // drawn from live state, neither one wrong on its own.
+  //
+  // The card is right when there is nothing else to show. It is wrong the
+  // moment there are records on screen — then the honest thing is to keep the
+  // records and say the REFRESH failed, which is what actually happened.
+  // ═════════════════════════════════════════════════════════════════════════
+  /**
+   * 🔴 AND THE SPINNER IS THE SAME MISTAKE AS THE CARD.
+   *
+   * Found by the round-111 render proof, not by reading: pressing Refresh over
+   * 595 loaded records replaced all of them with a full-screen "Loading
+   * opportunities…" for the length of the request. Same shape as the error —
+   * a transient fact about the REQUEST taking over the slot that belongs to the
+   * DATA. The button already reads "Refreshing…", which is where that belongs.
+   */
+  const showSpinner = loading && data.length === 0;
+  /** Nothing loaded, and the last attempt failed → the full-screen card. */
+  const loadFailed = error && data.length === 0 ? error : null;
+  /** Records on screen from an earlier load → a strip, and keep them. */
+  const staleError = error && data.length > 0 ? error : null;
+  /** The applicant board, split the same way. */
+  const cgLoadFailed = cgErr && cgData.length === 0 ? cgErr : null;
+  const cgStaleError = cgErr && cgData.length > 0 ? cgErr : null;
 
   return (
     <div className="app">
@@ -4662,6 +4819,22 @@ export default function Dashboard() {
           </div>
           ) : null}
         </div>
+
+        {/* 🔴 THE FAILED REFRESH, SAID AS WHAT IT IS. Above every view, because
+            the payload it describes feeds every view — and never beside a
+            full-screen card, because `staleError` and `loadFailed` are the two
+            halves of one condition. */}
+        {staleError ? (
+          <div className="loadwarn">
+            <b>Couldn&apos;t refresh.</b> {staleError.error}{" "}
+            {staleError.detail ? `${staleError.detail} ` : ""}
+            The {data.length} records on screen are from the last load that
+            worked — they are still real, just not newer than this failure.{" "}
+            <button type="button" className="linkbtn" onClick={() => load()}>
+              Try again
+            </button>
+          </div>
+        ) : null}
 
         {/* Opportunity controls — LIST and BOARD only.
             Master is excluded deliberately rather than added to the "hidden on"
@@ -5010,22 +5183,22 @@ export default function Dashboard() {
           // assigned yet" on a tab that has nothing to do with pipelines.
           cgView === "resources" ? (
             resourcesPane
-          ) : cgLoading ? (
+          ) : cgLoading && cgData.length === 0 ? (
             <div className="statewrap">
               <div className="statecard">
                 <div className="spinner" />
                 <h3>Loading applicants…</h3>
               </div>
             </div>
-          ) : cgErr ? (
+          ) : cgLoadFailed ? (
             <div className="statewrap">
               <div className="statecard">
                 <h3>
                   <span className="errdot">●</span> Couldn&apos;t load applicants
                 </h3>
-                <p>{cgErr.error}</p>
-                {cgErr.detail ? (
-                  <div className="detail">{cgErr.detail}</div>
+                <p>{cgLoadFailed.error}</p>
+                {cgLoadFailed.detail ? (
+                  <div className="detail">{cgLoadFailed.detail}</div>
                 ) : null}
                 <button className="retry" onClick={loadCaregivers} type="button">
                   Try again
@@ -5043,6 +5216,21 @@ export default function Dashboard() {
             </div>
           ) : (
             <>
+              {cgStaleError ? (
+                <div className="loadwarn">
+                  <b>Couldn&apos;t refresh applicants.</b> {cgStaleError.error}{" "}
+                  {cgStaleError.detail ? `${cgStaleError.detail} ` : ""}
+                  The {cgData.length} applicants below are from the last load
+                  that worked.{" "}
+                  <button
+                    type="button"
+                    className="linkbtn"
+                    onClick={() => loadCaregivers()}
+                  >
+                    Try again
+                  </button>
+                </div>
+              ) : null}
               {/* ITEM 1 — same markup and same classes as the client stats, so
                   the two sections read as one app rather than two. */}
               <div className="stats">
@@ -5493,23 +5681,23 @@ export default function Dashboard() {
               <br />
               The Master view is granted per user in the Access tab.
             </div>
-          ) : loading ? (
+          ) : showSpinner ? (
             <div className="statewrap">
               <div className="statecard">
                 <div className="spinner" />
                 <h3>Loading opportunities…</h3>
               </div>
             </div>
-          ) : error ? (
+          ) : loadFailed ? (
             <div className="statewrap">
               <div className="statecard">
                 <h3>
                   <span className="errdot">●</span> Couldn&apos;t load
                   opportunities
                 </h3>
-                <p>{error.error}</p>
-                {error.detail ? (
-                  <div className="detail">{error.detail}</div>
+                <p>{loadFailed.error}</p>
+                {loadFailed.detail ? (
+                  <div className="detail">{loadFailed.detail}</div>
                 ) : null}
                 <button className="retry" onClick={load} type="button">
                   Try again
@@ -5809,7 +5997,7 @@ export default function Dashboard() {
               ) : null}
             </div>
           </div>
-        ) : loading ? (
+        ) : showSpinner ? (
           <div className="statewrap">
             <div className="statecard">
               <div className="spinner" />
@@ -5817,16 +6005,16 @@ export default function Dashboard() {
               <p>Fetching live records from GoHighLevel.</p>
             </div>
           </div>
-        ) : error ? (
+        ) : loadFailed ? (
           <div className="statewrap">
             <div className="statecard">
               <h3>
                 <span className="errdot">●</span> Couldn&apos;t load
                 opportunities
               </h3>
-              <p>{error.error}</p>
-              {error.detail ? (
-                <div className="detail">{error.detail}</div>
+              <p>{loadFailed.error}</p>
+              {loadFailed.detail ? (
+                <div className="detail">{loadFailed.detail}</div>
               ) : null}
               <button className="retry" onClick={load} type="button">
                 Try again

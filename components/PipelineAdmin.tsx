@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 import { checkFieldName, suggestPrefix, composeFieldName, type KnownField } from "@/lib/fieldNaming";
@@ -61,6 +61,8 @@ const DATA_TYPES = [
 export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const [data, setData] = useState<Payload | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
+  /** Which load() is current — see the sequence guard inside it. */
+  const loadSeq = useRef(0);
   const [busy, setBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<unknown>(null);
   const [saved, setSaved] = useState("");
@@ -71,6 +73,12 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   );
 
   const load = useCallback(async () => {
+    // 🔴 SEQUENCED — round 111, same reason as PipelineAccessTab: `ssoHeader`
+    // depends on `ssoBlob`, so the arrival of the blob re-fires this with the
+    // credential-less first attempt still open, and the loser used to win.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
+
     setLoadErr(null);
     try {
       const res = await fetch("/api/admin/pipelines", {
@@ -78,9 +86,12 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
         cache: "no-store",
       });
       const j = await res.json().catch(() => ({}));
+      if (!isCurrent()) return;
       if (!res.ok) throw apiError(res, j);
+      setLoadErr(null);
       setData(j as Payload);
     } catch (e) {
+      if (!isCurrent()) return;
       setLoadErr(e);
     }
   }, [ssoHeader]);
@@ -274,7 +285,10 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     await load();
   };
 
-  if (loadErr)
+  // ⚠️ Only when there is nothing else to show. A failed RELOAD over a loaded
+  // screen is a strip below (see the `loadErr` banner inside the return), not a
+  // replacement for the screen.
+  if (loadErr && !data)
     return (
       <div className="isec">
         <ErrorMessage error={loadErr} className="savemsg err" />
@@ -364,6 +378,18 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
 
   return (
     <div className="isec pfadmin">
+      {loadErr ? (
+        <div className="loadwarn">
+          <div>
+            <b>Couldn&apos;t refresh pipelines.</b> What is below is from the
+            last load that worked.{" "}
+            <button type="button" className="linkbtn" onClick={() => void load()}>
+              Try again
+            </button>
+          </div>
+          <ErrorMessage error={loadErr} className="savemsg err" />
+        </div>
+      ) : null}
       {/* ITEM 6 — 🔴 A FOLDER MADE IN GHL, FIXED IN ONE ACTION.
           We cannot read its name — GoHighLevel returns parentName empty and
           refuses the folder endpoint — so it cannot be mapped silently. The
