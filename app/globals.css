@@ -1656,3 +1656,27 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .irow2 > .rfvalue{margin:0;padding:0;background:transparent;}
 .irow2 > .rfvalue > label{margin-top:6px;margin-bottom:0;}
 .irow2 > .rfvalue .rfvaluebox input{flex:1 1 auto;}
+
+/* ROUND 118 · ITEM 3 — the attribution move, with its per-step log.
+   ⚠️ THE STEPS ARE THE POINT, not the button. Round 93's orphan was invisible
+   because a failure said only "it failed"; a list that says which step got how
+   far is what makes a partial run recoverable. */
+.pfattrib{margin-top:10px;}
+.pfsteps{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;}
+.pfsteps li{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:5px 0;
+  border-bottom:1px solid var(--line-soft);}
+.pfsteps li:last-child{border-bottom:0;}
+.pfstepwhat{flex:0 0 58px;font-size:10px;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-3);}
+.pfsteps li.ok .pfstepwhat{color:#2d7a4f;}
+.pfsteps li.bad .pfstepwhat{color:#8c2f22;}
+.pfstepdetail{flex:1 1 auto;min-width:0;color:var(--ink-2);overflow-wrap:anywhere;}
+
+/* ROUND 118 · ITEM 4 — "created, but nobody is assigned yet".
+   ⚠️ AMBER, NOT RED. Nothing failed: the record exists and the workflow simply
+   did not name an owner. An error card would send somebody looking for a fault
+   that is not there — but silence is what leaves 185 applicants ownerless, so
+   it is not quiet either. */
+.savemsg.warn{color:var(--gold-ink);background:var(--gold-soft);
+  border:1px solid #f3e2c4;border-radius:8px;padding:7px 10px;font-size:11px;
+  line-height:1.5;font-weight:500;}

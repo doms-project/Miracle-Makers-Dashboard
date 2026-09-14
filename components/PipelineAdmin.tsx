@@ -79,7 +79,7 @@ interface Payload {
     id: string;
     ghlName: string;
     label: string;
-    appliesTo: "caregiver" | "client";
+    appliesTo: "caregiver" | "client" | "both";
     renamed: boolean;
     fields: { id: string; name: string; dataType?: string }[];
   }[];
@@ -580,6 +580,50 @@ export default function PipelineAdmin({
       setServerCounts((s) => ({ ...s, [p.id]: null }));
     } finally {
       counting.current.delete(p.id);
+    }
+  };
+
+  /**
+   * ITEM 3 — run the attribution move and SHOW EVERY STEP.
+   *
+   * ⚠️ THE STEPS ARE KEPT EVEN WHEN IT FAILS. The route returns them inside the
+   * error body precisely so a partial run is readable: "the folder was created,
+   * the first field moved, the second did not" is actionable, and "it failed"
+   * is not. That was round 93's orphan, from the outside.
+   */
+  const [attribSteps, setAttribSteps] = useState<
+    { step: string; ok: boolean; detail: string }[] | null
+  >(null);
+
+  const runAttribution = async () => {
+    setAttribSteps(null);
+    setBusy(true);
+    setBusyAction("attribution-folder");
+    setSaveErr(null);
+    setSaved("");
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...ssoHeader() },
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          action: "attribution-folder",
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (Array.isArray(j.steps)) setAttribSteps(j.steps);
+      if (!res.ok) throw apiError(res, j);
+      if (j.config) {
+        setData((d) => (d ? { ...d, config: j.config } : d));
+        announce(j.config);
+      }
+      setSaved("Referral Attribution is in place.");
+      await load(); // the folder is new, so the section list has to be re-read
+    } catch (e) {
+      setSaveErr(e);
+    } finally {
+      setBusy(false);
+      setBusyAction("");
     }
   };
 
@@ -1566,6 +1610,55 @@ export default function PipelineAdmin({
         />
       ) : null}
 
+      {/* ── ROUND 118 · ITEM 3 — THE ATTRIBUTION FOLDER MOVE, WATCHABLE ──── */}
+      <div className="istep" style={{ marginTop: 20 }}>Referral attribution</div>
+      <div className="pfgovern">
+        <p>
+          <b>Referring Partner is on the Events pipeline only.</b> It sits in
+          <b> Referral Detail</b> beside Waiver Type, Authorized Units and
+          Referral Decline Reason — waiver administration, which is a different
+          job. A folder is ticked or not ticked as a whole, so attribution
+          cannot be shown on a client record without dragging waiver fields onto
+          it too.
+        </p>
+        <p>
+          This creates <b>Referral Attribution</b>, moves <b>Referring
+          Partner</b> and <b>Event Source</b> into it, and ticks it onto every
+          client pipeline. ⚠️ <b>Nothing is deleted</b> — the fields keep their
+          values and Referral Detail keeps its other three.
+        </p>
+        <p className="ihint">
+          {/* 🔴 ROUND 93 LEFT AN ORPHAN when createFieldFolder failed, and the
+              defence is not a try/catch — it is saying which step got how far.
+              Running it twice is safe: an existing folder is reused and a field
+              already moved is skipped. */}
+          Each step is reported below as it happens. Running it again is safe —
+          it reuses the folder and skips anything already moved.
+        </p>
+      </div>
+      <div className="pfattrib">
+        <button
+          type="button"
+          className="pfprimary"
+          disabled={busy}
+          onClick={() => void runAttribution()}
+        >
+          {busy && busyAction === "attribution-folder"
+            ? "Working…"
+            : "Create Referral Attribution and move the fields"}
+        </button>
+        {attribSteps ? (
+          <ol className="pfsteps">
+            {attribSteps.map((s, i) => (
+              <li key={i} className={s.ok ? "ok" : "bad"}>
+                <span className="pfstepwhat">{s.step}</span>
+                <span className="pfstepdetail">{s.detail}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </div>
+
       {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}
       {data.contactSections?.length ? (
         <>
@@ -1599,7 +1692,11 @@ export default function PipelineAdmin({
                   {kind === "client" ? "On a client" : "On an applicant"}
                 </div>
                 {data.contactSections
-                  ?.filter((c) => c.appliesTo === kind)
+                  // ⚠️ "both" APPEARS UNDER BOTH HEADINGS — round 118, item 2.
+                  // Filtered on equality alone, the attribution folder would
+                  // render under neither, which is the same disappearance the
+                  // item is fixing one level down.
+                  ?.filter((c) => c.appliesTo === kind || c.appliesTo === "both")
                   .map((c) => (
                     <div className="pfcrow" key={c.id}>
                       <span className="pfcname">{c.label}</span>

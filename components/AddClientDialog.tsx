@@ -233,6 +233,55 @@ export default function AddClientDialog({
   const canSubmit =
     !!first.trim() && !!last.trim() && !!pipelineId && !!stageId && !blocked;
 
+  /**
+   * The assignment read-back. `waiting` while the workflow runs, then the
+   * answer — whichever it is.
+   */
+  const [assign, setAssign] = useState<{
+    oppId: string;
+    state: "waiting" | "assigned" | "nobody";
+    name?: string;
+  } | null>(null);
+
+  /**
+   * 🔴 POLL ON A SCHEDULE THAT MATCHES THE THING BEING WAITED FOR.
+   *
+   * A GHL workflow usually assigns within a few seconds, occasionally longer.
+   * So: 2s, then 5, 10, 20, 30 — six reads over half a minute, front-loaded
+   * because the common case is fast. ⚠️ NOT a fixed interval: a 1s poll for 30
+   * seconds is thirty requests against a 100-per-10s budget to learn something
+   * that almost always arrives on the first one.
+   */
+  const watchOwner = async (oppId: string) => {
+    const waits = [2000, 3000, 5000, 10000, 10000];
+    for (let i = 0; i <= waits.length; i++) {
+      if (i) await new Promise((r) => setTimeout(r, waits[i - 1]));
+      try {
+        const res = await fetch(
+          `/api/opportunities/${encodeURIComponent(oppId)}/owner`,
+          { headers: ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {}, cache: "no-store" },
+        );
+        const j = (await res.json().catch(() => ({}))) as {
+          ownerId?: string;
+          ownerName?: string;
+        };
+        if (res.ok && j.ownerId) {
+          setAssign({
+            oppId,
+            state: "assigned",
+            // ⚠️ An id with no name still means SOMEBODY owns it — see the
+            // route's note. "Someone" is true; "nobody" would not be.
+            name: j.ownerName || "Someone (their name could not be looked up)",
+          });
+          return;
+        }
+      } catch {
+        // A failed poll is not an answer. Keep trying; the loop ends by itself.
+      }
+    }
+    setAssign({ oppId, state: "nobody" });
+  };
+
   const submit = async () => {
     setBusy(true);
     setErr(null);
@@ -267,12 +316,28 @@ export default function AddClientDialog({
       const j = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         opportunityId?: string;
+        ownerAuthor?: "workflow" | "request";
         error?: string;
         detail?: string;
       };
       if (!res.ok || !j.ok)
         throw apiError(res, j);
-      onCreated(j.opportunityId || "");
+      const oppId = j.opportunityId || "";
+      onCreated(oppId);
+      // 🔴 ROUND 118 · ITEM 4 — SHOW WHAT HAPPENED, DO NOT PREDICT IT.
+      //
+      // The dashboard no longer names an owner; GoHighLevel's workflow does,
+      // and its API exposes no triggers or actions, so this cannot say in
+      // advance who that will be. It closed immediately, which meant the rep
+      // never learned the answer either way.
+      //
+      // ⚠️ AND THE FAILURE LINE IS THE POINT. 185 of 187 caregiver applicants
+      // are unassigned because nothing ever said "nobody was assigned."
+      if (oppId && j.ownerAuthor === "workflow") {
+        setAssign({ oppId, state: "waiting" });
+        void watchOwner(oppId);
+        return; // stays open until the answer is in
+      }
       onClose();
     } catch (e) {
       setErr(e);
@@ -293,9 +358,15 @@ export default function AddClientDialog({
 
         <div className="movebody">
           <div className="imeta" style={{ marginTop: 0 }}>
-            {isAdmin
-              ? "Creates the lead and their case."
-              : "Creates the lead and their case. You'll be the owner."}
+            {/* 🔴 "You'll be the owner." WAS NOT TRUE — round 118, item 4.
+                The route forced the creating rep as owner and GoHighLevel's
+                workflow then reassigned, so the one promise this screen made
+                about ownership was the one thing it could not keep. It now
+                says who decides, which is something it can. */}
+            Creates the lead and their case. Who it is assigned to is decided by
+            the pipeline&apos;s workflow in GoHighLevel
+            {isAdmin ? ", unless you pick an owner below" : ""} — this screen
+            will show you the result.
           </div>
 
           <div className="addsec">Lead</div>
@@ -507,18 +578,48 @@ export default function AddClientDialog({
 
           {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
 
+          {/* 🔴 ROUND 118 · ITEM 4 — THE ANSWER, WHICHEVER IT IS. */}
+          {assign ? (
+            assign.state === "waiting" ? (
+              <div className="savemsg ok">
+                <b>Created.</b> Assigning…
+              </div>
+            ) : assign.state === "assigned" ? (
+              <div className="savemsg ok">
+                <b>Created.</b> Assigned to <b>{assign.name}</b>.
+              </div>
+            ) : (
+              // ⚠️ NOT AN ERROR CARD. Nothing failed — the workflow simply did
+              // not name anybody, which is a fact about the account, not about
+              // this request. But it is said OUT LOUD, because the silence is
+              // what leaves 185 applicants ownerless.
+              <div className="savemsg warn">
+                <b>Created, but nobody is assigned yet.</b> The workflow did not
+                name an owner within 30 seconds. Assign it on the record — an
+                unassigned case sits in nobody&apos;s queue.
+              </div>
+            )
+          ) : null}
+
           <div className="inav">
-            <button type="button" className="ighost" onClick={onClose} disabled={busy}>
-              Cancel
-            </button>
             <button
               type="button"
-              className="ibtn"
-              disabled={busy || !canSubmit}
-              onClick={submit}
+              className="ighost"
+              onClick={onClose}
+              disabled={busy || assign?.state === "waiting"}
             >
-              {busy ? "Adding…" : "Add Lead"}
+              {assign ? "Close" : "Cancel"}
             </button>
+            {assign ? null : (
+              <button
+                type="button"
+                className="ibtn"
+                disabled={busy || !canSubmit}
+                onClick={submit}
+              >
+                {busy ? "Adding…" : "Add Lead"}
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -516,8 +516,23 @@ export interface ContactFolder {
   id: string;
   /** Section heading in the panel. */
   label: string;
-  /** Which record kind shows this section. */
-  appliesTo: "caregiver" | "client";
+  /**
+   * Which record kind shows this section.
+   *
+   * 🔴 "both" ADDED IN ROUND 118, item 2, and it is not a convenience. The
+   * attribution folder (UTM Medium, Meta Campaign ID, Meta Form ID) is written
+   * by the intent form for ANYONE who fills one in — a family asking about care
+   * and a caregiver applying for work come through the same Meta lead forms. A
+   * single-kind table would have forced a choice between hiding it from half
+   * the people it describes and listing the folder twice.
+   *
+   * ⚠️ IT IS NOT A LOOPHOLE. fieldFolders.ts:541 — the two lists being separate
+   * is what stops a caregiver pipeline reaching a client caller — is about
+   * PIPELINES, not contact folders. A contact folder is on the PERSON, and a
+   * person who filled in a form has that form's answers whichever kind of
+   * record they hold.
+   */
+  appliesTo: "caregiver" | "client" | "both";
 }
 
 export const CONTACT_FOLDERS: ContactFolder[] = [
@@ -537,6 +552,27 @@ export const CONTACT_FOLDERS: ContactFolder[] = [
   // folder holding "I want to…", age, payment and program. `name` must stay
   // exactly as GHL spells it (it is the match key); `label` is what a rep sees.
   { name: "Form | Form 6",       id: "wE8YbYKaPhigU6rJ10sl", label: "Enquiry Details",     appliesTo: "client" },
+
+  // ── ROUND 118 · ITEM 2 — THREE FOLDERS THAT WERE OURS AND WERE DROPPED ────
+  //
+  // 🔴 FOUND BY ROUND 116's OWN LISTING, which is the argument for having built
+  // it. The first two were created THIS WEEK for the referral work and their
+  // fields never rendered on a contact panel: Partner Category, Tier, Division
+  // and Notes are on every partner's record in GoHighLevel and were invisible
+  // in the dashboard.
+  //
+  // ⚠️ AND THAT IS WHY IT WENT UNNOTICED. The Referrals dashboard reads these
+  // fields BY API, by name, straight from the contact — so every tab worked
+  // perfectly while the record panel showed none of them. A feature that works
+  // through one door and is blank through the other is the hardest kind to see.
+  { name: "Referral Partner", id: "SjOstzm64Ur7tBkQxhUg", label: "Referral Partner", appliesTo: "client" },
+  { name: "Event Attendance", id: "7ygQ0GymjbM5l8kTXrkX", label: "Event Attendance", appliesTo: "client" },
+  // 🔴 BOTH SIDES, AND THE REPORT SAYS WHY. This is the attribution the intent
+  // form writes — UTM Medium, Meta Campaign ID, Meta Form ID. The same Meta
+  // lead forms feed client enquiries AND caregiver applications, so filing it
+  // under one kind would blank it for the other half of the people it
+  // describes. "Where did this person come from" is not a client question.
+  { name: "Attribution", id: "HeEHQZGk9fMUP7HeGYLU", label: "Attribution", appliesTo: "both" },
 
   // 🔴 DO NOT ADD "Contact" (O0m1HH8Mou9C9ImAPhJT) or "Additional Info"
   // (4ywdaP7iC0k6zaEkXTTl). Both are GHL STANDARD folders —
@@ -567,7 +603,12 @@ export function groupContactFields(
    */
   values?: Record<string, unknown>,
 ): FieldGroup[] {
-  const folders = CONTACT_FOLDERS.filter((f) => f.appliesTo === kind);
+  // ⚠️ `"both"` MATCHES EITHER KIND — round 118, item 2. Written as a strict
+  // equality this filter would silently drop every "both" folder, which is the
+  // exact failure the round is fixing.
+  const folders = CONTACT_FOLDERS.filter(
+    (f) => f.appliesTo === kind || f.appliesTo === "both",
+  );
   const byFolder = new Map<string, EditableFieldDef[]>();
   for (const def of defs) {
     if (HIDDEN_SET.has(norm(def.name))) continue;

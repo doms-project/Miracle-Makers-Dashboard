@@ -69,12 +69,24 @@ function coerceDetail(
 //
 //   1. PIPELINE — a rep may only create into one of their OWN home pipelines.
 //      An admin may use any selected pipeline.
-//   2. OWNER — a rep is FORCED as the owner of what they create; a client-sent
-//      `assignedTo` is ignored for them. Only an admin may set someone else.
+//   2. OWNER — a client-sent `assignedTo` is ignored for a rep. Only an admin
+//      may name someone, and if they name nobody, nobody is named.
 //
-// Rule 2 is not just about permission. Forcing the creator as owner means every
-// handover goes through Move, which writes a note and stamps the transfer
-// fields. Creation stays clean and the audit trail survives.
+// 🔴 RULE 2 CHANGED IN ROUND 118 AND THIS COMMENT IS THE REASON IT IS WRITTEN
+// DOWN. It said "a rep is FORCED as the owner of what they create… forcing the
+// creator as owner means every handover goes through Move". That was true of
+// this file and FALSE of the system: the GoHighLevel notification workflow
+// triggers on "opportunity created" — which every path into here fires — and
+// reassigns. So the forced owner survived for as long as it took the workflow
+// to run, and the audit-trail argument above was describing something that was
+// not happening. The workflow is now the only author, and it always was.
+//
+// ⚠️ AND BECAUSE NOTHING HERE CAN PREDICT THE WORKFLOW (its API returns no
+// triggers and no actions — verified twice), the response says who decided
+// rather than guessing: `ownerAuthor: "workflow"` tells the caller to read the
+// owner back from /api/opportunities/{id}/owner and to SAY SO if it stays
+// empty. 185 of 187 caregiver applicants are unassigned because nothing ever
+// said "nobody was assigned".
 async function postHandler(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as NewClientPayload & {
@@ -138,9 +150,30 @@ async function postHandler(request: Request) {
     }
 
     // ---- RULE 2: owner ------------------------------------------------------
+    //
+    // 🔴 ROUND 118 · ITEM 4 — THE DASHBOARD NO LONGER NAMES AN OWNER FOR A REP.
+    //
+    // ⚠️ DO NOT RE-ADD `assignedTo = session.userId`. It was not wrong so much
+    // as SECOND: this route forced the creating rep as owner, and the GHL
+    // notification workflow — whose trigger is "opportunity created", which
+    // every path into here fires — then reassigned by its own rules. Two
+    // mechanisms deciding one thing, the second silently winning, and nobody
+    // had written down that the first was decorative.
+    //
+    // ✅ CONFIRMED SAFE: only the workflow's NOTIFICATION actions are disabled.
+    // Its assign step runs.
+    //
+    // 🔴 AND THE SAME IS NOT TRUE OF /api/caregivers. There is NO caregiver
+    // assign workflow — CG - Onboarding Welcome sends the welcome and the
+    // notification and has no assign step, because no recruiter was ever named.
+    // 185 of 187 applicants are unassigned, which is the evidence. If that
+    // route forces an owner, it must KEEP doing so: removing it there would
+    // make every applicant ownerless with nothing to pick them up.
     let assignedTo = "";
     if (session && !isAdmin) {
-      assignedTo = session.userId; // forced; a client-sent value is ignored
+      // Deliberately empty. The workflow is the only author of a rep's
+      // ownership — see the block above before changing this.
+      assignedTo = "";
     } else if (body.assignedTo) {
       const validUsers = await getLocationUserIds();
       // Same empty-list trap as Move: an unavailable users lookup must not be
@@ -155,7 +188,12 @@ async function postHandler(request: Request) {
         );
       assignedTo = body.assignedTo;
     } else if (session) {
-      assignedTo = session.userId;
+      // ⚠️ AN ADMIN WHO PICKED NOBODY HAS NOT CHOSEN THEMSELVES. This read
+      // `assignedTo = session.userId`, so an admin adding a lead on somebody
+      // else's behalf became its owner by default — and the workflow then
+      // reassigned, which is why nobody noticed. An explicit pick above still
+      // wins; silence now means "let the workflow decide", the same as a rep.
+      assignedTo = "";
     }
 
     // ---- stage --------------------------------------------------------------
@@ -289,7 +327,18 @@ async function postHandler(request: Request) {
     return NextResponse.json(
       // `rejectedDetails` is reported rather than swallowed: a value that
       // didn't match its picklist was NOT written, and the caller should know.
-      { ok: true, opportunityId: oppId, contactId, rejectedDetails },
+      {
+        ok: true,
+        opportunityId: oppId,
+        contactId,
+        rejectedDetails,
+        // 🔴 ITEM 4 — WHO DECIDES THE OWNER, so the caller knows whether to
+        // look. "workflow" means this route named nobody and GoHighLevel's
+        // assign step will; the caller polls /owner to find out who, and says
+        // so plainly if the answer stays nobody.
+        ownerAuthor: assignedTo ? "request" : "workflow",
+        ownerId: assignedTo || "",
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
