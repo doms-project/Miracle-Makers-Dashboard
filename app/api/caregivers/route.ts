@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  entryStage,
   upsertContact,
   createOpportunity,
   getSelectedPipelines,
@@ -176,7 +177,17 @@ async function postHandler(request: Request) {
         ? choice.pipelines[0]
         : choice.pipelines.find((p) => p.id === body.pipelineId) || choice.pipelines[0];
     const full = pipelines.find((p) => p.id === dest.id);
-    const stageId = full?.stages?.[0]?.id || "";
+    // 🔴 ROUND 126 — THE SIXTH STAGE SITE, AND ROUND 121 MISSED IT. That round
+    // fixed "all five stage sites" and every one of them was in
+    // /api/referrals; this one is in the applicant intake, and it was still
+    // `stages[0]` — whatever GoHighLevel happened to return first. Every
+    // applicant added from "+ Add Applicant" has been filed there.
+    //
+    // ⚠️ SAME RULE AS A REFERRAL. An applicant pipeline's stages read
+    // "APPLIED"/"NEW"/"INITIAL CALL", which `entryStage` matches by name, and a
+    // transfer stage is never chosen for somebody who has just applied.
+    const entry = entryStage(full);
+    const stageId = entry.id;
     if (!stageId)
       return NextResponse.json(
         {
