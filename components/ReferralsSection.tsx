@@ -207,9 +207,18 @@ export default function ReferralsSection({
   const [moreNote, setMoreNote] = useState("");
 
   const divRef = useRef<HTMLDivElement | null>(null);
+  /** Which load() is the current one — see the sequence guard inside it. */
+  const loadSeq = useRef(0);
 
   // ── loading ──────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
+    // 🔴 SEQUENCED. `reloadToken` bumps after every write, and the blob can
+    // change under a load in flight — so two are routinely running at once and
+    // whichever FINISHES last used to win. That is how an error from an early
+    // attempt lands beside a list the later one loaded successfully.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
+
     setLoading(true);
     onBusy(true);
     setErr(null);
@@ -218,12 +227,22 @@ export default function ReferralsSection({
       // A second round trip for it would have shown a complete-looking queue
       // with every partner "never contacted" for as long as it took to arrive.
       const j = await apiFetch<Payload>("/api/referrals?touch=auto", { ssoBlob });
+      if (!isCurrent()) return;
+      // A success says so explicitly. Clearing on entry is not enough when an
+      // older attempt can still reject after this one resolved.
+      setErr(null);
       setData(j);
     } catch (e) {
+      if (!isCurrent()) return;
+      // ⚠️ `data` is untouched, so a failed reload keeps the section on screen.
+      // The render already draws `err` inline when there is data and only
+      // full-screen when there is none — see the two sites below.
       setErr(e);
     } finally {
-      setLoading(false);
-      onBusy(false);
+      if (isCurrent()) {
+        setLoading(false);
+        onBusy(false);
+      }
     }
   }, [ssoBlob, onBusy]);
 

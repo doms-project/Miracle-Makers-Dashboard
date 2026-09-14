@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 
@@ -35,6 +35,8 @@ export default function PipelineAccessTab({
   const [masterUsers, setMasterUsers] = useState<string[]>([]);
   const [usingEnvFallback, setUsingEnvFallback] = useState(false);
   const [loadErr, setLoadErr] = useState<unknown>(null);
+  /** Which load() is current — see the sequence guard inside it. */
+  const loadSeq = useRef(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -48,6 +50,15 @@ export default function PipelineAccessTab({
   }, [ssoBlob]);
 
   const load = useCallback(async () => {
+    // 🔴 SEQUENCED — round 111. `load` depends on `headers()`, which depends on
+    // `ssoBlob`, and the effect below depends on `load`. So the moment the blob
+    // arrives this fires a SECOND time with a first still in flight, and until
+    // now whichever FINISHED last won. The first one is the unauthenticated
+    // request, its 401 is "Sign-in required", and if it lands second it draws a
+    // sign-in error over a grid that loaded correctly.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
+
     setLoading(true);
     setLoadErr(null);
     try {
@@ -56,7 +67,9 @@ export default function PipelineAccessTab({
         cache: "no-store",
       });
       const j = await res.json().catch(() => ({}));
+      if (!isCurrent()) return;
       if (!res.ok) throw apiError(res, j);
+      setLoadErr(null);
       setUsers(j.users || []);
       setPipelines(j.pipelines || []);
       setGrants(j.grants || {});
@@ -68,9 +81,10 @@ export default function PipelineAccessTab({
       setUsingEnvFallback(!!j.usingEnvFallback);
       setDirty(false);
     } catch (e) {
+      if (!isCurrent()) return;
       setLoadErr(e);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [headers]);
 
@@ -174,7 +188,10 @@ export default function PipelineAccessTab({
       </div>
     );
 
-  if (loadErr)
+  // ⚠️ Only when there is nothing to show. With a grid already loaded, a failed
+  // RELOAD used to replace it with a full-screen card — the same wall-instead-of
+  // -strip mistake as the client board, one screen over.
+  if (loadErr && !users.length)
     return (
       <div className="statewrap">
         <div className="statecard">
@@ -191,6 +208,18 @@ export default function PipelineAccessTab({
 
   return (
     <div className="scroll pawrap">
+      {loadErr ? (
+        <div className="loadwarn">
+          <div>
+            <b>Couldn&apos;t refresh pipeline access.</b> The grid below is from
+            the last load that worked — do not save over it until this clears.{" "}
+            <button type="button" className="linkbtn" onClick={load}>
+              Try again
+            </button>
+          </div>
+          <ErrorMessage error={loadErr} className="errbody" />
+        </div>
+      ) : null}
       {/* The single most important thing an admin needs to know here. */}
       <div className="panote">
         <b>This controls the dashboard only.</b> GoHighLevel has its own{" "}

@@ -68,7 +68,16 @@ export default function CaregiversSection({
     return h;
   }, [ssoBlob]);
 
+  /** Which load() is current — see the sequence guard inside it. */
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    // 🔴 SEQUENCED — round 111. `headers()` depends on `ssoBlob`, so this is
+    // rebuilt and re-fired when the blob lands, and `load` is also called again
+    // after every link/unlink. Two in flight, and the loser used to win.
+    const seq = ++loadSeq.current;
+    const isCurrent = () => seq === loadSeq.current;
+
     setLoadErr(null);
     try {
       const res = await fetch(
@@ -76,11 +85,16 @@ export default function CaregiversSection({
         { headers: headers(), cache: "no-store" },
       );
       const j = await res.json().catch(() => ({}));
+      if (!isCurrent()) return;
       if (!res.ok) throw apiError(res, j);
+      setLoadErr(null);
       setCaregivers(j.caregivers || []);
     } catch (e) {
+      if (!isCurrent()) return;
       setLoadErr(e);
-      setCaregivers([]);
+      // ⚠️ The linked caregivers stay. Emptying the list on a failed refresh
+      // says "nobody is assigned to this client", which is a different and much
+      // more alarming claim than "we could not check just now".
     }
   }, [opportunityId, headers]);
 
@@ -241,9 +255,15 @@ export default function CaregiversSection({
           <span className="cgcount">{caregivers.length}</span>
         ) : null}
       </div>
+      {/* A failed RELOAD is shown above the list it failed to replace, not
+          instead of it — the names already on screen are still the last true
+          answer. Only a first load with nothing to show takes the whole slot. */}
+      {loadErr && caregivers?.length ? (
+        <ErrorMessage error={loadErr} className="savemsg err" />
+      ) : null}
       {caregivers === null ? (
         <div className="cgmuted">Loading…</div>
-      ) : loadErr ? (
+      ) : loadErr && !caregivers.length ? (
         <ErrorMessage error={loadErr} className="savemsg err" />
       ) : caregivers.length === 0 ? (
         <div className="cgmuted">No {plural} assigned yet.</div>
