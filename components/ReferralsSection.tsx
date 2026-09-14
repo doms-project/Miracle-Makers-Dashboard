@@ -3339,14 +3339,24 @@ function AddPartnerDialog({
                   </button>
                 </div>
               ) : q.trim().length >= 2 ? (
-                <div className="rfhits">
+                /* 🔴 ROUND 125 — THE SAME FAULT, A SECOND TIME, AND THE BRIEF
+                   ONLY SAW ONE OF THEM. Identical structure to the Log a
+                   referral picker: three one-line states inside `.rfhits`,
+                   which is `overflow-y:auto`, with `.rfmodal .rfdhint`'s
+                   margin-top:-8px pulling the first of them above the scroll
+                   box and getting its top line cut off. Same restructure —
+                   `.rfhits` wraps hits and nothing else. */
+                <>
                   {searching ? (
                     <div className="rfdhint">Searching…</div>
                   ) : searchErr ? (
-                    <div className="rfdhint rfdbad">
-                      The contact search failed — {searchErr}. This is not the
-                      same as nobody matching, so do <b>not</b> add them as a new
-                      organisation until it works: you would create a duplicate.
+                    <div className="rfdhint rfdbad rfsearchfail">
+                      {/* ⚠️ The trailing full stop is stripped — apiFetch's
+                          message already ends in one. */}
+                      The contact search failed — {searchErr.replace(/\.\s*$/, "")}. This is
+                      not the same as nobody matching, so do <b>not</b> add them
+                      as a new organisation until it works: you would create a
+                      duplicate.
                     </div>
                   ) : !hits.length ? (
                     <div className="rfdhint">
@@ -3354,21 +3364,23 @@ function AddPartnerDialog({
                       organisation</b> if they are not in GoHighLevel yet.
                     </div>
                   ) : (
-                    hits.map((h) => (
-                      <button
-                        type="button"
-                        className="rfhit"
-                        key={h.id}
-                        onClick={() => setPicked({ id: h.id, name: h.name })}
-                      >
-                        <span className="n">{h.name}</span>
-                        <span className="m">
-                          {[h.email, h.phone].filter(Boolean).join(" · ") || "no email or phone"}
-                        </span>
-                      </button>
-                    ))
+                    <div className="rfhits">
+                      {hits.map((h) => (
+                        <button
+                          type="button"
+                          className="rfhit"
+                          key={h.id}
+                          onClick={() => setPicked({ id: h.id, name: h.name })}
+                        >
+                          <span className="n">{h.name}</span>
+                          <span className="m">
+                            {[h.email, h.phone].filter(Boolean).join(" · ") || "no email or phone"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   )}
-                </div>
+                </>
               ) : (
                 <div className="rfdhint">
                   Type at least two characters. ⚠️ This searches every contact,
@@ -3927,7 +3939,7 @@ function LogReferralDialog({
                     <div className="rfdhint">Loading their cases…</div>
                   ) : oppsErr ? (
                     <div className="rfdhint rfdbad">
-                      Could not read their cases — {oppsErr}. Nothing has been
+                      Could not read their cases — {oppsErr.replace(/\.\s*$/, "")}. Nothing has been
                       changed.
                     </div>
                   ) : !opps.length ? (
@@ -3965,36 +3977,59 @@ function LogReferralDialog({
                   )}
                 </>
               ) : q.trim().length >= 2 ? (
-                <div className="rfhits">
+                /* 🔴 ROUND 125 — THE THREE NON-LIST STATES ARE OUT OF `.rfhits`.
+                   //
+                   MEASURED, not guessed: the failure message rendered at y=532
+                   inside a container whose content box starts at y=540. It was
+                   EIGHT PIXELS ABOVE ITS OWN SCROLL BOX, and an `overflow-y:auto`
+                   element cannot paint above its content box — so the top of the
+                   first line was cut off, which is exactly what the screen showed.
+                   //
+                   The -8px came from `.rfmodal .rfdhint{margin:-8px 0 14px}`,
+                   which exists to tuck a hint up under the field it explains.
+                   That is right for a hint after an `.irow` and wrong for the
+                   first child of a scrolling box.
+                   //
+                   ⚠️ AND THE REAL FIX IS STRUCTURAL, NOT A MARGIN OVERRIDE.
+                   `.rfhits` is a SCROLLING LIST OF HITS. Searching…, the failure
+                   and "no matches" are not hits — they are one line each, they
+                   must never scroll, and they must never be clipped. Putting them
+                   outside it means no future margin can clip them either. */
+                <>
                   {searching ? (
                     <div className="rfdhint">Searching…</div>
                   ) : searchErr ? (
-                    <div className="rfdhint rfdbad">
-                      The contact search failed — {searchErr}. Do <b>not</b>{" "}
-                      switch to New enquiry to get past it: that would create a
-                      duplicate of someone who already exists.
+                    <div className="rfdhint rfdbad rfsearchfail">
+                      {/* ⚠️ THE TRAILING FULL STOP IS STRIPPED. apiFetch's
+                          message already ends in one ("…then reload."), and this
+                          sentence added another: "…then reload.. Do not switch". */}
+                      The contact search failed — {searchErr.replace(/\.\s*$/, "")}. Do{" "}
+                      <b>not</b> switch to New enquiry to get past it: that would
+                      create a duplicate of someone who already exists.
                     </div>
                   ) : !hits.length ? (
                     <div className="rfdhint">
                       No contact matches “{q.trim()}”.
                     </div>
                   ) : (
-                    hits.map((h) => (
-                      <button
-                        type="button"
-                        className="rfhit"
-                        key={h.id}
-                        onClick={() => setPicked({ id: h.id, name: h.name })}
-                      >
-                        <span className="n">{h.name}</span>
-                        <span className="m">
-                          {[h.email, h.phone].filter(Boolean).join(" · ") ||
-                            "no email or phone"}
-                        </span>
-                      </button>
-                    ))
+                    <div className="rfhits">
+                      {hits.map((h) => (
+                        <button
+                          type="button"
+                          className="rfhit"
+                          key={h.id}
+                          onClick={() => setPicked({ id: h.id, name: h.name })}
+                        >
+                          <span className="n">{h.name}</span>
+                          <span className="m">
+                            {[h.email, h.phone].filter(Boolean).join(" · ") ||
+                              "no email or phone"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   )}
-                </div>
+                </>
               ) : (
                 <div className="rfdhint">
                   Type at least two characters. Nothing is created on this path

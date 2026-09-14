@@ -1504,8 +1504,18 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    rendered perfectly, impossible to see. Measured, not guessed:
    scripts/partner-picker-proof.mjs reported {"w":484,"h":0} with hitCount 3. */
 .rfdbad{color:var(--bad,#7a2727)}
+/* 🔴 ROUND 125 — A SCROLLING BOX CANNOT PAINT ABOVE ITS OWN CONTENT BOX, and
+   `.rfmodal .rfdhint` carries margin-top:-8px. Measured: the search-failure
+   message rendered at y=532 inside a container starting at y=540, so the top
+   of its first line was simply cut off. The states moved OUT of here (see
+   ReferralsSection); this belt-and-braces rule means a hint that ever lands
+   back inside cannot be clipped by the same -8px again. */
 .rfhits{flex:0 0 auto;display:flex;flex-direction:column;gap:2px;max-height:210px;
   overflow-y:auto;margin-bottom:10px}
+.rfhits > *{margin-top:0}
+/* The failure message is the one that stops somebody creating a duplicate, so
+   it gets the room it needs and never scrolls. */
+.rfmodal .rfsearchfail{margin:2px 0 14px}
 .rfhit{display:flex;flex-direction:column;gap:1px;text-align:left;background:none;
   border:1px solid var(--line);border-radius:7px;padding:7px 10px;cursor:pointer;font:inherit}
 .rfhit:hover{background:var(--row-hover);border-color:var(--plum-line)}

@@ -345,6 +345,78 @@ for (const f of files) {
   });
 }
 
+// ── 10 · A NEGATIVE TOP MARGIN THAT WILL BE CLIPPED BY A SCROLL BOX ───────
+// 🔴 ROUND 125, MEASURED: the contact-search failure message rendered at y=532
+// inside a container whose content box started at y=540. `.rfmodal .rfdhint`
+// carries margin-top:-8px so a hint tucks up under the field it explains — and
+// `.rfhits` is overflow-y:auto. An overflow container CANNOT PAINT ABOVE ITS
+// OWN CONTENT BOX, so the top of the first line was simply cut off. The message
+// existed to stop somebody creating a duplicate, and the half that said why was
+// the half that was missing.
+//
+// ⚠️ TWO INSTANCES, and the brief had seen one. This rule is what finds the
+// third.
+//
+// It works on the SELECTORS, not on the DOM: a class that is given a negative
+// top margin anywhere, and is also used inside a container that scrolls, is the
+// shape. Reported as a shape to check rather than a certainty — the two can be
+// in different subtrees, which is why the wording says "check", not "broken".
+{
+  const clipping = new Set();
+  const negTop = new Set();
+  // 🔴 BLOCKS, NOT LINES — and the first version of this rule was line-based
+  // and therefore BLIND to the very declaration it was written for. `.rfhits`
+  // spans two lines, with the selector on the first and `overflow-y:auto` on
+  // the second, so a per-line scan never associated the two and the rule
+  // reported clean on the exact shape round 125 fixed. Sweep rule 8 carries the
+  // same warning in its own comment; I wrote it and then did it again.
+  {
+    const cssText = cssCode(readFileSync("app/globals.css", "utf8")).join("\n");
+    for (const block of cssText.split("}")) {
+      const at = block.indexOf("{");
+      if (at < 0) continue;
+      const sel = block.slice(0, at);
+      const decl = block.slice(at + 1);
+      const classes = sel.match(/\.[A-Za-z0-9_-]+/g) || [];
+      if (/overflow(-y)?\s*:\s*(auto|scroll|hidden)/.test(decl))
+        for (const c of classes) clipping.add(c);
+      // margin:-8px 0 14px   or   margin-top:-8px
+      if (/margin(-top)?\s*:\s*-/.test(decl)) for (const c of classes) negTop.add(c);
+    }
+  }
+  const src2 = files
+    .filter((f) => /\.tsx$/.test(f))
+    .map((f) => ({ f, t: readFileSync(f, "utf8") }));
+  for (const neg of negTop) {
+    const negCls = neg.slice(1);
+    for (const clip of clipping) {
+      const clipCls = clip.slice(1);
+      if (clipCls === negCls) continue;
+      // Is the negative-margin class ever used INSIDE the clipping one?
+      for (const { f, t } of src2) {
+        const at = t.indexOf(`className="${clipCls}"`);
+        if (at < 0) continue;
+        // ⚠️ THE FIRST CHILD, NOT "anywhere inside". A negative top margin only
+        // gets clipped when the element sits at the TOP of the scroll box; one
+        // further down merely overlaps the sibling above it, which is what the
+        // margin is FOR. A first pass flagged `.movebody … .rfdhint` — the
+        // intended use — and a sweep that produces a false positive is worse
+        // than no sweep. Rule 9 says so in its own comment.
+        const window = t.slice(at + clipCls.length, at + 1400);
+        const first = window.match(/className="([^"]*)"/);
+        if (!first || !new RegExp(`\\b${negCls}\\b`).test(first[1])) continue;
+        flag("A NEGATIVE TOP MARGIN INSIDE A CONTAINER THAT CLIPS",
+             f, t.slice(0, at).split("\n").length, `.${clipCls} … .${negCls}`,
+             `\`.${negCls}\` is given a negative top margin in globals.css and is ` +
+             `rendered inside \`.${clipCls}\`, which clips. A scroll box cannot ` +
+             "paint above its own content box, so the first line is cut off, not " +
+             "scrolled to. Round 125 shipped this twice.");
+        break;
+      }
+    }
+  }
+}
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`
