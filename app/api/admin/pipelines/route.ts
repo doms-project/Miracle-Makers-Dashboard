@@ -5,6 +5,8 @@ import {
   getPipelineConfig,
   savePipelineConfig,
   createPipeline,
+  deletePipeline,
+  countOpportunitiesInPipeline,
   createFieldFolder,
   createCustomField,
   moveFieldToFolder,
@@ -12,7 +14,13 @@ import {
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
-import { FOLDERS, FOLDER_LABELS, folderKeyById, fieldIsAlwaysIntercepted } from "@/lib/fieldFolders";
+import {
+  FOLDERS,
+  FOLDER_LABELS,
+  CONTACT_FOLDERS,
+  folderKeyById,
+  fieldIsAlwaysIntercepted,
+} from "@/lib/fieldFolders";
 import { divisionLabel } from "@/lib/division";
 import { checkFieldName, type KnownField } from "@/lib/fieldNaming";
 import {
@@ -165,10 +173,19 @@ export async function GET(request: Request) {
   try {
     const denied = gate(request);
     if (denied) return denied;
-    const [pipelines, defs, config] = await Promise.all([
+    const [pipelines, defs, config, contactDefs] = await Promise.all([
       listPipelines(),
       getEditableFieldDefs("opportunity"),
       getPipelineConfig(),
+      // 🔴 ITEM O — THE CONTACT SIDE, READ ONLY. The screen could not show a
+      // contact folder at all, so "Enquiry Details" — one field, used by zero of
+      // 1,114 contacts, drawn on every client record — was invisible to the only
+      // person who could act on it.
+      //
+      // ⚠️ NO EXTRA ROUND TRIP IN PRACTICE. getEditableFieldDefs memoizes per
+      // model per lambda, and the contact defs are already fetched by
+      // /api/opportunities on the same instance.
+      getEditableFieldDefs("contact").catch(() => [] as EditableFieldDef[]),
     ]);
     const sections = sectionsFromDefs(defs, config.folderNames);
     const live = new Set(pipelines.map((p) => p.id));
@@ -211,6 +228,64 @@ export async function GET(request: Request) {
           .map((sec) => ({ id: sec.id, key: sec.key, fields: sec.fields })),
         known: knownFields(defs, sections),
         sharedKey: folderKeyById(FOLDERS.shared),
+        /**
+         * 🔴 ITEM O — BOTH NAMES, BECAUSE THE DASHBOARD RENAMES THEM.
+         *
+         * "Form | Form 6" is what an admin sees in GoHighLevel. "Enquiry
+         * Details" is what this app calls it. An admin searching GHL for the
+         * second finds nothing, which is how a dead folder stays on every client
+         * record with nobody able to name it.
+         *
+         * ⚠️ READ-ONLY, AND THE SCREEN SAYS SO. CONTACT_FOLDERS is a hardcoded
+         * table (lib/fieldFolders.ts:493) and making it editable is a different
+         * control from this checklist — contact folders are not pipeline-scoped.
+         * Showing what is there and what it costs is the half that can be true
+         * today; see the report.
+         */
+        contactSections: CONTACT_FOLDERS.map((f) => {
+          const fields = contactDefs.filter(
+            (d) =>
+              (d.parentId && d.parentId === f.id) ||
+              (!!(d.parentName || "").trim() &&
+                (d.parentName || "").trim().toLowerCase() === f.name.toLowerCase()),
+          );
+          return {
+            id: f.id,
+            ghlName: f.name,
+            label: f.label,
+            appliesTo: f.appliesTo,
+            renamed: f.label.trim().toLowerCase() !== f.name.trim().toLowerCase(),
+            fields: fields.map((d) => ({ id: d.id, name: d.name, dataType: d.dataType })),
+          };
+        }),
+        /**
+         * ⚠️ A CONTACT FOLDER GOHIGHLEVEL HAS AND THIS APP DOES NOT — item O's
+         * second half. Its fields fall to the contact-side orphan bucket with no
+         * banner and no way to file them, so the only thing this screen can
+         * honestly do today is SAY THEY EXIST.
+         *
+         * 🔴 GHL STANDARD FOLDERS ARE NOT LISTED. "Contact" and "Additional
+         * Info" are standardFieldsFolder:true — fieldFolders.ts:511 — and
+         * offering either drags every native field onto the panel. They are not
+         * candidates, so listing them as unfiled would be an invitation to a
+         * known incident.
+         */
+        unknownContactFolders: (() => {
+          const known = new Set(CONTACT_FOLDERS.map((f) => f.id));
+          const standard = new Set([
+            "O0m1HH8Mou9C9ImAPhJT", // "Contact"
+            "4ywdaP7iC0k6zaEkXTTl", // "Additional Info"
+          ]);
+          const out = new Map<string, { id: string; fields: { id: string; name: string }[] }>();
+          for (const d of contactDefs) {
+            const pid = (d.parentId || "").trim();
+            if (!pid || known.has(pid) || standard.has(pid)) continue;
+            const g = out.get(pid) || { id: pid, fields: [] };
+            g.fields.push({ id: d.id, name: d.name });
+            out.set(pid, g);
+          }
+          return [...out.values()];
+        })(),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -223,6 +298,8 @@ interface Body {
   ssoKey?: string;
   action?:
     | "create-pipeline"
+    | "delete-pipeline"
+    | "count-records"
     | "save-config"
     | "create-section"
     | "create-field"
@@ -235,6 +312,8 @@ interface Body {
   folders?: string[];
   // save-config
   config?: unknown;
+  // delete-pipeline
+  pipelineId?: string;
   // create-section / create-field
   parentId?: string;
   fieldId?: string;
@@ -279,6 +358,95 @@ export async function POST(request: Request) {
           pipelines: { ...config.pipelines, [created.id]: entry },
         });
         return NextResponse.json({ pipeline: created, config: saved });
+      }
+
+      /**
+       * 🔴 ITEM L — DELETE, GATED ON THE RECORD COUNT SERVER-SIDE.
+       *
+       * The screen counts too, from the payload it already holds, and refuses to
+       * offer the button. That is the good experience. THIS is the guarantee:
+       * the browser's number is whatever the browser last loaded, and an
+       * opportunity created in GoHighLevel five minutes ago is not in it.
+       *
+       * ⚠️ ONE REQUEST. `limit=1`, read `meta.total` — not the 6-page fetch
+       * `searchAll` would do. Delete is a rare, deliberate, irreversible action;
+       * one call to make it safe is the cheapest thing on this screen.
+       *
+       * 🔴 AND A COUNT WE COULD NOT GET REFUSES. `null` is "I could not count",
+       * never "zero" — the same rule round 115b's scope dialog follows.
+       */
+      /**
+       * 🔴 ITEM L — HOW MANY RECORDS ARE IN ONE PIPELINE, ON DEMAND.
+       *
+       * ⚠️ THE BROWSER'S OWN COUNTS CANNOT ANSWER THIS, and finding that out is
+       * what item L cost. `recordCounts` is built by counting the records in the
+       * loaded payloads, so a pipeline with NO records never appears in it — and
+       * "zero" is then indistinguishable from "never fetched". The two pipelines
+       * this item exists to delete, "test" and "round 91 probe", are both
+       * unconfigured: they are in NO board's payload, so the browser has never
+       * seen them and never will.
+       *
+       * 🔴 ONE REQUEST, WHEN A ROW IS OPENED. Not on load, and not for all ten —
+       * the same rule item T follows. `limit=1` and read the total.
+       */
+      case "count-records": {
+        const pipelineId = String(body.pipelineId || "").trim();
+        if (!pipelineId)
+          return NextResponse.json(
+            { error: "No pipeline was named.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        const count = await countOpportunitiesInPipeline(pipelineId);
+        // ⚠️ null TRAVELS AS null. The screen shows "I cannot say" and offers no
+        // delete; turning it into 0 here is how an empty-looking pipeline with
+        // records in it gets deleted.
+        return NextResponse.json({ pipelineId, count });
+      }
+
+      case "delete-pipeline": {
+        const pipelineId = String(body.pipelineId || "").trim();
+        if (!pipelineId)
+          return NextResponse.json(
+            { error: "No pipeline was named.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        const count = await countOpportunitiesInPipeline(pipelineId);
+        if (count == null)
+          return NextResponse.json(
+            {
+              error:
+                "I could not count the records in this pipeline, so I will not delete it. Try again in a moment.",
+              status: 503,
+            } as ApiError,
+            { status: 503 },
+          );
+        if (count > 0)
+          return NextResponse.json(
+            {
+              error: `${count} record${count === 1 ? " is" : "s are"} in this pipeline. Move or close ${
+                count === 1 ? "it" : "them"
+              } in GoHighLevel first.`,
+              status: 409,
+            } as ApiError,
+            { status: 409 },
+          );
+        await deletePipeline(pipelineId);
+        // 🔴 AND THE STORED ENTRY GOES WITH IT — round 90's stale-key case.
+        //
+        // ⚠️ THIS IS NOT THE AUTO-DELETE ROUND 90 REFUSED. That refusal protects
+        // an admin who deleted the wrong pipeline IN GHL and is about to
+        // recreate it — the app must not throw away a mapping it cannot know
+        // they still want. Here the same admin is deleting both, in one action,
+        // having been told what it does. Leaving the entry behind would only
+        // manufacture the stale key this screen then asks them to reconcile.
+        const cfg = await getPipelineConfig();
+        let config = cfg;
+        if (Object.prototype.hasOwnProperty.call(cfg.pipelines, pipelineId)) {
+          const rest = { ...cfg.pipelines };
+          delete rest[pipelineId];
+          config = await savePipelineConfig({ ...cfg, seeded: true, pipelines: rest });
+        }
+        return NextResponse.json({ deleted: pipelineId, config });
       }
 
       case "save-config": {

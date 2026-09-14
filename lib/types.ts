@@ -181,6 +181,8 @@ export interface OpportunitiesResponse {
   // and cannot fetch it. ABSENT means "could not be read", which the panel
   // treats as "not loaded" and falls back to the code map — never as "empty".
   pipelineFolders?: Record<string, string[]>;
+  /** ITEM Q — field ids hidden per pipeline. Only pipelines that hide something. */
+  pipelineExclusions?: Record<string, string[]>;
   // folderId -> its NAME. The only place a folder name can live: GoHighLevel
   // returns parentName empty on every field and refuses the folder endpoint
   // for opportunity/contact objects.

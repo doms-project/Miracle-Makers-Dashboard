@@ -64,15 +64,27 @@ async function buildResponse(
   // take the record panel down with it.
   let pipelineFolders: Record<string, string[]> | undefined;
   let folderNames: Record<string, string> | undefined;
+  // 🔴 ITEM Q — the per-pipeline exclusions travel with the folders they modify.
+  // Separately fetched, they could arrive a frame later and the panel would draw
+  // a field the admin hid.
+  let pipelineExclusions: Record<string, string[]> | undefined;
   try {
     const cfg = await getPipelineConfig();
     pipelineFolders = Object.fromEntries(
       Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
     );
     folderNames = cfg.folderNames;
+    // ⚠️ ONLY THE PIPELINES THAT EXCLUDE SOMETHING. Ten empty arrays on every
+    // payload to say "nothing is hidden anywhere" is the common case.
+    pipelineExclusions = Object.fromEntries(
+      Object.entries(cfg.pipelines)
+        .filter(([, e]) => e.exclude?.length)
+        .map(([id, e]) => [id, e.exclude as string[]]),
+    );
   } catch {
     pipelineFolders = undefined;
     folderNames = undefined;
+    pipelineExclusions = undefined;
   }
 
   const meta = {
@@ -80,6 +92,7 @@ async function buildResponse(
     users: labelledUsers,
     fieldDefs,
     pipelineFolders,
+    pipelineExclusions,
     folderNames,
     pipelines,
     stagesByPipeline,

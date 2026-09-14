@@ -298,7 +298,12 @@ const rowsJ = await frame.evaluate(() => {
     const header = row.querySelector(".pfscope")?.textContent?.trim() || "";
     const count = row.querySelector(".pfcount")?.textContent?.trim() || "";
     const sel = row.querySelector(".pfscopeedit select");
-    const ticked = [...row.querySelectorAll('.pfseclist input[type="checkbox"]')]
+    // 🔴 THE FOLDER TICK ONLY — `.pfseclab`. Round 116 put a checkbox on every
+    // FIELD inside an expanded section (item Q), and `expanded` is one Set
+    // shared by every row, so a card expanded earlier in this run added seven
+    // per-field boxes to each row's count: 2 read as 9 and 3 as 10. The rows
+    // were right; the selector had stopped meaning "sections ticked".
+    const ticked = [...row.querySelectorAll('.pfseclist .pfseclab input[type="checkbox"]')]
       .filter((c) => c.checked).length;
     out.push({ name, header, count, dropdown: sel ? sel.value : null, ticked });
   }

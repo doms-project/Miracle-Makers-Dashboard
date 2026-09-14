@@ -6,7 +6,42 @@ import ConfirmDialog from "./ConfirmDialog";
 import { apiError } from "@/lib/apiFetch";
 import { checkFieldName, suggestPrefix, composeFieldName, type KnownField } from "@/lib/fieldNaming";
 import { divisionLabel } from "@/lib/division";
-import type { StoredPipelineConfig, StoredPipelineEntry } from "@/lib/pipelineConfig";
+import type {
+  StoredPipelineConfig,
+  StoredPipelineEntry,
+  PipelineScope,
+} from "@/lib/pipelineConfig";
+
+/**
+ * 🔴 ITEM K — SCOPE IS "WHICH PICKER LISTS THIS PIPELINE", AND THE SCREEN NOW
+ * SAYS SO.
+ *
+ * It read "Scope · Decides which section its records appear in", which is the
+ * thing it is NOT: 115b established that `groupFieldsForPipeline` never consults
+ * scope, so records render identically either way. What it decides is whether
+ * the Clients board's picker or the Caregivers board's picker offers it.
+ *
+ * ⚠️ AND "neither" IS NOT A THIRD BOARD. It is an absence — for a pipeline read
+ * by its own section, like Events, which the Referrals screen resolves by name
+ * and nothing else ever browses.
+ */
+const SCOPE_CHOICES: { value: PipelineScope; label: string; hint: string }[] = [
+  {
+    value: "client",
+    label: "the Clients board picker",
+    hint: "beside OLTL Enrollment and Private Pay Clients",
+  },
+  {
+    value: "caregiver",
+    label: "the Caregivers board picker",
+    hint: "beside the applicant pipelines",
+  },
+  {
+    value: "none",
+    label: "neither — read by its own section",
+    hint: "Events is read by Referrals, not browsed as cases",
+  },
+];
 
 interface Section {
   key: string;
@@ -39,6 +74,25 @@ interface Payload {
   unconfiguredFolders: Unconfigured[];
   /** Folders withheld from the checklist because ticking them does nothing. */
   inertSections?: Unconfigured[];
+  /** ITEM O — the contact-side table, read-only, with BOTH names. */
+  contactSections?: {
+    id: string;
+    ghlName: string;
+    label: string;
+    appliesTo: "caregiver" | "client";
+    renamed: boolean;
+    fields: { id: string; name: string; dataType?: string }[];
+  }[];
+  /** ITEM O — contact folders GoHighLevel has that this app has never heard of. */
+  unknownContactFolders?: { id: string; fields: { id: string; name: string }[] }[];
+}
+
+/** What `countFieldValues` gives back. null means "I could not count". */
+interface ValueCount {
+  perField: Record<string, number>;
+  /** DISTINCT records holding a value in at least one of the fields asked for. */
+  records: number;
+  scanned: number;
 }
 
 // ⚠️ SUGGEST TWO, DO NOT IMPOSE. Every pipeline on this account starts with an
@@ -80,6 +134,7 @@ export default function PipelineAdmin({
   ssoBlob,
   recordCounts,
   countsComplete,
+  countFieldValues,
   onConfigSaved,
 }: {
   ssoBlob: string | null;
@@ -100,7 +155,21 @@ export default function PipelineAdmin({
    * The save already returns the new config; this just hands it over, so no
    * extra request is made to learn what we were just told.
    */
-  onConfigSaved?: (folders: Record<string, string[]>) => void;
+  onConfigSaved?: (
+    folders: Record<string, string[]>,
+    exclusions: Record<string, string[]>,
+  ) => void;
+  /**
+   * 🔴 ITEM T — how many records in this pipeline hold a value in these fields.
+   *
+   * ⚠️ CALLED ON DEMAND, NEVER ON LOAD. Expanding a section asks; opening an
+   * untick confirmation asks. Nothing sweeps 596 records to render a screen
+   * nobody has interacted with.
+   *
+   * ⚠️ AND null MEANS "I CANNOT SAY", not zero — same contract as
+   * `countsComplete` above, for the same lazily-loaded applicant payload.
+   */
+  countFieldValues?: (pipelineId: string, fieldIds: string[]) => ValueCount | null;
   /**
    * ⚠️ FALSE MEANS "I CANNOT SAY", NOT "ZERO". The applicant payload loads
    * lazily, so before the Caregivers section has been opened a caregiver
@@ -113,8 +182,37 @@ export default function PipelineAdmin({
   const [scopeAsk, setScopeAsk] = useState<{
     p: PipelineRow;
     entry: StoredPipelineEntry;
-    next: "client" | "caregiver";
+    next: PipelineScope;
   } | null>(null);
+  /**
+   * 🔴 ITEM T — an untick that would hide filled-in data, awaiting an answer.
+   * `field` for one field, `section` for a whole folder. Held with the count
+   * already taken, so the dialog never recomputes while it is open.
+   */
+  const [hideAsk, setHideAsk] = useState<{
+    p: PipelineRow;
+    entry: StoredPipelineEntry;
+    what: "field" | "section";
+    label: string;
+    count: ValueCount | null;
+    apply: () => void;
+  } | null>(null);
+  /** ITEM L — the pipeline awaiting a delete confirmation. */
+  const [deleteAsk, setDeleteAsk] = useState<PipelineRow | null>(null);
+  /**
+   * 🔴 ITEM L — COUNTS ASKED OF THE SERVER, pipelineId → number | null.
+   *
+   * ⚠️ `recordCounts` CANNOT ANSWER THIS AND IT TOOK A MEASUREMENT TO SEE IT.
+   * It is built by counting the records in the loaded payloads, so a pipeline
+   * with NO records is simply absent from it — and absent already means "not
+   * loaded". The two pipelines item L exists to remove are unconfigured, in no
+   * board's payload, so the browser will never hold a count for either.
+   *
+   * `null` is a recorded "I could not count", and is NOT retried on every
+   * render — a value being present is what stops the request repeating.
+   */
+  const [serverCounts, setServerCounts] = useState<Record<string, number | null>>({});
+  const counting = useRef<Set<string>>(new Set());
   const [data, setData] = useState<Payload | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
   /** Which load() is current — see the sequence guard inside it. */
@@ -274,6 +372,11 @@ export default function PipelineAdmin({
         Object.fromEntries(
           Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
         ),
+        Object.fromEntries(
+          Object.entries(cfg.pipelines)
+            .filter(([, e]) => e.exclude?.length)
+            .map(([id, e]) => [id, e.exclude as string[]]),
+        ),
       );
     },
     [onConfigSaved],
@@ -322,6 +425,35 @@ export default function PipelineAdmin({
     return on ? migrated : [...migrated, s.key];
   };
 
+  /**
+   * 🔴 ITEM Q — IS THIS FIELD EXCLUDED ON THIS PIPELINE?
+   *
+   * ⚠️ DEFAULT IS ALL-IN. An empty (or absent) `exclude` means every field of
+   * every ticked folder shows — which is what makes "a field added in GHL
+   * tomorrow appears by itself" true. Read the direction carefully: this returns
+   * TRUE for the exception.
+   */
+  const isExcluded = (entry: StoredPipelineEntry | undefined, fieldId: string) =>
+    !!entry?.exclude?.includes(fieldId);
+
+  /** The entry with one field's exclusion flipped. */
+  const withExclusion = (
+    entry: StoredPipelineEntry,
+    fieldId: string,
+    exclude: boolean,
+  ): StoredPipelineEntry => {
+    const cur = entry.exclude ?? [];
+    const next = exclude
+      ? [...new Set([...cur, fieldId])]
+      : cur.filter((x) => x !== fieldId);
+    // ⚠️ THE KEY IS DROPPED WHEN IT EMPTIES. `exclude: []` on every pipeline is
+    // bytes in a custom value with a size limit, and it makes "this pipeline
+    // hides nothing" read as a configured state rather than the default.
+    return next.length
+      ? { ...entry, exclude: next }
+      : { scope: entry.scope, folders: entry.folders };
+  };
+
   const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
     if (!data) return;
     const next: StoredPipelineConfig = {
@@ -349,6 +481,123 @@ export default function PipelineAdmin({
       setData({ ...data, config: j.config, stale: data.stale.filter((s) => s !== pipelineId) });
       announce(j.config);
     }
+  };
+
+  /**
+   * 🔴 ITEM T — WARN BEFORE HIDING SOMETHING THAT HOLDS DATA.
+   *
+   * Unticking hides a field from every record in the pipeline. THE DATA IS NOT
+   * DELETED — it stays in GoHighLevel — but a rep who filled it in yesterday
+   * finds it gone today and assumes it was lost. So say so first, with the
+   * number, because "43 records" is what makes it a decision.
+   *
+   * ⚠️ NO DIALOG WHEN THE COUNT IS ZERO. A field nobody has filled is a free
+   * untick, and a confirmation on every one of them is how people learn to click
+   * through the ones that matter.
+   *
+   * ⚠️ AND NEVER ON THE WAY BACK. Ticking a field SHOWS it — nothing can be lost
+   * by that, so it saves immediately.
+   */
+  const askThenHide = (
+    p: PipelineRow,
+    entry: StoredPipelineEntry,
+    what: "field" | "section",
+    label: string,
+    fieldIds: string[],
+    apply: () => void,
+  ) => {
+    const count = countFieldValues ? countFieldValues(p.id, fieldIds) : null;
+    // 🔴 A REAL ZERO SKIPS THE DIALOG. A null does NOT — "I could not count" is
+    // exactly when an admin should be asked, not when they should be waved
+    // through. This is the same distinction round 115b drew for the scope
+    // dialog, in the direction that costs a click rather than data.
+    if (count && count.records === 0) {
+      apply();
+      return;
+    }
+    setHideAsk({ p, entry, what, label, count, apply });
+  };
+
+  const onExclusionToggle = (
+    p: PipelineRow,
+    entry: StoredPipelineEntry,
+    s: Section,
+    f: { id: string; name: string },
+  ) => {
+    const hiding = !isExcluded(entry, f.id);
+    const apply = () => void saveEntry(p.id, withExclusion(entry, f.id, hiding));
+    if (!hiding) {
+      apply(); // showing it again — nothing to warn about
+      return;
+    }
+    askThenHide(p, entry, "field", f.name, [f.id], apply);
+  };
+
+  /**
+   * The count this screen trusts for one pipeline, or undefined for "not known
+   * yet". The browser's payload wins when it has one — it is free and current —
+   * and the server answers for everything else.
+   *
+   * ⚠️ THE CAREGIVER CAVEAT STILL APPLIES to the browser half: before the
+   * applicant payload has loaded, a caregiver pipeline's absence from
+   * `recordCounts` means nothing, so it falls through to the server.
+   */
+  const countFor = (p: PipelineRow): number | null | undefined => {
+    const entry = data?.config.pipelines[p.id];
+    const local = recordCounts[p.id];
+    if (local != null && (countsComplete || entry?.scope !== "caregiver")) return local;
+    return serverCounts[p.id];
+  };
+
+  /**
+   * 🔴 ONE REQUEST, WHEN THE ROW IS OPENED — not on load, not for all ten.
+   * Ten pipelines counted on load is ten searches against a 100-per-10-seconds
+   * budget to render a screen nobody has interacted with yet.
+   */
+  const ensureCount = async (p: PipelineRow) => {
+    if (countFor(p) !== undefined) return;
+    if (counting.current.has(p.id)) return;
+    counting.current.add(p.id);
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...ssoHeader() },
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          action: "count-records",
+          pipelineId: p.id,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      // ⚠️ A FAILED COUNT IS RECORDED AS null, NOT LEFT UNSET. Unset would
+      // re-fire on the next render; null is "asked, and could not be told",
+      // which is what the row then says.
+      setServerCounts((s) => ({
+        ...s,
+        [p.id]: res.ok && typeof j.count === "number" ? j.count : null,
+      }));
+    } catch {
+      setServerCounts((s) => ({ ...s, [p.id]: null }));
+    } finally {
+      counting.current.delete(p.id);
+    }
+  };
+
+  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
+  const deletePipelineRow = async (p: PipelineRow) => {
+    const j = await post({ action: "delete-pipeline", pipelineId: p.id }, p.id);
+    if (!j || !data) return;
+    // ⚠️ REMOVED FROM THE LIST HERE, not by a reload. `load()` would work, but it
+    // re-fetches every field definition to redraw a list we can correct in place
+    // — and the route has already told us the new config.
+    setData({
+      ...data,
+      pipelines: data.pipelines.filter((x) => x.id !== p.id),
+      config: j.config ?? data.config,
+      stale: data.stale.filter((s) => s !== p.id),
+    });
+    if (j.config) announce(j.config);
+    setSaved(`Deleted “${p.name}”.`);
   };
 
   // ── NEW FIELD ──────────────────────────────────────────────────────────
@@ -438,7 +687,22 @@ export default function PipelineAdmin({
 
   const inert = data.inertSections || [];
 
-  const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
+  /**
+   * @param per when given, the expanded panel becomes an EXCLUSION editor for
+   *            that pipeline. Absent in the create form, deliberately: there is
+   *            no pipeline yet to exclude a field on, and offering the control
+   *            there would imply the exceptions travel with the template.
+   */
+  const sectionRow = (
+    s: Section,
+    checked: boolean,
+    onToggle: () => void,
+    per?: { p: PipelineRow; entry: StoredPipelineEntry | undefined },
+  ) => {
+    const hiddenHere = per
+      ? s.fields.filter((f) => isExcluded(per.entry, f.id)).length
+      : 0;
+    return (
     <div
       className={`pfsec ${s.named ? "" : "unnamed"}${
         expanded.has(s.key) ? " open" : ""
@@ -482,7 +746,20 @@ export default function PipelineAdmin({
           </span>
         )}
       </label>
-      <span className="pfseccount">{s.fields.length}</span>
+      {/* 🔴 ITEM Q — THE COUNT SAYS WHAT IS SHOWING, NOT WHAT EXISTS. A folder
+          of six with two excluded reads "4 of 6", because "6" beside a panel
+          drawing four is the kind of quiet disagreement round 115b's item I was
+          about. Unmodified folders are unchanged: a bare number. */}
+      <span
+        className="pfseccount"
+        title={
+          hiddenHere
+            ? `${hiddenHere} of ${s.fields.length} hidden on this pipeline`
+            : undefined
+        }
+      >
+        {hiddenHere ? `${s.fields.length - hiddenHere} of ${s.fields.length}` : s.fields.length}
+      </span>
       <button
         type="button"
         className="pfsectoggle"
@@ -519,14 +796,55 @@ export default function PipelineAdmin({
            whether "Submitted At" is a date you can sort on or a string somebody
            typed, and `dataType` is already on every definition. */
         <div className="pfsecfields">
+          {/* 🔴 ITEM Q — PER-FIELD EXCLUSIONS, INSIDE THE FOLDER TICK.
+              Shared holds six fields and NONE of them describes an applicant:
+              Road Blocker is an enrolment concept, Case Manager and Sales Rep
+              Assistant are client roles, County means the CLIENT's county. So
+              ticking Shared onto a caregiver pipeline put six client fields on
+              an applicant card — and unticking it lost Office too, which a
+              recruiter legitimately wants.
+              ⚠️ THE TICK IS "SHOW", THE STORED VALUE IS "EXCLUDE". Ticked is the
+              default, so a field created in GoHighLevel tomorrow is in nobody's
+              exclusion list and appears by itself — fieldFolders.ts:8. */}
           <ol className="pffieldlist">
-            {s.fields.map((f) => (
-              <li key={f.id}>
-                <span className="pffname">{f.name}</span>
-                <span className="pfftype">{typeLabel(f.dataType)}</span>
-              </li>
-            ))}
+            {s.fields.map((f) => {
+              const off = per ? isExcluded(per.entry, f.id) : false;
+              return (
+                <li key={f.id} className={off ? "pffoff" : undefined}>
+                  {per ? (
+                    <input
+                      type="checkbox"
+                      className="pffbox"
+                      checked={!off}
+                      // ⚠️ A FOLDER THAT IS NOT TICKED HAS NOTHING TO EXCLUDE
+                      // FROM. Leaving these live would let an admin curate a
+                      // panel that is not being drawn, and then wonder why.
+                      disabled={busy || !checked || !per.entry}
+                      title={
+                        !checked
+                          ? "Tick the section first — nothing from it is shown yet"
+                          : off
+                            ? "Hidden on this pipeline. Tick to show it again."
+                            : "Shown on this pipeline. Untick to hide it."
+                      }
+                      onChange={() => per.entry && onExclusionToggle(per.p, per.entry, s, f)}
+                    />
+                  ) : null}
+                  <span className="pffname">{f.name}</span>
+                  <span className="pfftype">{typeLabel(f.dataType)}</span>
+                </li>
+              );
+            })}
           </ol>
+          {per && checked ? (
+            <div className="ihint pffnote">
+              {/* ⚠️ SAY WHERE THE DATA WENT. "Hidden" and "deleted" are the same
+                  word to somebody who filled the field in yesterday. */}
+              Unticking a field hides it from this pipeline&apos;s panel. The values
+              stay in GoHighLevel and come back if you tick it again. A field added
+              in GoHighLevel later is not on this list, so it appears by itself.
+            </div>
+          ) : null}
           {!s.named ? (
             <div className="pfsecid" title="Paste this into GoHighLevel to find the folder">
               <code>{s.id}</code>
@@ -535,7 +853,8 @@ export default function PipelineAdmin({
         </div>
       ) : null}
     </div>
-  );
+    );
+  };
 
   return (
     <div className="isec pfadmin">
@@ -942,13 +1261,42 @@ export default function PipelineAdmin({
       <div className="pflist">
         {data.pipelines.map((p) => {
           const entry = data.config.pipelines[p.id];
+          const count = countFor(p);
           return (
-            <details className="pfrow" key={p.id}>
+            <details
+              className="pfrow"
+              key={p.id}
+              // 🔴 COUNT WHEN IT OPENS. `onToggle` fires for open AND close;
+              // `ensureCount` is idempotent and returns immediately once a count
+              // (or a recorded null) exists, so closing costs nothing.
+              onToggle={(e) => {
+                if ((e.currentTarget as HTMLDetailsElement).open) void ensureCount(p);
+              }}
+            >
               <summary>
                 <b>{p.name}</b>
-                <span className="pfscope">{entry ? entry.scope : "not configured"}</span>
+                <span className="pfscope">
+                  {/* ⚠️ "none" IS NOT A WORD ON A SCREEN. It is a stored token;
+                      what an admin needs to read is what it does. */}
+                  {!entry
+                    ? "not configured"
+                    : entry.scope === "none"
+                      ? "no board picker"
+                      : entry.scope}
+                </span>
                 <span className="pfcount">
                   {entry ? `${entry.folders.length} section(s)` : "Shared only"}
+                  {entry?.exclude?.length
+                    ? ` · ${entry.exclude.length} field${
+                        entry.exclude.length === 1 ? "" : "s"
+                      } hidden`
+                    : ""}
+                </span>
+                {/* ⚠️ THE RECORD COUNT ON THE FACE OF THE ROW — item L. It is
+                    what decides whether Delete is offered, so reading it should
+                    not require opening the row and reading a refusal. */}
+                <span className="pfreccount">
+                  {count != null ? `${count} record${count === 1 ? "" : "s"}` : ""}
                 </span>
               </summary>
               {/* 🔴 SCOPE IS EDITABLE AFTER ALL — round 112, item 9.
@@ -973,13 +1321,20 @@ export default function PipelineAdmin({
                 )
               ) : null}
               <div className="pfscopeedit">
-                <label htmlFor={`pfscope-${p.id}`}>Scope</label>
+                {/* 🔴 ITEM K — THE LABEL WAS WRONG, NOT JUST SHORT. "Decides
+                    which section its records appear in" describes something
+                    this setting does not do: 115b established that
+                    groupFieldsForPipeline never consults scope, so records draw
+                    identically either way. What it decides is which BOARD
+                    PICKER lists the pipeline — and the pipeline dropdown is the
+                    only place anyone selects one. */}
+                <label htmlFor={`pfscope-${p.id}`}>Show this pipeline in</label>
                 <select
                   id={`pfscope-${p.id}`}
                   value={entry?.scope ?? ""}
                   disabled={busy}
                   onChange={(e) => {
-                    const next = e.target.value as "client" | "caregiver" | "";
+                    const next = e.target.value as PipelineScope | "";
                     if (!next) return;
                     // 🔴 THE APP'S OWN DIALOG — round 115b, item M. A native
                     // confirm() cannot be styled, carries the vercel.app URL,
@@ -997,13 +1352,63 @@ export default function PipelineAdmin({
                     });
                   }}
                 >
-                  <option value="">Choose a scope…</option>
-                  <option value="client">Client</option>
-                  <option value="caregiver">Caregiver</option>
+                  <option value="">Choose where it is listed…</option>
+                  {SCOPE_CHOICES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
                 </select>
                 <span className="ihint">
-                  Decides which section its records appear in. Reversible.
+                  {/* 🔴 THE RULE, IN ONE SENTENCE: hide from BROWSING surfaces,
+                      never from ADMIN ones. Verified in the code, not assumed —
+                      every board reads getSelectedPipelines(scope) and every
+                      admin surface reads listPipelines(): the import wizard
+                      (api/import/meta), the access grid
+                      (api/admin/pipeline-access) and this screen. */}
+                  Which board&apos;s pipeline picker offers it. The import wizard,
+                  Admin → Access and this screen always list every pipeline.
+                  Reversible.
                 </span>
+                {/* 🔴 ITEM L — DELETE, GATED ON THE RECORD COUNT.
+                    There was deliberately no delete action because "the
+                    opportunities in a stage have to go somewhere". That holds
+                    for a pipeline WITH records. It does not hold for an empty
+                    one — and two empty, never-configured probe pipelines have
+                    been in this list for twenty-five rounds with no way to
+                    remove them. */}
+                <div className="pfdelete">
+                  {count === undefined ? (
+                    <span className="ihint">Counting the records in this pipeline…</span>
+                  ) : count === null ? (
+                    // ⚠️ THE SAME "I CANNOT SAY" AS THE SCOPE DIALOG, and no
+                    // delete offered in that state. A refusal to guess is not a
+                    // reason to offer the irreversible action anyway.
+                    <span className="ihint">
+                      I could not count the records in this pipeline, so Delete is
+                      not offered. Close and reopen this row to try again.
+                    </span>
+                  ) : count > 0 ? (
+                    // 🔴 SAY THE NUMBER. That is what makes the refusal
+                    // understandable rather than arbitrary.
+                    <span className="ihint">
+                      <b>
+                        {count} record{count === 1 ? " is" : "s are"}
+                      </b>{" "}
+                      in this pipeline. Move or close {count === 1 ? "it" : "them"}{" "}
+                      in GoHighLevel first.
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="pfdangerbtn"
+                      disabled={busy}
+                      onClick={() => setDeleteAsk(p)}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="pfseclist">
                 {data.sections.map((s) =>
@@ -1027,11 +1432,32 @@ export default function PipelineAdmin({
                       });
                       return;
                     }
-                    void saveEntry(p.id, {
-                      scope: entry.scope,
+                    const next = {
+                      ...entry,
                       folders: normaliseFolders(entry, s, data.sections),
-                    });
-                  }),
+                    };
+                    const apply = () => void saveEntry(p.id, next);
+                    // 🔴 ITEM T, FOR A WHOLE FOLDER — sum across its fields.
+                    // "Shared holds values on 61 records in this pipeline."
+                    // ⚠️ Only on the way OUT. Ticking a section shows fields;
+                    // nothing can be lost by that.
+                    if (!isTicked(entry, s)) {
+                      apply();
+                      return;
+                    }
+                    askThenHide(
+                      p,
+                      entry,
+                      "section",
+                      s.named ? s.label : "This section",
+                      // ⚠️ EXCLUDED FIELDS ARE NOT COUNTED. They are already
+                      // hidden, so unticking the folder does not hide them
+                      // again — counting them would inflate the warning with
+                      // records that lose nothing.
+                      s.fields.filter((f) => !isExcluded(entry, f.id)).map((f) => f.id),
+                      apply,
+                    );
+                  }, { p, entry }),
                 )}
               </div>
             </details>
@@ -1045,18 +1471,26 @@ export default function PipelineAdmin({
           holds 139. */}
       {scopeAsk ? (
         <ConfirmDialog
-          title={`Move “${scopeAsk.p.name}” to the ${
-            scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"
-          } section?`}
-          confirmLabel={`Move to ${
-            scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"
-          }`}
+          title={
+            scopeAsk.next === "none"
+              ? `Take “${scopeAsk.p.name}” off both board pickers?`
+              : `Move “${scopeAsk.p.name}” to the ${
+                  scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"
+                } section?`
+          }
+          confirmLabel={
+            scopeAsk.next === "none"
+              ? "Take it off both"
+              : `Move to ${scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"}`
+          }
           busy={busy}
           onCancel={() => setScopeAsk(null)}
           onConfirm={() => {
             const { p, entry, next } = scopeAsk;
             setScopeAsk(null);
-            void saveEntry(p.id, { scope: next, folders: entry.folders });
+            // ⚠️ `...entry` — the exclusions travel with it. Rebuilt as
+            // `{ scope, folders }` they would be silently dropped by a move.
+            void saveEntry(p.id, { ...entry, scope: next });
           }}
           body={
             <>
@@ -1079,9 +1513,33 @@ export default function PipelineAdmin({
                     number would be a guess.
                   </>
                 )}{" "}
-                They leave the{" "}
-                {scopeAsk.entry.scope === "caregiver" ? "Caregivers" : "Clients"}{" "}
-                board and appear on the other one instead.
+                {scopeAsk.next === "none" ? (
+                  <>
+                    They leave the{" "}
+                    {scopeAsk.entry.scope === "caregiver" ? "Caregivers" : "Clients"}{" "}
+                    board picker and appear on no board. The records are not
+                    touched — they are simply not browsable from a board until a
+                    section is built that reads them, the way Referrals reads
+                    Events.
+                  </>
+                ) : (
+                  <>
+                    They leave the{" "}
+                    {scopeAsk.entry.scope === "caregiver"
+                      ? "Caregivers"
+                      : scopeAsk.entry.scope === "none"
+                        ? "no"
+                        : "Clients"}{" "}
+                    board and appear on the other one instead.
+                  </>
+                )}
+              </p>
+              <p className="ihint">
+                {/* 🔴 THE HALF THAT DOES NOT CHANGE, SAID OUT LOUD. */}
+                The import wizard, Admin → Access and this screen still list it.
+                Importing is a deliberate choice with a preview and a duplicate
+                check in front of it, and granting access is a permission
+                decision — neither is browsing.
               </p>
               <p>
                 {/* 🔴 THE QUESTION YOU ASKED: KEPT AND STILL USED. Verified —
@@ -1102,6 +1560,190 @@ export default function PipelineAdmin({
               <p className="ihint">
                 Nothing changes in GoHighLevel. This is the dashboard&apos;s own
                 stored configuration.
+              </p>
+            </>
+          }
+        />
+      ) : null}
+
+      {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}
+      {data.contactSections?.length ? (
+        <>
+          <div className="istep" style={{ marginTop: 20 }}>
+            Contact sections — not editable here
+          </div>
+          <div className="pfgovern">
+            <p>
+              {/* 🔴 THE HONEST HALF. These are hardcoded in
+                  lib/fieldFolders.ts:493 and there is no way for an admin to
+                  change them without a deploy. Building a control that only
+                  half works would be worse than saying so. */}
+              <b>These are sections on the PERSON, not on the case.</b> They
+              follow a contact onto every record they hold, are the same
+              everywhere, and are chosen by whether the record is a client or an
+              applicant — not per pipeline. They are set in code today, so this
+              list shows what is configured rather than letting you change it.
+            </p>
+            <p>
+              {/* 🔴 BOTH NAMES, BECAUSE THE DASHBOARD RENAMES THEM. An admin
+                  searching GoHighLevel for "Enquiry Details" finds nothing. */}
+              <b>Where the two names differ, GoHighLevel&apos;s is on the right.</b>{" "}
+              Search for that one in GoHighLevel — the left-hand name is this
+              dashboard&apos;s.
+            </p>
+          </div>
+          <div className="pfcontacts">
+            {(["client", "caregiver"] as const).map((kind) => (
+              <div className="pfcgroup" key={kind}>
+                <div className="pfchead">
+                  {kind === "client" ? "On a client" : "On an applicant"}
+                </div>
+                {data.contactSections
+                  ?.filter((c) => c.appliesTo === kind)
+                  .map((c) => (
+                    <div className="pfcrow" key={c.id}>
+                      <span className="pfcname">{c.label}</span>
+                      {c.renamed ? (
+                        <span className="pfcghl" title="The name in GoHighLevel">
+                          {c.ghlName}
+                        </span>
+                      ) : (
+                        <span className="pfcsame">same name in GoHighLevel</span>
+                      )}
+                      <span className="pfcfields">
+                        {/* ⚠️ A SECTION WITH NO FIELDS IS THE FINDING. "Enquiry
+                            Details" holds one field used by nobody and renders
+                            on every client record; a zero here is how that
+                            becomes visible at all. */}
+                        {c.fields.length} field{c.fields.length === 1 ? "" : "s"}
+                      </span>
+                      <code className="pfcid" title="Paste this into GoHighLevel to find the folder">
+                        {c.id}
+                      </code>
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </div>
+          {data.unknownContactFolders?.length ? (
+            <div className="pfstale">
+              <b>
+                Contact folders in GoHighLevel this dashboard does not know about
+              </b>
+              <div className="ihint">
+                Their fields are dropped from contact panels — not shown under
+                &quot;Other&quot;, because a location&apos;s contact fields include
+                every unrelated form on the account. Adding one needs a code
+                change today; this is here so you can see they exist.
+              </div>
+              {data.unknownContactFolders.map((u) => (
+                <div className="pfstalerow" key={u.id}>
+                  <code>{u.id}</code>
+                  <span className="ihint">
+                    {u.fields.length} field{u.fields.length === 1 ? "" : "s"} ·{" "}
+                    {u.fields
+                      .slice(0, 3)
+                      .map((f) => f.name)
+                      .join(", ")}
+                    {u.fields.length > 3 ? "…" : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {/* 🔴 ITEM T — THE UNTICKING WARNING, WITH THE COUNT. */}
+      {hideAsk ? (
+        <ConfirmDialog
+          title={
+            hideAsk.what === "field"
+              ? `Hide “${hideAsk.label}” from ${hideAsk.p.name}?`
+              : `Hide the ${hideAsk.label} section from ${hideAsk.p.name}?`
+          }
+          confirmLabel="Hide it anyway"
+          busy={busy}
+          onCancel={() => setHideAsk(null)}
+          onConfirm={() => {
+            const { apply } = hideAsk;
+            setHideAsk(null);
+            apply();
+          }}
+          body={
+            <>
+              <p>
+                {hideAsk.count ? (
+                  <>
+                    <b>{hideAsk.label}</b>{" "}
+                    {hideAsk.what === "field" ? "holds a value" : "holds values"} on{" "}
+                    <b>
+                      {hideAsk.count.records} record
+                      {hideAsk.count.records === 1 ? "" : "s"}
+                    </b>{" "}
+                    in this pipeline.
+                  </>
+                ) : (
+                  // ⚠️ THE 115c WORDING, NOT A CONFIDENT ZERO.
+                  <>
+                    <b>I cannot say how many records hold a value here</b> — the
+                    applicant payload has not been loaded in this tab, so the
+                    number would be a guess.
+                  </>
+                )}{" "}
+                Unticking hides{" "}
+                {hideAsk.what === "field" ? "it" : "those fields"} from the panel
+                — <b>the values stay in GoHighLevel</b> and come back if you tick{" "}
+                {hideAsk.what === "field" ? "it" : "the section"} again.{" "}
+                <b>Nothing is deleted.</b>
+              </p>
+              {hideAsk.count ? (
+                <p className="ihint">
+                  {/* ⚠️ SAY WHAT WAS COUNTED. A number with no denominator is a
+                      number nobody can check. */}
+                  Counted over the {hideAsk.count.scanned} record
+                  {hideAsk.count.scanned === 1 ? "" : "s"} this tab has loaded for
+                  this pipeline.
+                </p>
+              ) : null}
+            </>
+          }
+        />
+      ) : null}
+
+      {/* 🔴 ITEM L — THE DELETE CONFIRMATION. The app's own dialog, as 115b
+          built for the scope confirm — not a browser confirm(). */}
+      {deleteAsk ? (
+        <ConfirmDialog
+          title={`Delete “${deleteAsk.name}” from GoHighLevel?`}
+          confirmLabel="Delete the pipeline"
+          busy={busy}
+          onCancel={() => setDeleteAsk(null)}
+          onConfirm={() => {
+            const p = deleteAsk;
+            setDeleteAsk(null);
+            void deletePipelineRow(p);
+          }}
+          body={
+            <>
+              <p>
+                <b>This pipeline is empty</b> — no opportunities are in any of its{" "}
+                {deleteAsk.stages.length} stage
+                {deleteAsk.stages.length === 1 ? "" : "s"}. It is deleted{" "}
+                <b>in GoHighLevel</b>, not just here, and that cannot be undone
+                from this screen.
+              </p>
+              <p>
+                {/* 🔴 AND THE STORED ENTRY GOES TOO — round 90's stale key.
+                    Leaving it behind would manufacture exactly the "no longer in
+                    GoHighLevel" row this screen then asks you to reconcile. */}
+                Its dashboard configuration is removed with it. Deleting a
+                pipeline in GoHighLevel alone leaves a stale entry here; doing
+                both from one button is what avoids that.
+              </p>
+              <p className="ihint">
+                The count is re-checked on the server before anything is deleted,
+                so a record created since this screen loaded still stops it.
               </p>
             </>
           }

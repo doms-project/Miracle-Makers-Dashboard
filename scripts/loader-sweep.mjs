@@ -200,6 +200,75 @@ cssAll.forEach((l, i) => {
        "edits one half.");
 });
 
+// ── 8 · A <details> WHOSE CONTENT NEVER COLLAPSES ─────────────────────────
+//
+// 🔴 THIS SHIPPED, AND READING THE JSX DENIED IT. The Pipelines screen renders
+// each pipeline as `<details className="pfrow">` with no `open`, so the code
+// says every row is collapsed. Measured in a browser: `OPEN at load: 0` and
+// `chips VISIBLE: 8`. A closed <details> hides its children through the UA
+// stylesheet, and ANY author `display:` rule on one of those children wins —
+// `.pfseclist{display:grid}` did, so the chevron did nothing and the screen was
+// ten expanded grids stacked.
+//
+// ⚠️ INVISIBLE IN REVIEW, because the markup is right and the CSS is right;
+// only their interaction is wrong. That is precisely what a sweep is for.
+const detailsBlocks = []; // { file, line, cls, children:Set<string> }
+for (const f of files) {
+  const lines = readFileSync(f, "utf8").split("\n");
+  lines.forEach((l, i) => {
+    if (!/<details\b/.test(l)) return;
+    // ⚠️ THE OPENING TAG MAY SPAN LINES, and this rule missed its own motivating
+    // case because it did not. `<details` + `className="pfrow"` on the next line
+    // matched nothing, so the round-116 defect would have walked straight past
+    // the rule written to catch it. Verified by removing the fix and watching
+    // the sweep stay silent.
+    const head = lines.slice(i, i + 6).join(" ");
+    const m = head.slice(0, head.indexOf(">") + 1 || undefined)
+      .match(/className=[{"`]*["`]([a-zA-Z][\w-]*)/);
+    if (!m) return;
+    // 🔴 DIRECT CHILDREN ONLY, and that is not pedantry. The browser hides the
+    // DIRECT children of a closed <details>; a class three levels down is
+    // already inside something hidden and cannot defeat the collapse. Scanning
+    // "the next 220 lines" flagged `.sechead` and `.istep` — two classes that
+    // are nowhere near a direct child — and a false positive teaches the next
+    // person to ignore this output.
+    const openIndent = l.search(/\S/);
+    const children = new Set();
+    let sawSummary = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      const cur = lines[j];
+      const ind = cur.search(/\S/);
+      if (ind <= openIndent && /^\s*<\/details>/.test(cur)) break;
+      if (/<\/summary>/.test(cur)) { sawSummary = true; continue; }
+      if (!sawSummary) continue;
+      // A direct child opens at exactly one indent step in.
+      if (ind !== openIndent + 2) continue;
+      const cm = cur.match(/className=["`]([a-zA-Z][\w- ]*)["`]/);
+      if (cm) for (const c of cm[1].split(/\s+/)) if (c) children.add(c);
+    }
+    detailsBlocks.push({ file: f, line: i + 1, cls: m[1], children });
+  });
+}
+for (const d of detailsBlocks) {
+  const guarded = cssAll.some((l) =>
+    new RegExp(`\\.${d.cls}:not\\(\\[open\\]\\)`).test(l),
+  );
+  if (guarded) continue;
+  const offenders = cssAll.filter((l) => {
+    const m = l.match(/^\.([a-zA-Z][\w-]*)\s*\{([^}]*)/);
+    if (m && d.children.has(m[1]) && /display\s*:/.test(m[2])) return true;
+    const n = l.match(new RegExp(`^\\.${d.cls}\\s+\\.([\\w-]+)\\s*\\{([^}]*)`));
+    return !!(n && d.children.has(n[1]) && /display\s*:/.test(n[2]));
+  });
+  if (!offenders.length) continue;
+  flag("A <details> WHOSE CONTENT WILL NOT COLLAPSE", d.file, d.line,
+       `<details className="${d.cls}">`,
+       `${offenders[0].trim().slice(0, 70)} sets display on a DIRECT CHILD of ` +
+       `.${d.cls}, which OVERRIDES the browser's collapse — the block renders ` +
+       `open whatever the \`open\` attribute says. Add ` +
+       `\`.${d.cls}:not([open]) > :not(summary){display:none}\`.`);
+}
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`
