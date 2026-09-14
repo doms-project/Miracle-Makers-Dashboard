@@ -4600,6 +4600,20 @@ export default function Dashboard() {
    * DATA. The button already reads "Refreshing…", which is where that belongs.
    */
   const showSpinner = loading && data.length === 0;
+  /**
+   * pipelineId → records held in this tab, across BOTH families.
+   *
+   * ⚠️ Client records always count; applicant records only once the Caregivers
+   * section has been opened. `cgLoaded` travels with this so the consumer can
+   * tell "none" from "not looked".
+   */
+  const recordCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const r of data) m[r.pipelineId] = (m[r.pipelineId] || 0) + 1;
+    for (const r of cgData) m[r.pipelineId] = (m[r.pipelineId] || 0) + 1;
+    return m;
+  }, [data, cgData]);
+
   /** Nothing loaded, and the last attempt failed → the full-screen card. */
   const loadFailed = error && data.length === 0 ? error : null;
   /** Records on screen from an earlier load → a strip, and keep them. */
@@ -5897,7 +5911,17 @@ export default function Dashboard() {
                not used. The board and the list each sit in a .scroll; the admin
                screens now do too. */
             <div className="scroll adminscroll">
-              <PipelineAdmin ssoBlob={sso.blob} />
+              <PipelineAdmin
+                ssoBlob={sso.blob}
+                // Counted from the payloads this tab already holds — see the
+                // prop's note. `cgLoaded` is what makes the caregiver half
+                // trustworthy; before it, a zero means "not looked at".
+                recordCounts={recordCounts}
+                countsComplete={cgLoaded}
+                // ITEM S — the record panel reads `pipelineFolders`; a tick in
+                // the admin screen now reaches it without a reload.
+                onConfigSaved={setPipelineFolders}
+              />
             </div>
           ) : (
             <div className="empty">

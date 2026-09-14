@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
+import ConfirmDialog from "./ConfirmDialog";
 import { apiError } from "@/lib/apiFetch";
 import { checkFieldName, suggestPrefix, composeFieldName, type KnownField } from "@/lib/fieldNaming";
 import { divisionLabel } from "@/lib/division";
@@ -13,7 +14,8 @@ interface Section {
   label: string;
   /** False when the label is a guess — the row then shows the id too. */
   named: boolean;
-  fields: { id: string; name: string }[];
+  /** `dataType` is what the expanded panel renders beside each name. */
+  fields: { id: string; name: string; dataType?: string }[];
 }
 interface PipelineRow {
   id: string;
@@ -45,6 +47,22 @@ interface Payload {
 // with two rows and an Add button rather than a template.
 const SUGGESTED_STAGES = ["NEW LEAD", "LOST"];
 
+/**
+ * 🔴 ONE VOCABULARY FOR ONE THING — round 115b, item I.
+ *
+ * The expanded section panel and the create-field form both name a field's
+ * type, and they must not name it two ways. "Choose one" vs "Dropdown — pick
+ * one" is exactly how a screen ends up describing the same control twice, and
+ * the create form's wording is the one a person has already read.
+ *
+ * ⚠️ An unknown key is returned AS GoHighLevel SENT IT rather than mapped to
+ * "Other": a type this app has never met is something to notice, not to hide.
+ */
+export function typeLabel(dataType?: string): string {
+  const k = String(dataType || "").toUpperCase();
+  return DATA_TYPES.find((d) => d.key === k)?.label || dataType || "—";
+}
+
 const DATA_TYPES = [
   { key: "TEXT", label: "Text" },
   { key: "LARGE_TEXT", label: "Long text" },
@@ -58,7 +76,45 @@ const DATA_TYPES = [
   { key: "CHECKBOX", label: "Tickbox — yes or no" },
 ];
 
-export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
+export default function PipelineAdmin({
+  ssoBlob,
+  recordCounts,
+  countsComplete,
+  onConfigSaved,
+}: {
+  ssoBlob: string | null;
+  /**
+   * pipelineId → records currently loaded for it.
+   *
+   * 🔴 FROM THE BROWSER'S OWN PAYLOAD, not a new request. The admin route would
+   * need one opportunity search per pipeline to answer this, which is six calls
+   * against a 100-per-10-seconds budget to render a sentence. page.tsx already
+   * has the records.
+   */
+  recordCounts: Record<string, number>;
+  /**
+   * 🔴 ITEM S — TELL THE REST OF THE APP. Ticking a section saved correctly but
+   * the record panel's "+ Add a section (N available)" stayed stale until a
+   * page reload, because the panel reads `pipelineFolders` from the
+   * /api/opportunities payload and nothing told it the config had changed.
+   * The save already returns the new config; this just hands it over, so no
+   * extra request is made to learn what we were just told.
+   */
+  onConfigSaved?: (folders: Record<string, string[]>) => void;
+  /**
+   * ⚠️ FALSE MEANS "I CANNOT SAY", NOT "ZERO". The applicant payload loads
+   * lazily, so before the Caregivers section has been opened a caregiver
+   * pipeline's count is unknown — and a confirm dialog that says "0 records
+   * move" when it means "I did not look" is worse than one that says nothing.
+   */
+  countsComplete: boolean;
+}) {
+  /** The pipeline whose scope change is awaiting confirmation. */
+  const [scopeAsk, setScopeAsk] = useState<{
+    p: PipelineRow;
+    entry: StoredPipelineEntry;
+    next: "client" | "caregiver";
+  } | null>(null);
   const [data, setData] = useState<Payload | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
   /** Which load() is current — see the sequence guard inside it. */
@@ -183,6 +239,19 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const canCreate =
     !!name.trim() && !!scope && stages.some((s) => s.trim()) && picked.size > 0 && !busy;
 
+  /** Hand a freshly saved config to whoever renders record panels. */
+  const announce = useCallback(
+    (cfg: StoredPipelineConfig) => {
+      if (!onConfigSaved) return;
+      onConfigSaved(
+        Object.fromEntries(
+          Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
+        ),
+      );
+    },
+    [onConfigSaved],
+  );
+
   // ── PER-PIPELINE FOLDER EDITING ────────────────────────────────────────
   /**
    * 🔴 A STORED FOLDER MAY BE A KEY *OR* A RAW ID — round 113, item J.
@@ -237,6 +306,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     if (j) {
       setSaved("Saved.");
       setData({ ...data, config: j.config });
+      announce(j.config);
     }
   };
   const removeEntry = async (pipelineId: string) => {
@@ -250,6 +320,7 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
     if (j) {
       setSaved("Removed.");
       setData({ ...data, config: j.config, stale: data.stale.filter((s) => s !== pipelineId) });
+      announce(j.config);
     }
   };
 
@@ -341,7 +412,12 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
   const inert = data.inertSections || [];
 
   const sectionRow = (s: Section, checked: boolean, onToggle: () => void) => (
-    <div className={`pfsec ${s.named ? "" : "unnamed"}`} key={s.key}>
+    <div
+      className={`pfsec ${s.named ? "" : "unnamed"}${
+        expanded.has(s.key) ? " open" : ""
+      }`}
+      key={s.key}
+    >
       <label className="pfseclab">
         <input type="checkbox" checked={checked} onChange={onToggle} />
         {/* 🔴 A NAME AND A DIAGNOSIS ARE NOT THE SAME THING, so they are not
@@ -406,8 +482,24 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
           GoHighLevel to find the folder, so it belongs beside the fields you
           are reading to recognise it, not above them. */}
       {expanded.has(s.key) ? (
+        /* 🔴 ONE FIELD PER LINE, WITH ITS TYPE — round 115b, item I.
+           This joined every name with " · " into a block as narrow as the chip,
+           so names broke mid-word and the separator landed at the start of a
+           line as often as the end. Seven fields read as eight — the count and
+           the list both come from `s.fields`, so they never disagreed; the
+           rendering simply made them uncountable.
+           ⚠️ AND THE TYPE IS THE POINT OF EXPANDING. A name alone does not say
+           whether "Submitted At" is a date you can sort on or a string somebody
+           typed, and `dataType` is already on every definition. */
         <div className="pfsecfields">
-          {s.fields.map((f) => f.name).join(" · ")}
+          <ol className="pffieldlist">
+            {s.fields.map((f) => (
+              <li key={f.id}>
+                <span className="pffname">{f.name}</span>
+                <span className="pfftype">{typeLabel(f.dataType)}</span>
+              </li>
+            ))}
+          </ol>
           {!s.named ? (
             <div className="pfsecid" title="Paste this into GoHighLevel to find the folder">
               <code>{s.id}</code>
@@ -605,6 +697,45 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
       </div>
 
       <div className="istep">3 · Sections its records can show</div>
+      {/* 🔴 SAY WHAT TICKING DOES, AND WHY THE SCREEN EXISTS — round 115b,
+          items N and R. Fourteen checkboxes under a four-word label left an
+          admin to infer the rest, and an admin who does not know the reason
+          ticks everything — which is the exact failure the screen was built to
+          prevent.
+          ⚠️ `.pfgovern`, NOT `.pfwhy` — that class already belongs to the
+          screen-level note further up, and reusing it gave the page two
+          elements with one class and one name for two different explanations.
+          Caught by loader-sweep rule 7 within a minute of writing it. */}
+      <div className="pfgovern">
+        <p>
+          <b>Ticking a section makes its fields available on every record in
+          this pipeline.</b>{" "}
+          A section with nothing filled in is not drawn — a rep adds it from the
+          record when they need it. Fields you add in GoHighLevel appear here
+          automatically, inside whichever section they were created in.
+        </p>
+        <p>
+          <b>Why this exists:</b> a record panel showing every field in the
+          account is unusable — sixty-eight fields on one card, most of them
+          empty, and the four that matter buried among them. Ticking per
+          pipeline is what lets an OLTL enrolment show enrolment fields while a
+          caregiver applicant never sees Client SSN.
+        </p>
+        {/* 🔴 ITEM N — and it is verified, not assumed: the route reads
+            getEditableFieldDefs("opportunity") at :167, :306 and :337 and never
+            touches contact fields. The names collide, too — "Client" is an
+            opportunity folder and the contact side has one of its own — so an
+            admin hunting for "Caregiver Application" here would wrongly
+            conclude it does not exist. */}
+        <p>
+          <b>These are sections on the CASE, not on the person.</b> Sections
+          about a person — caregiver compliance, availability, the application
+          itself — follow them onto every record they hold, are the same
+          everywhere, and are chosen by whether the record is a client or an
+          applicant. There is nothing to tick for those, and they are not listed
+          here.
+        </p>
+      </div>
       <div className="irow pffolders">
         <label>Field sections this pipeline shows</label>
         <div className="pfseclist">
@@ -812,16 +943,14 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
                   onChange={(e) => {
                     const next = e.target.value as "client" | "caregiver" | "";
                     if (!next) return;
-                    if (entry && next !== entry.scope &&
-                        !window.confirm(
-                          `Move "${p.name}" to the ${next === "caregiver"
-                            ? "Caregivers" : "Clients"} section?\n\n` +
-                          `Its records leave the ${entry.scope === "caregiver"
-                            ? "Caregivers" : "Clients"} board and appear there ` +
-                          `instead. Nothing in GoHighLevel changes, and you can ` +
-                          `move it back.`,
-                        )) {
-                      e.target.value = entry.scope;
+                    // 🔴 THE APP'S OWN DIALOG — round 115b, item M. A native
+                    // confirm() cannot be styled, carries the vercel.app URL,
+                    // and reads as a browser warning rather than part of the
+                    // app. Every other consequential action here already uses
+                    // ConfirmDialog; this was the one that did not.
+                    if (entry && next !== entry.scope) {
+                      e.target.value = entry.scope; // until the answer comes back
+                      setScopeAsk({ p, entry, next });
                       return;
                     }
                     void saveEntry(p.id, {
@@ -870,6 +999,74 @@ export default function PipelineAdmin({ ssoBlob }: { ssoBlob: string | null }) {
           );
         })}
       </div>
+
+      {/* 🔴 THE SCOPE CONFIRM, WITH THE NUMBER — round 115b, item M.
+          "Its records leave the Clients board" without saying how many is the
+          difference between a considered choice and a mis-click. ODP Enrolment
+          holds 139. */}
+      {scopeAsk ? (
+        <ConfirmDialog
+          title={`Move “${scopeAsk.p.name}” to the ${
+            scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"
+          } section?`}
+          confirmLabel={`Move to ${
+            scopeAsk.next === "caregiver" ? "Caregivers" : "Clients"
+          }`}
+          busy={busy}
+          onCancel={() => setScopeAsk(null)}
+          onConfirm={() => {
+            const { p, entry, next } = scopeAsk;
+            setScopeAsk(null);
+            void saveEntry(p.id, { scope: next, folders: entry.folders });
+          }}
+          body={
+            <>
+              <p>
+                {/* ⚠️ A NUMBER, OR AN HONEST ABSENCE OF ONE. */}
+                {recordCounts[scopeAsk.p.id] != null && (
+                  countsComplete || scopeAsk.entry.scope === "client"
+                ) ? (
+                  <>
+                    <b>
+                      {recordCounts[scopeAsk.p.id]} record
+                      {recordCounts[scopeAsk.p.id] === 1 ? "" : "s"}
+                    </b>{" "}
+                    move.
+                  </>
+                ) : (
+                  <>
+                    <b>Its records move.</b> I cannot say how many — the
+                    applicant payload has not been loaded in this tab, so the
+                    number would be a guess.
+                  </>
+                )}{" "}
+                They leave the{" "}
+                {scopeAsk.entry.scope === "caregiver" ? "Caregivers" : "Clients"}{" "}
+                board and appear on the other one instead.
+              </p>
+              <p>
+                {/* 🔴 THE QUESTION YOU ASKED: KEPT AND STILL USED. Verified —
+                    `groupFieldsForPipeline` takes the stored folder list and the
+                    pipeline id and never consults scope, so the ticks survive a
+                    move and the record panel keeps drawing them. Which is also
+                    what makes "you can move it back" true. */}
+                Its{" "}
+                <b>
+                  {scopeAsk.entry.folders.length} ticked field section
+                  {scopeAsk.entry.folders.length === 1 ? "" : "s"}
+                </b>{" "}
+                are <b>kept and still shown</b> on every record — scope decides
+                which board a pipeline appears on, not which fields its records
+                draw. So nothing is lost and this is reversible.
+              </p>
+              <p className="ihint">
+                Nothing changes in GoHighLevel. This is the dashboard&apos;s own
+                stored configuration.
+              </p>
+            </>
+          }
+        />
+      ) : null}
 
       {/* ⚠️ RECONCILE, NEVER AUTO-DELETE. */}
       {data.stale.length ? (

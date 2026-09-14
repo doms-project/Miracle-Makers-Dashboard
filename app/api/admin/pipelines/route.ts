@@ -102,7 +102,7 @@ function sectionsFromDefs(
      * worse than an absent one because nothing tells you it did nothing.
      */
     inert: boolean;
-    fields: { id: string; name: string }[];
+    fields: { id: string; name: string; dataType?: string }[];
   }[] = [];
   for (const [folderId, fields] of byFolder) {
     const key = folderKeyById(folderId);
@@ -128,8 +128,11 @@ function sectionsFromDefs(
           .join(", ")}${fields.length > 2 ? "…" : ""}`,
       named,
       inert: fields.every((f) => fieldIsAlwaysIntercepted(f.name)),
+      // dataType travels with the name: the expanded panel shows it, and it is
+      // already on every definition, so withholding it would cost a round trip
+      // to say what we already know.
       fields: fields
-        .map((f) => ({ id: f.id, name: f.name }))
+        .map((f) => ({ id: f.id, name: f.name, dataType: f.dataType }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     });
   }

@@ -38,14 +38,32 @@ const BLOB = CryptoJS.AES.encrypt(JSON.stringify({
 // 🔴 THE REAL FOURTEEN, with the real longest label. "Website Intent Form" at 19
 // characters is the one that sets every card's height when the grid misbehaves.
 const LABELS = [
-  ["Attribution", 7], ["Client", 6], ["Enrolment", 8], ["Event Details", 6],
+  ["Ad Attribution", 7], ["Client", 6], ["Enrolment", 8], ["Event Details", 6],
   ["Facebook Form", 4], ["Filing", 3], ["Google Ads Form", 5], ["Intake", 9],
   ["Kinship", 2], ["Referral Detail", 4], ["Scheduling", 6], ["Screening", 7],
   ["Verification", 5], ["Website Intent Form", 4],
 ];
+// ⚠️ REAL FIELD NAMES AND REAL TYPES — round 115b, item I. The panel now shows
+// a type beside each name, and "Ad Attribution" is the live section whose seven
+// fields read as eight when run together.
+const TYPES = ["TEXT", "LARGE_TEXT", "DATE", "SINGLE_OPTIONS", "CHECKBOX",
+               "MULTIPLE_OPTIONS", "NUMERICAL", "MONETORY"];
+const AD_ATTRIB = [
+  ["How soon is care needed?", "SINGLE_OPTIONS"],
+  ["Landing page URL", "TEXT"],
+  ["SMS Consent", "CHECKBOX"],
+  ["SMS Consent text", "LARGE_TEXT"],
+  ["Submitted At", "DATE"],
+  ["What can we help with?", "LARGE_TEXT"],
+  ["Who is the care for?", "SINGLE_OPTIONS"],
+];
 const SECTIONS = LABELS.map(([label, n], i) => ({
   key: `k${i}`, id: `f${i}`, label, named: true,
-  fields: Array.from({ length: n }, (_, j) => ({ id: `${i}_${j}`, name: `Field ${j + 1}` })),
+  fields: i === 0
+    ? AD_ATTRIB.map(([name, dataType], j) => ({ id: `0_${j}`, name, dataType }))
+    : Array.from({ length: n }, (_, j) => ({
+        id: `${i}_${j}`, name: `Field ${j + 1}`, dataType: TYPES[j % TYPES.length],
+      })),
 }));
 
 // ── ROUND 113 · ITEM J ───────────────────────────────────────────────────
@@ -300,6 +318,88 @@ ok("🔴 the SCRIPT-written entry also shows Client, not 'Choose a scope…'",
 ok("🔴 and its three ticks render too", events?.ticked === 3, events);
 ok("a genuinely unconfigured row is the ONLY one reading 'Choose a scope…'",
    test?.dropdown === "" && test?.header === "not configured", test);
+
+// ── 5 · ROUND 115b ITEM I · THE EXPANDED PANEL ────────────────────────────
+console.log("\n5 · 🔴 ITEM I — ONE FIELD PER LINE, WITH ITS TYPE");
+// Collapse everything, then open Ad Attribution alone.
+await frame.evaluate(() => {
+  for (const b of document.querySelectorAll('.pffolders .pfsectoggle[aria-expanded="true"]'))
+    b.click();
+});
+await page.waitForTimeout(300);
+await frame.$eval(".pffolders .pfseclist .pfsec:first-child .pfsectoggle",
+                  (e) => e.click());
+await page.waitForTimeout(500);
+const panel = await frame.evaluate(() => {
+  const card = document.querySelector(".pffolders .pfsec.open");
+  const list = card?.querySelector(".pffieldlist");
+  const listRect = document.querySelector(".pffolders .pfseclist").getBoundingClientRect();
+  const cardRect = card?.getBoundingClientRect();
+  const rows = [...(list?.querySelectorAll("li") || [])].map((li) => {
+    const r = li.getBoundingClientRect();
+    const name = li.querySelector(".pffname");
+    const type = li.querySelector(".pfftype");
+    const lh = name ? parseFloat(getComputedStyle(name).lineHeight) || 16 : 16;
+    return {
+      name: name?.textContent?.trim() || "",
+      type: type?.textContent?.trim() || "",
+      lines: Math.round((name?.getBoundingClientRect().height || 0) / lh),
+      w: Math.round(r.width),
+    };
+  });
+  return {
+    countBadge: card?.querySelector(".pfseccount")?.textContent?.trim() || null,
+    cardW: cardRect ? Math.round(cardRect.width) : null,
+    listW: Math.round(listRect.width),
+    rows,
+  };
+});
+console.log(`  count badge: ${panel.countBadge}   rows listed: ${panel.rows.length}`);
+console.log(`  open card ${panel.cardW}px of a ${panel.listW}px list`);
+for (const r of panel.rows)
+  console.log(`     ${r.name.padEnd(26)} ${r.type.padEnd(20)} ${r.lines} line(s)`);
+ok("🔴 the badge and the list agree — seven and seven",
+   panel.countBadge === "7" && panel.rows.length === 7, panel);
+ok("🔴 the open panel is FULL WIDTH, not the chip's width",
+   panel.cardW !== null && panel.cardW > panel.listW * 0.9, panel);
+ok("🔴 every name is on ONE line — no mid-word breaks",
+   panel.rows.every((r) => r.lines <= 1), panel.rows.filter((r) => r.lines > 1));
+ok("🔴 every row carries a type", panel.rows.every((r) => r.type && r.type !== "—"),
+   panel.rows.map((r) => r.type));
+ok("and the types use the create-form vocabulary",
+   panel.rows.some((r) => r.type === "Dropdown — pick one") &&
+   panel.rows.some((r) => r.type === "Tickbox — yes or no") &&
+   panel.rows.some((r) => r.type === "Long text"),
+   panel.rows.map((r) => r.type));
+
+// ── 6 · IS THE TOP OF THE SCREEN REACHABLE? ───────────────────────────────
+console.log("\n6 · ⚠️ IS THE FIRST THING ON THE PAGE FULLY VISIBLE?");
+const top = await frame.evaluate(() => {
+  const sc = document.querySelector(".adminscroll");
+  sc.scrollTop = 0;
+  const first = sc.firstElementChild;
+  const fr = first.getBoundingClientRect();
+  const sr = sc.getBoundingClientRect();
+  return {
+    scrollTop: sc.scrollTop,
+    scrollable: sc.scrollHeight > sc.clientHeight,
+    firstTag: `${first.tagName}.${first.className}`.slice(0, 40),
+    firstTop: Math.round(fr.top), containerTop: Math.round(sr.top),
+    clipped: fr.top < sr.top - 1,
+  };
+});
+console.log(`  ${JSON.stringify(top)}`);
+ok("⚠️ the first element is not clipped at the top", !top.clipped, top);
+
+// ── 7 · ITEMS N + R · DOES THE SCREEN SAY WHAT IT GOVERNS? ────────────────
+console.log("\n7 · 🔴 ITEMS N + R — THE INSTRUCTION");
+const why = await frame.evaluate(() =>
+  document.querySelector(".pfgovern")?.textContent?.replace(/\s+/g, " ").trim() || null);
+console.log(`  "${(why || "").slice(0, 150)}…"`);
+ok("the screen says what ticking does", /available on every record/.test(why || ""), why);
+ok("🔴 and WHY it exists", /unusable|sixty-eight/.test(why || ""), why);
+ok("🔴 and that these are CASE sections, not person sections",
+   /not on the person/i.test(why || ""), why);
 
 await page.screenshot({ path: "scripts/section-grid.png" });
 console.log(`\n${pass} passed, ${fail} failed`);

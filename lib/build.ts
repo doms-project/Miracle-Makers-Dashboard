@@ -17,10 +17,19 @@
  * you when the bundle was made, not which round's changes are in it.
  */
 export const BUILD = {
-  /** The round whose changes this build contains. */
-  round: 115,
+  /**
+   * The round whose changes this build contains.
+   *
+   * ⚠️ A STRING, NOT A NUMBER. The regression investigation took the 115 slot
+   * before the wording round could use it, so the labels are 115 and 115b. A
+   * numeric field would have forced a renumber, and renumbering a stamp whose
+   * whole job is to identify a build defeats the stamp.
+   */
+  round: "115b",
   /** One line naming what that round changed, for a reader who has the tab open. */
-  summary: "client tiles keyed on ownerId · search empty state names its fields",
+  summary:
+    "expanded sections list one field per line with its type · scope confirm " +
+    "names the record count · the folder screen says what it governs",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;
