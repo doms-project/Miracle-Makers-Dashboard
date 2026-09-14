@@ -2597,6 +2597,137 @@ function LogReferralDialog({
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState("");
 
+  /**
+   * 🔴 THE COMMON CASE HAD NO PATH — round 115c, item 4.
+   *
+   * Someone fills the website form, and on the call mentions Riddle Hospital
+   * sent them. "Log a referral" only ever CREATED a contact and an opportunity,
+   * so the only way to credit the partner was to leave the drawer, find the
+   * client and set "Referred by" on their record panel — which is the same
+   * write, from the other direction.
+   *
+   * ⚠️ AND IT MUST NOT DUPLICATE. Round 107 built promote-not-duplicate on
+   * "+ Add partner" for exactly this reason; this reuses the same contact
+   * search and writes nothing but the attribution.
+   */
+  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<{ id: string; name: string; email: string; phone: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchErr, setSearchErr] = useState("");
+  const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
+  const [opps, setOpps] = useState<
+    | {
+        id: string; name: string; pipelineName: string; stage: string;
+        status: string; partnerId: string;
+      }[]
+    | null
+  >(null);
+  const [oppsErr, setOppsErr] = useState("");
+  const [refField, setRefField] = useState("");
+  const [chosenOpp, setChosenOpp] = useState("");
+
+  // Contact search — debounced, two characters, exactly as "+ Add partner".
+  useEffect(() => {
+    if (mode !== "existing" || picked || q.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    let live = true;
+    setSearching(true);
+    const t = setTimeout(() => {
+      apiFetch<{ contacts: typeof hits }>(
+        `/api/referrals?only=contacts&q=${encodeURIComponent(q.trim())}`,
+        { ssoBlob },
+      )
+        .then((j) => {
+          if (!live) return;
+          setSearchErr("");
+          setHits(j.contacts || []);
+        })
+        .catch((e) => {
+          if (!live) return;
+          setHits([]);
+          setSearchErr(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (live) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q, mode, picked, ssoBlob]);
+
+  // Their opportunities, once one is chosen.
+  useEffect(() => {
+    if (!picked) {
+      setOpps(null);
+      setChosenOpp("");
+      return;
+    }
+    let live = true;
+    setOpps(null);
+    setOppsErr("");
+    apiFetch<{
+      referringPartnerField: string;
+      opportunities: NonNullable<typeof opps>;
+    }>(
+      `/api/referrals?only=contact-opps&contactId=${encodeURIComponent(picked.id)}`,
+      { ssoBlob },
+    )
+      .then((j) => {
+        if (!live) return;
+        setRefField(j.referringPartnerField || "");
+        setOpps(j.opportunities || []);
+        if ((j.opportunities || []).length === 1)
+          setChosenOpp(j.opportunities[0].id);
+      })
+      .catch((e) => {
+        if (!live) return;
+        setOpps([]);
+        setOppsErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [picked, ssoBlob]);
+
+  /**
+   * Attribute an EXISTING opportunity. One PUT of Referring Partner — verified:
+   * it is exactly what ReferredBy does from the record panel
+   * (app/page.tsx, `onSave` → saveField → PUT /api/opportunities/{id}).
+   * Nothing is created.
+   */
+  const attribute = async () => {
+    if (!chosenOpp || !refField || !partner) return;
+    setBusy(true);
+    setErr(null);
+    setDone("");
+    try {
+      await apiFetch(`/api/opportunities/${encodeURIComponent(chosenOpp)}`, {
+        method: "PUT",
+        ssoBlob,
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          customFields: [{ id: refField, value: partner.id }],
+        }),
+      });
+      const o = (opps || []).find((x) => x.id === chosenOpp);
+      setDone(
+        `${o?.name || "That case"} is now attributed to ${partner.org}. ` +
+          `Nothing was created — only the referral credit was set.`,
+      );
+      onLogged();
+      setTimeout(onClose, 1800);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // 🔴 THE DESTINATION IS RESOLVED, NOT HARDCODED, AND IT IS SHOWN BEFORE IT IS
   // COMMITTED. The brief says "creates an opportunity in Private Pay"; §9
   // forbids hardcoded pipeline ids. So the default is matched from the
@@ -2673,52 +2804,216 @@ function LogReferralDialog({
           </button>
         </div>
         <div className="movebody">
-          <div className="rflive">
-            <b>Pass-through only.</b> The name and phone go straight to
-            GoHighLevel and are never written to this dashboard&apos;s database.
-            Only the returned record id and the attribution are kept here.
-          </div>
-
-          <div className="irow">
-            <label htmlFor="rr-first">Client or family name</label>
-            <input id="rr-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
-            <label htmlFor="rr-last">Last name</label>
-            <input id="rr-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
-          </div>
-          <div className="irow">
-            <label htmlFor="rr-phone">Phone</label>
-            <input
-              id="rr-phone"
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(484) 555-0142"
-            />
-          </div>
-
-          {/* 🔴 A REP INPUT, NOT A READ-OUT — AND IT IS GIVEN WEIGHT.
-              The brief is explicit: the rep types the estimated monthly value at
-              referral time, and it must not be presented as a read-only system
-              number. It is stored in the native monetaryValue, which is why
-              every figure in this view is labelled /mo. */}
-          <div className="rfvalue">
-            <label htmlFor="rr-value">Estimated monthly value</label>
-            <div className="rfvaluebox">
-              <span className="rfvaluecur">$</span>
-              <input
-                id="rr-value"
-                type="number"
-                min={0}
-                step={100}
-                value={monthly}
-                onChange={(e) => setMonthly(e.target.value)}
-                placeholder="6000"
-              />
-              <span className="rfvaluemo">/mo</span>
+          {/* ⚠️ TRUE OF THE CREATE PATH ONLY. Attributing an existing case sends
+              no name and no phone — there is nothing to pass through — so this
+              note would be describing a write that is not happening. */}
+          {partner && mode === "existing" ? (
+            <div className="rflive">
+              <b>Nothing is created.</b> This sets the referral credit on a case
+              that already exists — one field, on one opportunity. No contact and
+              no opportunity is added.
             </div>
-            <div className="rfdhint">
-              A rough figure is fine. It can be corrected when the assessment is
-              done.
+          ) : (
+            <div className="rflive">
+              <b>Pass-through only.</b> The name and phone go straight to
+              GoHighLevel and are never written to this dashboard&apos;s
+              database. Only the returned record id and the attribution are kept
+              here.
+            </div>
+          )}
+
+          {/* 🔴 TWO PATHS — round 115c, item 4. Only `partner` can attribute an
+              existing case: an EVENT credits through Event Source, which is a
+              different field and a different write, so the choice is not
+              offered there rather than offered and then refused. */}
+          {partner ? (
+            <div className="rfmode">
+              <label>
+                <input
+                  type="radio"
+                  name="rrmode"
+                  checked={mode === "new"}
+                  onChange={() => {
+                    setMode("new");
+                    setPicked(null);
+                  }}
+                />
+                New enquiry
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="rrmode"
+                  checked={mode === "existing"}
+                  onChange={() => setMode("existing")}
+                />
+                Someone already in GoHighLevel
+              </label>
+            </div>
+          ) : null}
+
+          {partner && mode === "existing" ? (
+            <>
+              <div className="irow">
+                <label htmlFor="rr-find">Find the contact</label>
+                <input
+                  id="rr-find"
+                  type="search"
+                  value={picked ? picked.name : q}
+                  onChange={(e) => {
+                    setPicked(null);
+                    setQ(e.target.value);
+                  }}
+                  placeholder="Their name…"
+                />
+              </div>
+
+              {picked ? (
+                <>
+                  <div className="rfpicked">
+                    <b>{picked.name}</b> — pick which of their cases{" "}
+                    {partner.org} referred.
+                    <button
+                      type="button"
+                      className="linkbtn"
+                      onClick={() => setPicked(null)}
+                    >
+                      change
+                    </button>
+                  </div>
+                  {opps === null ? (
+                    <div className="rfdhint">Loading their cases…</div>
+                  ) : oppsErr ? (
+                    <div className="rfdhint rfdbad">
+                      Could not read their cases — {oppsErr}. Nothing has been
+                      changed.
+                    </div>
+                  ) : !opps.length ? (
+                    <div className="rfdhint">
+                      {picked.name} has no case you can see. If they are a brand
+                      new enquiry, switch to <b>New enquiry</b> above — that
+                      creates one.
+                    </div>
+                  ) : (
+                    <div className="rfhits">
+                      {opps.map((o) => (
+                        <button
+                          type="button"
+                          key={o.id}
+                          className={`rfhit${chosenOpp === o.id ? " on" : ""}`}
+                          onClick={() => setChosenOpp(o.id)}
+                        >
+                          <span className="n">{o.name}</span>
+                          <span className="m">
+                            {[o.pipelineName, o.stage, o.status]
+                              .filter(Boolean)
+                              .join(" · ")}
+                            {/* ⚠️ ALREADY CREDITED — SAID, NOT SILENTLY
+                                OVERWRITTEN. Attribution is one field; choosing
+                                this replaces whoever holds it now. */}
+                            {o.partnerId
+                              ? o.partnerId === partner.id
+                                ? ` · already credited to ${partner.org}`
+                                : " · ⚠️ already credited to another partner — this replaces it"
+                              : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : q.trim().length >= 2 ? (
+                <div className="rfhits">
+                  {searching ? (
+                    <div className="rfdhint">Searching…</div>
+                  ) : searchErr ? (
+                    <div className="rfdhint rfdbad">
+                      The contact search failed — {searchErr}. Do <b>not</b>{" "}
+                      switch to New enquiry to get past it: that would create a
+                      duplicate of someone who already exists.
+                    </div>
+                  ) : !hits.length ? (
+                    <div className="rfdhint">
+                      No contact matches “{q.trim()}”.
+                    </div>
+                  ) : (
+                    hits.map((h) => (
+                      <button
+                        type="button"
+                        className="rfhit"
+                        key={h.id}
+                        onClick={() => setPicked({ id: h.id, name: h.name })}
+                      >
+                        <span className="n">{h.name}</span>
+                        <span className="m">
+                          {[h.email, h.phone].filter(Boolean).join(" · ") ||
+                            "no email or phone"}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="rfdhint">
+                  Type at least two characters. Nothing is created on this path
+                  — the only change is who the case is credited to.
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {/* ⚠️ THE CREATE FIELDS BELONG TO THE CREATE PATH. Asking for a name
+              and a phone while attributing an existing case would be collecting
+              values with nowhere to go — the mistake round 113 item H fixed on
+              "+ Add partner". */}
+          {partner && mode === "existing" ? null : (
+          <>
+          {/* Two short fields, one line. See `.irow2`. */}
+          <div className="irow2">
+            <div>
+              <label htmlFor="rr-first">Client or family name</label>
+              <input id="rr-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="rr-last">Last name</label>
+              <input id="rr-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+            </div>
+          </div>
+          <div className="irow2">
+            <div>
+              <label htmlFor="rr-phone">Phone</label>
+              <input
+                id="rr-phone"
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(484) 555-0142"
+              />
+            </div>
+            {/* 🔴 A REP INPUT, NOT A READ-OUT — AND IT IS GIVEN WEIGHT.
+                The brief is explicit: the rep types the estimated monthly value
+                at referral time, and it must not be presented as a read-only
+                system number. It is stored in the native monetaryValue, which is
+                why every figure in this view is labelled /mo. */}
+            <div className="rfvalue">
+              <label htmlFor="rr-value">Estimated monthly value</label>
+              <div className="rfvaluebox">
+                <span className="rfvaluecur">$</span>
+                <input
+                  id="rr-value"
+                  type="number"
+                  min={0}
+                  step={100}
+                  value={monthly}
+                  onChange={(e) => setMonthly(e.target.value)}
+                  placeholder="6000"
+                />
+                <span className="rfvaluemo">/mo</span>
+              </div>
+              <div className="rfdhint">
+                A rough figure is fine. It can be corrected when the assessment
+                is done.
+              </div>
             </div>
           </div>
 
@@ -2782,6 +3077,9 @@ function LogReferralDialog({
             </div>
           ) : null}
 
+          </>
+          )}
+
           {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
           {done ? <div className="savemsg ok">{done}</div> : null}
         </div>
@@ -2789,14 +3087,28 @@ function LogReferralDialog({
           <button type="button" className="ighost" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="cgsave"
-            onClick={() => void save()}
-            disabled={busy || !firstName.trim() || !dest || (!partner && !event)}
-          >
-            {busy ? "Saving…" : "Log referral"}
-          </button>
+          {/* 🔴 THE ACTION NAMES ITSELF. Attributing is not logging: nothing is
+              created, so a button reading "Log referral" would describe the
+              other path. */}
+          {partner && mode === "existing" ? (
+            <button
+              type="button"
+              className="cgsave"
+              onClick={() => void attribute()}
+              disabled={busy || !chosenOpp || !refField}
+            >
+              {busy ? "Attributing…" : "Credit this case"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="cgsave"
+              onClick={() => void save()}
+              disabled={busy || !firstName.trim() || !dest || (!partner && !event)}
+            >
+              {busy ? "Saving…" : "Log referral"}
+            </button>
+          )}
         </div>
       </div>
     </div>

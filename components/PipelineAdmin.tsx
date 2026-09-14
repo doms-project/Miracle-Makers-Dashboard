@@ -120,8 +120,25 @@ export default function PipelineAdmin({
   /** Which load() is current — see the sequence guard inside it. */
   const loadSeq = useRef(0);
   const [busy, setBusy] = useState(false);
+  /**
+   * 🔴 WHICH ACTION IS IN FLIGHT — round 115c, item 1.
+   *
+   * `busy` is shared by every write on this screen, and the Create button read
+   * it directly: `{busy ? "Creating…" : "Create pipeline"}`. So ticking a
+   * section on an ALREADY CONFIGURED pipeline relabelled the create button and
+   * put its outcome in the create form's status line — an action reporting
+   * itself in the wrong half of the screen.
+   */
+  const [busyAction, setBusyAction] = useState("");
   const [saveErr, setSaveErr] = useState<unknown>(null);
   const [saved, setSaved] = useState("");
+  /**
+   * 🔴 AND A PER-ROW OUTCOME — round 115c, item 1, and round 94 item 8 before
+   * it. "It flashed and cleared" is an error nobody can read. A tick's result
+   * now appears IN ITS OWN ROW and stays there until the next action on that
+   * row, so a failure can be read, quoted, and reported.
+   */
+  const [rowMsg, setRowMsg] = useState<{ id: string; err?: unknown; ok?: string } | null>(null);
 
   const ssoHeader = useCallback(
     (): Record<string, string> => (ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {}),
@@ -156,10 +173,18 @@ export default function PipelineAdmin({
     void load();
   }, [load]);
 
-  const post = async (payload: Record<string, unknown>) => {
+  /**
+   * @param rowId when given, the outcome is reported IN THAT PIPELINE'S ROW
+   *              rather than in the create form's status line.
+   */
+  const post = async (payload: Record<string, unknown>, rowId?: string) => {
     setBusy(true);
-    setSaveErr(null);
-    setSaved("");
+    setBusyAction(String(payload.action || ""));
+    if (rowId) setRowMsg(null);
+    else {
+      setSaveErr(null);
+      setSaved("");
+    }
     try {
       const res = await fetch("/api/admin/pipelines", {
         method: "POST",
@@ -170,10 +195,12 @@ export default function PipelineAdmin({
       if (!res.ok) throw apiError(res, j);
       return j;
     } catch (e) {
-      setSaveErr(e);
+      if (rowId) setRowMsg({ id: rowId, err: e });
+      else setSaveErr(e);
       return null;
     } finally {
       setBusy(false);
+      setBusyAction("");
     }
   };
 
@@ -302,9 +329,9 @@ export default function PipelineAdmin({
       seeded: true,
       pipelines: { ...data.config.pipelines, [pipelineId]: entry },
     };
-    const j = await post({ action: "save-config", config: next });
+    const j = await post({ action: "save-config", config: next }, pipelineId);
     if (j) {
-      setSaved("Saved.");
+      setRowMsg({ id: pipelineId, ok: "Saved." });
       setData({ ...data, config: j.config });
       announce(j.config);
     }
@@ -316,9 +343,9 @@ export default function PipelineAdmin({
     const j = await post({
       action: "save-config",
       config: { ...data.config, seeded: true, pipelines: rest },
-    });
+    }, pipelineId);
     if (j) {
-      setSaved("Removed.");
+      setRowMsg({ id: pipelineId, ok: "Removed." });
       setData({ ...data, config: j.config, stale: data.stale.filter((s) => s !== pipelineId) });
       announce(j.config);
     }
@@ -903,7 +930,7 @@ export default function PipelineAdmin({
       <div className="istep">4 · Create</div>
       <div className="irow">
         <button type="button" className="pfprimary" onClick={createPipeline} disabled={!canCreate}>
-          {busy ? "Creating…" : "Create pipeline"}
+          {busy && busyAction === "create-pipeline" ? "Creating…" : "Create pipeline"}
         </button>
       </div>
 
@@ -934,6 +961,17 @@ export default function PipelineAdmin({
                   sections, which is why it asks first and says so. Nothing is
                   written to GoHighLevel's pipeline itself — this is the stored
                   MM Pipeline Folders value, and it is reversible here. */}
+              {/* 🔴 THE OUTCOME, IN THE ROW THAT CAUSED IT — round 115c.
+                  It used to land in the create form's status line at the top of
+                  the screen, where it flashed past unread. It stays here until
+                  the next action on this row. */}
+              {rowMsg && rowMsg.id === p.id ? (
+                rowMsg.err ? (
+                  <ErrorMessage error={rowMsg.err} className="savemsg err pfrowmsg" />
+                ) : (
+                  <div className="savemsg ok pfrowmsg">{rowMsg.ok}</div>
+                )
+              ) : null}
               <div className="pfscopeedit">
                 <label htmlFor={`pfscope-${p.id}`}>Scope</label>
                 <select
@@ -979,13 +1017,14 @@ export default function PipelineAdmin({
                     // the first folder tick chose for everybody. A scope is a
                     // decision; it is now asked for rather than assumed.
                     if (!entry) {
-                      setSaveErr(
-                        new Error(
+                      setRowMsg({
+                        id: p.id,
+                        err: new Error(
                           `"${p.name}" has no scope yet. Choose Client or Caregiver ` +
                             `above before ticking sections — picking one for you is ` +
                             `how a pipeline ends up in the wrong section.`,
                         ),
-                      );
+                      });
                       return;
                     }
                     void saveEntry(p.id, {
@@ -1055,7 +1094,8 @@ export default function PipelineAdmin({
                   {scopeAsk.entry.folders.length} ticked field section
                   {scopeAsk.entry.folders.length === 1 ? "" : "s"}
                 </b>{" "}
-                are <b>kept and still shown</b> on every record — scope decides
+                {scopeAsk.entry.folders.length === 1 ? "is" : "are"}{" "}
+                <b>kept and still shown</b> on every record — scope decides
                 which board a pipeline appears on, not which fields its records
                 draw. So nothing is lost and this is reversible.
               </p>
