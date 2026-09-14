@@ -1683,6 +1683,38 @@ export async function getOltlOpportunities(
   };
 }
 
+/**
+ * 🔴 ONE PIPELINE'S OPPORTUNITIES, BY ID, WHATEVER ITS SCOPE — round 124.
+ *
+ * ⚠️ THIS IS THE OTHER HALF OF THE EMPTY EVENTS TAB, and it is not the half the
+ * brief guessed. `eventsPipeline()` has looked in the client AND "none" pickers
+ * since round 116, but the RECORDS came from `getOltlOpportunities()`, which
+ * defaults to `scope: "client"`. So an Events pipeline scoped "none" — or, now,
+ * marked by role and scoped anything at all — was FOUND and its records were
+ * never fetched: the tab drew "no events in this division" over a pipeline full
+ * of them. A lookup and a fetch that disagree about which pipelines exist is
+ * worse than either being wrong alone, because the screen looks configured.
+ *
+ * ⚠️ SAME NORMALISATION AS THE BOARD, deliberately. `cf`, stage and pipeline
+ * names all resolve the way every other record on the screen does; a second
+ * shaping path is how two views of one opportunity start disagreeing.
+ */
+export async function getOpportunitiesInPipeline(pipe: {
+  id: string;
+  name: string;
+  stages?: { id: string; name: string }[];
+}): Promise<OpportunityRecord[]> {
+  const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
+  const stageNameByKey = new Map<string, string>();
+  for (const st of pipe.stages || []) stageNameByKey.set(stageKey(pipe.id, st.id), st.name);
+  const pipelineNameById = new Map<string, string>([[pipe.id, pipe.name]]);
+  const raw = await searchAll(pipe.id);
+  for (const o of raw) if (!o.pipelineId) o.pipelineId = pipe.id;
+  return raw.map((o) =>
+    normalizeOpportunity(o, fieldMap, userMap, stageNameByKey, pipelineNameById),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Contact notes — scoped to an opportunity via the note `relations` array.
 // ---------------------------------------------------------------------------
@@ -3080,6 +3112,37 @@ export async function countOpportunitiesInPipeline(
  * the check in both places would mean two searches per delete and neither
  * caller knowing which one actually protected them.
  */
+/**
+ * 🔴 DELETE ONE OPPORTUNITY — round 124, items 3 and 4.
+ *
+ * ⚠️ THE CASE, NOT THE PERSON. GoHighLevel keeps opportunities and contacts
+ * separate, and this touches only the opportunity: the contact keeps its notes,
+ * its other cases and its history. Most of what anybody wants to delete is a
+ * duplicate CASE, and removing a person because their second card was junk is
+ * not recoverable.
+ *
+ * ⚠️ IDEMPOTENT, ON THE SHAPE ROUND 118 MEASURED. GoHighLevel answers a second
+ * delete of the same pipeline with 400 and "… is deleted"; the same family of
+ * wording is treated as success here, because telling somebody the delete
+ * failed about a record that is gone sends them looking for it.
+ *
+ * ⚠️ AND THE CACHE IS BUST IN A `finally`, for the reason deletePipeline
+ * records: a caller that re-reads to confirm would otherwise be answered from
+ * an entry written before the delete.
+ */
+export async function deleteOpportunity(oppId: string): Promise<void> {
+  const id = String(oppId || "").trim();
+  if (!id) throw new GhlError("No opportunity id.", 400);
+  try {
+    await ghlDelete(`/opportunities/${encodeURIComponent(id)}`, {
+      what: "the record",
+      goneOk: /\bis deleted\b|\bnot found\b|\bdoes ?n[o']?t exist\b/i,
+    });
+  } finally {
+    invalidateOpportunity(id);
+  }
+}
+
 export async function deletePipeline(pipelineId: string): Promise<void> {
   const { locationId } = requireEnv();
   const id = String(pipelineId || "").trim();

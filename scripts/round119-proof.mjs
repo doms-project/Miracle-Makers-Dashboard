@@ -183,7 +183,6 @@ const checks = [
   ["the per-field tickbox", /className="pffbox"[\s\S]{0,500}?disabled=\{busy\s*\|\|/],
   ["the scope dropdown", /id=\{`pfscope-\$\{p\.id\}`\}[\s\S]{0,120}?disabled=\{busy\}/],
   ["the delete button", /className="pfdangerbtn"\s*\n\s*disabled=\{busy\}/],
-  ["the attribution button", /className="pfprimary"\s*\n\s*disabled=\{busy\}/],
 ];
 for (const [what, re] of checks) ok(`${what} is disabled while busy`, re.test(src), what);
 ok("🔴 and the row in flight says so", /busyRow === p\.id/.test(src) && /pfspin/.test(src), "no row spinner");
@@ -191,10 +190,15 @@ ok("⚠️ the refusal renders directly, not through ErrorMessage",
    /rowMsg\.refusal \?[\s\S]{0,200}savemsg warn/.test(src), "refusal not rendered directly");
 ok("🔴 and it focuses the control that fixes it",
    /getElementById\(`pfscope-\$\{p\.id\}`\)\?\.focus\(\)/.test(src), "no focus");
-ok("⚠️ the attribution button names the step in flight",
-   /attribNow \|\| "Working…"/.test(src), "no step name");
-ok("🔴 and the client drives THREE requests, not one",
-   /for \(const step of \["folder", "fields", "tick"\]/.test(src), "not stepped");
+// ⬜ ROUND 124 RETIRED THE THREE ATTRIBUTION ASSERTIONS HERE — the button, its
+// step name and its three-request loop. That run was a ONE-TIME MIGRATION, it
+// is complete, and leaving it on the screen meant somebody could re-run it in
+// six months and silently move two fields back. Replaced rather than deleted,
+// so a missing section is never mistaken for one that went red.
+ok("🔴 the attribution control is gone",
+   !/attribNow/.test(src) && !/pfattrib/.test(src), "it survives");
+ok("⚠️ and every REMAINING write control still carries its disable",
+   checks.every(([, re]) => re.test(src)), "a control lost its disable");
 
 console.log(`\n${pass} passed, ${fail} failed.`);
 server.close();

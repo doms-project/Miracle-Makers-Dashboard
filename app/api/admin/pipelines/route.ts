@@ -35,10 +35,12 @@ import type { ApiError, EditableFieldDef } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 // 🔴 ROUND 119 · ITEM 1(b) — THERE WAS NO LIMIT DECLARED, so this route took
-// the platform default (10s on Vercel's Hobby tier). `attribution-folder` makes
-// four GoHighLevel writes, each of which 117 may retry three times with up to
-// 6s of backoff — so a bad minute could exceed the limit and the function is
-// killed mid-run with nothing returned. That is precisely the hang.
+// the platform default (10s on Vercel's Hobby tier). `delete-pipeline` and
+// `create-pipeline` each make several GoHighLevel writes, any of which 117 may
+// retry three times with up to 6s of backoff — so a bad minute could exceed the
+// limit and the function is killed mid-run with nothing returned. That is
+// precisely the hang. (The four-write `attribution-folder` that first exposed
+// this was deleted in round 124; the limit is still needed without it.)
 //
 // ⚠️ A LIMIT IS NOT THE FIX, THOUGH — the steps are. See the action below: it
 // now runs ONE step per request, so no single call can be long enough to be
@@ -310,7 +312,6 @@ interface Body {
     | "create-pipeline"
     | "delete-pipeline"
     | "count-records"
-    | "attribution-folder"
     | "save-config"
     | "create-section"
     | "create-field"
@@ -325,9 +326,6 @@ interface Body {
   config?: unknown;
   // delete-pipeline
   pipelineId?: string;
-  // attribution-folder — which step. (`folderId` already exists below, shared
-  // with name-folder: the folder the previous step made travels in it.)
-  step?: string;
   // create-section / create-field
   parentId?: string;
   fieldId?: string;
@@ -503,154 +501,19 @@ export async function POST(request: Request) {
         return NextResponse.json({ deleted: pipelineId, config });
       }
 
-      /**
-       * 🔴 ITEM 3 — CREATE "Referral Attribution", MOVE THE TWO ATTRIBUTION
-       * FIELDS INTO IT, AND TICK IT ONTO EVERY CLIENT PIPELINE.
-       *
-       * Referral Detail (9OZdxXFfJsdNGR7qsQKQ) is mapped to the EVENTS pipeline
-       * only and holds two unrelated jobs: `Referring Partner` is attribution
-       * and belongs on every client record; Waiver Type, Authorized Units and
-       * Referral Decline Reason are ODP/OLTL waiver administration. One folder
-       * cannot be ticked for one job and not the other — which is why
-       * Referring Partner is invisible on every client record today.
-       *
-       * ⚠️ WATCHABLE, NOT BLIND — as asked. Every step is reported in order
-       * with what it did, so a partial run is readable rather than a mystery.
-       * Round 93 recorded `createFieldFolder` failing in a way that left an
-       * orphan, and the defence against that is not a try/catch, it is SAYING
-       * WHICH STEP GOT HOW FAR.
-       *
-       * 🔴 AND IT IS RESUMABLE. If the folder already exists it is reused
-       * rather than created again, and a field already in it is skipped — so
-       * running this twice does not make "Referral Attribution (1)" beside a
-       * half-moved first attempt.
-       */
-      case "attribution-folder": {
-        // 🔴 ONE STEP PER REQUEST — round 119, item 1.
-        //
-        // ⚠️ IT RETURNED EVERY STEP AT THE END, and that is why it looked like a
-        // hang: a slow run and a dead run are IDENTICAL from the browser when
-        // nothing arrives until the last write lands. The step log was built to
-        // be watched and it could not be, because it did not exist until the
-        // work was over.
-        //
-        // 🔴 AND IT ANSWERS (c) AS WELL AS (a). A function killed mid-run used
-        // to leave a folder created and fields unmoved with nothing on screen —
-        // round 93's orphan. Now each step is its own request: whatever
-        // completed has been REPORTED, and the next click resumes from there
-        // because every step is idempotent (the folder is reused, a field
-        // already in place is skipped, a tick already present is left alone).
-        const step = String(body.step || "folder");
-        const cfg = await getPipelineConfig();
-        const FOLDER_NAME = "Referral Attribution";
-        const MOVE = ["referring partner", "event source"];
+      // 🔴 ROUND 124 · ITEM 5 — `attribution-folder` IS DELETED.
+      //
+      // It was a ONE-TIME MIGRATION and it is complete: the folder exists,
+      // both fields are in it, and it is ticked onto all five client
+      // pipelines. Left in place it could only ever report "already done" —
+      // and, after somebody deliberately reorganises those folders, quietly
+      // move two fields back.
+      //
+      // ⚠️ THE ACTION GOES WITH THE BUTTON, NOT JUST THE BUTTON. An admin
+      // endpoint with no caller is a control that still exists; whoever finds
+      // it next cannot tell the job is finished. Its reasoning lives on the
+      // Pipelines screen as a note, which is the part worth keeping.
 
-        // 🔴 LOOK IN `folderNames` FIRST. `sectionsFromDefs` builds sections
-        // only from folders that HAVE FIELDS, so a folder created a moment ago
-        // is invisible to it — round 118 found that by running this twice.
-        const findFolder = async (): Promise<string> => {
-          const named = Object.entries(cfg.folderNames || {}).find(
-            ([, n]) => (n || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
-          )?.[0];
-          if (named) return named;
-          const secs = sectionsFromDefs(
-            await getEditableFieldDefs("opportunity"),
-            cfg.folderNames,
-          );
-          return (
-            secs.find(
-              (x) => (x.label || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
-            )?.id || ""
-          );
-        };
-
-        if (step === "folder") {
-          const found = await findFolder();
-          if (found)
-            return NextResponse.json({
-              step, done: "fields", folderId: found, ok: true,
-              detail: `Reused the existing “${FOLDER_NAME}” (${found}).`,
-            });
-          const made = await createFieldFolder({ name: FOLDER_NAME });
-          const folderId = String(made.id || "");
-          if (!folderId)
-            return NextResponse.json(
-              {
-                error: "GoHighLevel created the folder but returned no id.",
-                detail:
-                  `Nothing was moved. Check GoHighLevel for a folder named “${FOLDER_NAME}” ` +
-                  "before running this again — it may exist without this app knowing its id.",
-                status: 502,
-              } as ApiError,
-              { status: 502 },
-            );
-          // 🔴 THE NAME IS STORED IMMEDIATELY, not at the end. It is what makes
-          // the NEXT request find this folder instead of making a second one —
-          // so a kill between steps costs nothing.
-          await rememberFolderName(folderId, FOLDER_NAME);
-          return NextResponse.json({
-            step, done: "fields", folderId, ok: true,
-            detail: `Created “${FOLDER_NAME}” (${folderId}) and recorded its name.`,
-          });
-        }
-
-        if (step === "fields") {
-          const folderId = String(body.folderId || "") || (await findFolder());
-          if (!folderId)
-            return NextResponse.json(
-              { error: `“${FOLDER_NAME}” does not exist yet. Run the first step.`, status: 400 } as ApiError,
-              { status: 400 },
-            );
-          const defs = await getEditableFieldDefs("opportunity");
-          const out: { ok: boolean; detail: string }[] = [];
-          for (const want of MOVE) {
-            const def = defs.find((d) => (d.name || "").trim().toLowerCase() === want);
-            // ⚠️ NOT AN ABORT. Event Source may not exist on an account that has
-            // never run an event; the other field must still move.
-            if (!def) { out.push({ ok: false, detail: `No field named “${want}” on this account — skipped.` }); continue; }
-            if (def.parentId === folderId) { out.push({ ok: true, detail: `“${def.name}” is already in ${FOLDER_NAME}.` }); continue; }
-            try {
-              await moveFieldToFolder(def.id, folderId);
-              out.push({ ok: true, detail: `Moved “${def.name}” into ${FOLDER_NAME}.` });
-            } catch (e) {
-              out.push({ ok: false, detail: `“${def.name}” did not move: ${await explainGhlError(e)}` });
-            }
-          }
-          return NextResponse.json({ step, done: "tick", folderId, results: out });
-        }
-
-        // step === "tick"
-        const folderId = String(body.folderId || "") || (await findFolder());
-        if (!folderId)
-          return NextResponse.json(
-            { error: `“${FOLDER_NAME}” does not exist yet. Run the first step.`, status: 400 } as ApiError,
-            { status: 400 },
-          );
-        const token = folderKeyById(folderId) || folderId;
-        // 🔴 RE-READ. `rememberFolderName` wrote to this value in the FIRST
-        // step; saving from a config captured before it would put the old
-        // folderNames back and erase the name — round 118's finding, and it
-        // matters more now that the steps are separate requests.
-        const fresh = await getPipelineConfig();
-        const pipelines = { ...fresh.pipelines };
-        const ticked: string[] = [];
-        for (const [pid, entry] of Object.entries(pipelines)) {
-          // 🔴 CLIENT ONLY. An applicant has no referring partner in this sense.
-          if (entry.scope !== "client") continue;
-          if (entry.folders.includes(token)) continue;
-          pipelines[pid] = { ...entry, folders: [...entry.folders, token] };
-          ticked.push(pid);
-        }
-        const config = ticked.length
-          ? await savePipelineConfig({ ...fresh, seeded: true, pipelines })
-          : fresh;
-        return NextResponse.json({
-          step: "tick", done: null, folderId, config, ok: true,
-          detail: ticked.length
-            ? `Ticked onto ${ticked.length} client pipeline(s).`
-            : "Every client pipeline already had it ticked.",
-        });
-      }
 
       case "save-config": {
         const next = parsePipelineConfig(

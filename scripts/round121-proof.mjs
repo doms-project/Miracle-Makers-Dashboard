@@ -150,21 +150,36 @@ const exported = ["GET", "POST", "PUT", "PATCH", "DELETE"].filter((m) =>
 console.log(`  /api/opportunities/[id] exports: ${exported.join(", ")}`);
 const calls = [...rs.matchAll(/api\/opportunities\/\$\{encodeURIComponent\([^)]+\)\}`?,?\s*\{\s*(?:\/\/[^\n]*\n\s*)*method:\s*"([A-Z]+)"/g)].map((m) => m[1]);
 console.log(`  ReferralsSection sends: ${calls.join(", ") || "(none matched)"}`);
-ok("the route exports PATCH only", exported.length === 1 && exported[0] === "PATCH", exported);
+// ⚠️ ROUND 124 ADDED **DELETE** TO THIS ROUTE, deliberately (items 3 and 4), so
+// "exports PATCH only" is no longer the property worth holding. What matters is
+// what it does NOT export: a PUT that would let the round-115c mistake come
+// back, and a GET or POST nobody asked for.
+ok("the route exports PATCH and DELETE, and nothing else",
+   exported.length === 2 && exported.includes("PATCH") && exported.includes("DELETE"), exported);
+ok("🔴 and no PUT, which is the shape that caused this", !exported.includes("PUT"), exported);
 ok("🔴 and NO call sends PUT any more", !/method: "PUT"/.test(rs), "a PUT remains");
-ok("⚠️ both of them were wrong, not one", calls.length >= 1 && calls.every((m) => m === "PATCH"), calls);
+// ⚠️ DELETE IS NOW ONE OF THE METHODS THIS COMPONENT SENDS — the event delete.
+// The property is that nothing sends PUT, not that everything sends PATCH.
+ok("⚠️ both of them were wrong, not one",
+   calls.length >= 1 && calls.every((m) => m === "PATCH" || m === "DELETE"), calls);
 
 const api = readFileSync("lib/apiFetch.ts", "utf8");
 ok("🔴 and a 405 now says what it is", /called its own API the wrong way/.test(api), "no 405 message");
 ok("⚠️ without blaming GoHighLevel", /Nothing was sent to GoHighLevel/.test(api), "still blames GHL");
 
 // ═══ 4 · THE DEPENDENT STEP ═══════════════════════════════════════════════
-console.log("\n4 · 🔴 THE TICK DOES NOT RUN WHEN NEITHER FIELD MOVED");
+console.log("\n4 · ⬜ RETIRED IN ROUND 124 — THE MIGRATION IT GUARDED IS GONE");
+console.log("  This asserted that step 4 of the attribution run was skipped when");
+console.log("  steps 2 and 3 both failed. That run was a ONE-TIME MIGRATION, it is");
+console.log("  complete, and round 124 deleted the button AND the route action —");
+console.log("  a finished migration left as a control is a hazard, not a feature.");
 const admin = readFileSync("components/PipelineAdmin.tsx", "utf8");
-ok("🔴 a step whose prerequisite failed is skipped",
-   /j\.results\.every\(\(r: \{ ok\?: boolean \}\) => r\.ok === false\)/.test(admin), "no guard");
-ok("⚠️ and it SAYS it skipped, rather than going quiet",
-   /ticking it onto every client pipeline would add a section with/.test(admin), "silent skip");
+// ⚠️ THE ASSERTION IS REPLACED, NOT DELETED. A section that quietly disappears
+// is indistinguishable from one somebody dropped because it went red.
+ok("🔴 the attribution run is gone from the screen",
+   !/Create Referral Attribution and move the fields/.test(admin), "the button survives");
+ok("⚠️ and the reasoning it existed for is kept",
+   /so attribution can be shown on a client record without/.test(admin), "the sentence is gone");
 
 // ═══ 5 · THE EVENT MESSAGE ════════════════════════════════════════════════
 console.log("\n5 · 🔴 THE DUPLICATE MESSAGE STOPS TALKING ABOUT CLIENTS AND MOVES");

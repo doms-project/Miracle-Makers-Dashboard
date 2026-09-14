@@ -119,6 +119,33 @@ export interface StoredPipelineEntry {
    * recruiting group and the screen does not offer one.
    */
   group?: "caregiver" | "staff";
+  /**
+   * 🔴 WHAT THIS PIPELINE IS **FOR** — round 124, item 2.
+   *
+   * ⚠️ TODAY THE ONLY ROLE IS "events", AND IT EXISTS BECAUSE THE EVENTS
+   * PIPELINE WAS THE LAST STRING-MATCHED LOOKUP IN THE APP. `eventsPipeline()`
+   * found it with `/^events?$/i` against the trimmed NAME, across the client
+   * and "none" pickers. That breaks two ways and both are silent:
+   *
+   *   a rename       "Events & Outreach" matches nothing and the tab empties
+   *   a scope change an admin setting it to caregiver — which the Pipelines
+   *                  screen lets them do — takes it out of both searches
+   *
+   * 🔴 EVERY OTHER PIPELINE IN THIS APP RESOLVES BY ID FROM THIS CONFIG, and
+   * Events is already in it. Marking the role here is the same shape as
+   * `group` above: set once on the screen that owns every other per-pipeline
+   * decision, immune to a rename, and readable without a search.
+   *
+   * ⚠️ THE NAME MATCH IS KEPT AS A FALLBACK, NOT REPLACED. Nobody has set a
+   * role yet, and a fix that empties the tab until an admin visits a settings
+   * screen is not a fix. The name match runs only when no pipeline carries the
+   * role, and the screen says which of the two answered.
+   *
+   * ⚠️ AT MOST ONE PIPELINE MAY HOLD A GIVEN ROLE. Setting it on a second
+   * clears it from the first — two Events pipelines is not a state any reader
+   * of this config could resolve.
+   */
+  role?: "events";
 }
 
 export interface StoredPipelineConfig {
@@ -243,9 +270,14 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
     // ⚠️ OMITTED WHEN ABSENT, like `exclude`. A `group` on every entry that
     // has not been decided would make "nobody chose" indistinguishable from
     // "somebody chose caregiver".
+    // ⚠️ ONLY THE ROLES THIS VERSION KNOWS. An unrecognised role string is
+    // dropped rather than carried through: a reader that passes along a value
+    // it cannot interpret is how a typo becomes a permanent, invisible setting.
+    const role = e.role === "events" ? "events" : null;
     const base: StoredPipelineEntry = { scope, folders };
     if (exclude.length) base.exclude = exclude;
     if (group) base.group = group;
+    if (role) base.role = role;
     pipelines[id] = base;
   }
   const folderNames: Record<string, string> = {};
@@ -278,6 +310,21 @@ export function recruitingGroup(
   pipelineId: string,
 ): "caregiver" | "staff" {
   return c?.pipelines?.[pipelineId]?.group === "staff" ? "staff" : "caregiver";
+}
+
+/**
+ * The pipeline id carrying a role, or "" when none does — round 124, item 2.
+ *
+ * ⚠️ SCOPE-BLIND ON PURPOSE. The caller wants the Events pipeline wherever an
+ * admin has filed it; a role that only works under one scope is the scope bug
+ * this replaces.
+ */
+export function pipelineWithRole(
+  c: StoredPipelineConfig | null,
+  role: NonNullable<StoredPipelineEntry["role"]>,
+): string {
+  const hit = Object.entries(c?.pipelines || {}).find(([, e]) => e?.role === role);
+  return hit ? hit[0] : "";
 }
 
 /** Field ids excluded for one pipeline, as a Set. Empty when there are none. */

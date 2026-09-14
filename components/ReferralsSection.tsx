@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
+import ConfirmDialog from "./ConfirmDialog";
 import { apiFetch } from "@/lib/apiFetch";
 import {
   CADENCE,
@@ -82,6 +83,8 @@ export interface Payload {
     outcomeField: string;
     eventsPipelineConfigured: boolean;
     eventsPipelineName: string;
+    /** "role" = marked on the Pipelines screen · "name" = still matched on the string. */
+    eventsPipelineVia?: "role" | "name" | "none";
     attendeeEventField: string;
     oppEventField: string;
     touchAsked: number;
@@ -276,6 +279,12 @@ export default function ReferralsSection({
   const [openId, setOpenId] = useState<string | null>(null);
   /** Analysis 104 · 5 — bumped after a logged touch so the open drawer re-reads. */
   const [notesToken, setNotesToken] = useState(0);
+  /** Round 124 · item 4 — the event awaiting a confirmed delete. */
+  const [delEvent, setDelEvent] = useState<RawEvent | null>(null);
+  /** Round 124 — the attendee awaiting removal FROM AN EVENT (never a contact delete). */
+  const [delAttendee, setDelAttendee] = useState<RawAttendee | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delErr, setDelErr] = useState<unknown>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [logFor, setLogFor] = useState<EnrichedPartner | null>(null);
   /** Either a partner, an event, or both — see LogReferralDialog. */
@@ -409,6 +418,93 @@ export default function ReferralsSection({
    * spread over however many minutes a person takes — the rate limit is not the
    * risk here. The silent failure was.
    */
+  /**
+   * 🔴 ROUND 124 · ITEM 4 — DELETE AN EVENT.
+   *
+   * ⚠️ AN EVENT IS AN OPPORTUNITY, so this is the same route item 3 added and
+   * the same admin gate enforces it. No second delete path, and therefore no
+   * second place for the permission check to be missing from.
+   *
+   * ⚠️ THE ATTENDEES ARE NOT TOUCHED, AND THAT IS A DECISION, NOT AN OMISSION.
+   * They are contacts; their `Event Attended` now points at a record that no
+   * longer exists. Clearing it would mean a write to every one of them, which
+   * can half-fail and leaves no way to tell which half — and it would ERASE the
+   * only remaining evidence that those people were met at an event at all. A
+   * dangling pointer is recoverable information; a blanked field is not. So
+   * they are left, and COUNTED, in the caveat box — exactly what already
+   * happens to a referral whose partner was deleted.
+   */
+  const deleteEvent = useCallback(async () => {
+    const ev = delEvent;
+    if (!ev) return;
+    setDelBusy(true);
+    setDelErr(null);
+    try {
+      await apiFetch(`/api/opportunities/${encodeURIComponent(ev.id)}`, {
+        method: "DELETE",
+        ssoBlob,
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined }),
+      });
+      setData((d) => (d ? { ...d, events: d.events.filter((e) => e.id !== ev.id) } : d));
+      setDelEvent(null);
+    } catch (e) {
+      setDelErr(e);
+    } finally {
+      setDelBusy(false);
+    }
+  }, [delEvent, ssoBlob]);
+
+  /**
+   * 🔴 ROUND 124 — TAKE SOMEBODY OFF AN EVENT, WITHOUT DELETING THEM.
+   *
+   * A duplicate or a wrong name stayed on the event's numbers for ever —
+   * counted in "met" and dragging cost-per-legit-lead with it — because a row
+   * could be triaged and never removed.
+   *
+   * ⚠️ THIS CLEARS ONE FIELD. `Event Attended` goes empty and they stop
+   * counting here; the contact keeps its name, its outcome, its notes and its
+   * history. It is the same PATCH the outcome dropdown already uses, so there
+   * is no new write path and the version guard still applies.
+   */
+  const removeAttendee = useCallback(async () => {
+    const a = delAttendee;
+    const field = data?.meta.attendeeEventField;
+    if (!a || !field) return;
+    setDelBusy(true);
+    setDelErr(null);
+    try {
+      // 🔴 ROUND 124 — `/api/referrals`, NOT `/api/contacts/{id}/fields`.
+      // That route's `[id]` is an OPPORTUNITY id and an attendee has no
+      // opportunity, so it answered 404 for every attendee write. See the
+      // `attendee-field` action.
+      await apiFetch("/api/referrals", {
+        method: "POST",
+        ssoBlob,
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          action: "attendee-field",
+          contactId: a.id,
+          field: "event",
+          value: "",
+          ...(a.version ? { expectedVersion: a.version } : {}),
+        }),
+      });
+      // ⚠️ REMOVED FROM THE EVENT, NOT FROM THE PAYLOAD. They are still an
+      // attendee contact with no event, which is a state the caveat box already
+      // names — dropping the row entirely would hide that they exist.
+      setData((d) =>
+        d
+          ? { ...d, attendees: d.attendees.map((x) => (x.id === a.id ? { ...x, eventId: "" } : x)) }
+          : d,
+      );
+      setDelAttendee(null);
+    } catch (e) {
+      setDelErr(e);
+    } finally {
+      setDelBusy(false);
+    }
+  }, [delAttendee, data, ssoBlob]);
+
   const setOutcome = useCallback(
     async (a: RawAttendee, value: string) => {
       const field = data?.meta.outcomeField;
@@ -429,18 +525,24 @@ export default function ReferralsSection({
           : d,
       );
       try {
-        const j = await apiFetch<{ version?: string }>(
-          `/api/contacts/${encodeURIComponent(a.id)}/fields`,
-          {
-            method: "PATCH",
-            ssoBlob,
-            body: JSON.stringify({
-              ssoKey: ssoBlob ?? undefined,
-              ...(a.version ? { expectedVersion: a.version } : {}),
-              fields: [{ id: field, value }],
-            }),
-          },
-        );
+        // 🔴 ROUND 124 — THIS WAS 404-ing ON EVERY CHANGE, and the URL is why:
+        // `/api/contacts/{id}/fields` takes an OPPORTUNITY id and borrows that
+        // record's permission. An attendee is a contact with no opportunity, so
+        // the gate could never find one. Round 122 waved this through as "no new
+        // write path — that route already exists"; it does, and it was never
+        // this route's job. The proof found it by driving the handler.
+        const j = await apiFetch<{ version?: string }>("/api/referrals", {
+          method: "POST",
+          ssoBlob,
+          body: JSON.stringify({
+            ssoKey: ssoBlob ?? undefined,
+            action: "attendee-field",
+            contactId: a.id,
+            field: "outcome",
+            value,
+            ...(a.version ? { expectedVersion: a.version } : {}),
+          }),
+        });
         // Carry the new version forward, or the NEXT change on this row would
         // send a stale one and 409 against itself.
         setData((d) =>
@@ -578,6 +680,23 @@ export default function ReferralsSection({
     () => (data?.attendees || []).filter((a) => !a.eventId).length,
     [data],
   );
+  /**
+   * 🔴 ROUND 124 · ITEM 4 — MET AT AN EVENT THAT NO LONGER EXISTS.
+   *
+   * Deleting an event does not touch its attendees, deliberately: clearing
+   * `Event Attended` on every one of them is a write that can half-fail, and it
+   * would erase the only remaining evidence that those people were met at all.
+   * So the pointer is left dangling — and DANGLING IS ONLY ACCEPTABLE IF IT IS
+   * COUNTED. This is the same treatment a referral gets when its partner is
+   * deleted, and for the same reason.
+   *
+   * ⚠️ AGAINST `data.events`, NOT THE DIVISION CUT. An attendee at an OLTL
+   * event is not orphaned merely because you are looking at ODP.
+   */
+  const orphanAttendees = useMemo(() => {
+    const live = new Set((data?.events || []).map((e) => e.id));
+    return (data?.attendees || []).filter((a) => a.eventId && !live.has(a.eventId)).length;
+  }, [data]);
 
   /**
    * ⚠️ ONE ROW PER PERSON — round 122's dedupe, hoisted so the BADGE and the
@@ -766,6 +885,12 @@ export default function ReferralsSection({
     if (division !== "All" && unplacedAttendees)
       caveats.push(
         `${unplacedAttendees} ${unplacedAttendees === 1 ? "person" : "people"} met at an event ${unplacedAttendees === 1 ? "is" : "are"} not counted in ${division}'s event figures, because their record does not say which event they were at.`,
+      );
+    // ⚠️ ROUND 124 · ITEM 4 — ACCOUNT-WIDE BY NECESSITY, like the dangling
+    // referral beside it: the event is gone, so its division went with it.
+    if (orphanAttendees)
+      wideCaveats.push(
+        `${orphanAttendees} ${orphanAttendees === 1 ? "person is" : "people are"} recorded at an event that no longer exists, so ${orphanAttendees === 1 ? "they are" : "they are"} not counted against any event. Their contact record is intact — clear or re-set Event Attended in GoHighLevel to place ${orphanAttendees === 1 ? "them" : "them"} again.`,
       );
     if (dangling)
       wideCaveats.push(
@@ -1602,23 +1727,50 @@ export default function ReferralsSection({
               </div>
             ) : null}
 
+            {/* 🔴 ROUND 124 · ITEM 2 — THREE STATES, AND SILENCE WAS THE FAULT
+                WHATEVER THE CAUSE. One sentence covered "no pipeline", "no
+                events" and "none in this division", and it named the division
+                in all three — so a rename of the Events pipeline read as "no
+                events in ODP" and sent somebody looking at the division
+                switcher for a problem on the Pipelines screen. Same fault as
+                the Recruiting empty state in 121b, and the same fix: never let
+                an empty state guess its own cause. */}
             {!data?.meta.eventsPipelineConfigured ? (
               <div className="rfgap">
-                <b>No Events pipeline is configured</b>
+                <b>No pipeline named Events was found</b>
                 <p>
-                  Nothing in the stored pipeline config is scoped to clients and
-                  named &ldquo;Events&rdquo;, so there is no pipeline to read
-                  events from. Add it in Admin → Pipelines with scope{" "}
-                  <b>client</b>. The id is deliberately not hardcoded here.
+                  Nothing is being read, so this tab is empty for a reason that
+                  has nothing to do with your division or your access.{" "}
+                  <b>Check its name on the Pipelines screen</b> — this lookup
+                  matches the name &ldquo;Events&rdquo; exactly, so
+                  &ldquo;Events &amp; Outreach&rdquo; does not match it.
                 </p>
+                <p>
+                  ⚠️ Better: mark the pipeline as <b>the Events pipeline</b>{" "}
+                  under Role on the Pipelines screen. That records its id, so a
+                  rename cannot break this again — and it works whatever scope
+                  the pipeline has.
+                </p>
+              </div>
+            ) : !data?.events.length ? (
+              <div className="rfpanel">
+                <div className="empty">
+                  <b>No events yet</b>
+                  <br />
+                  <b>{data?.meta.eventsPipelineName || "Events"}</b> was found
+                  and holds no records. An event is an opportunity in it — add
+                  one from a partner&apos;s panel.
+                </div>
               </div>
             ) : !events.length ? (
               <div className="rfpanel">
                 <div className="empty">
                   <b>No events in {divLabel(division)}</b>
                   <br />
-                  An event is an opportunity in the{" "}
-                  {data?.meta.eventsPipelineName || "Events"} pipeline.
+                  {data.events.length} event
+                  {data.events.length === 1 ? " exists" : "s exist"} in{" "}
+                  <b>{data?.meta.eventsPipelineName || "Events"}</b>, none of
+                  them in this division. Switch the heading above.
                 </div>
               </div>
             ) : (
@@ -1687,6 +1839,26 @@ export default function ReferralsSection({
                         </div>
                         <div className="dt">
                           {e.date || "no date"} · {money(e.cost)} cost
+                          {/* 🔴 ROUND 124 · ITEM 4 — ADMIN ONLY, AND THE APP'S
+                              OWN CONFIRM. An event is a thing somebody typed,
+                              so a test one or a mistyped cost had nowhere to
+                              go. Same route and same server-side admin gate as
+                              a client case. */}
+                          {data?.viewer.isAdmin ? (
+                            <div className="rfevdel">
+                              <button
+                                type="button"
+                                className="pfdangerbtn"
+                                onClick={() => {
+                                  setDelErr(null);
+                                  setDelEvent(e);
+                                }}
+                                title="Removes this event. The people met stay in GoHighLevel."
+                              >
+                                Delete event
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                       <div className="rfstats">
@@ -1790,6 +1962,28 @@ export default function ReferralsSection({
                                   </option>
                                 ))}
                               </select>
+                              {/* 🔴 ROUND 124 — TAKE A ROW OFF THE EVENT.
+                                  Somebody added in error — a duplicate, a wrong
+                                  name — stayed on this event's numbers for
+                                  ever, counted in "met" and dragging cost per
+                                  legit lead with them. There was no way to
+                                  remove one.
+                                  ⚠️ NOT A CONTACT DELETE, and the title says
+                                  so: it clears Event Attended and nothing
+                                  else. */}
+                              <button
+                                type="button"
+                                className="rfocx"
+                                disabled={!!outBusy[c.id]}
+                                onClick={() => {
+                                  setDelErr(null);
+                                  setDelAttendee(c);
+                                }}
+                                title="Removes them from this event. The contact stays in GoHighLevel."
+                                aria-label={`Remove ${c.name} from this event`}
+                              >
+                                ×
+                              </button>
                             </div>
                           ))
                         )}
@@ -2048,6 +2242,74 @@ export default function ReferralsSection({
           divisions={data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]}
           onClose={() => setAddOpen(false)}
           onAdded={() => void load()}
+        />
+      ) : null}
+
+      {/* 🔴 ROUND 124 · ITEM 4 — THE APP'S OWN CONFIRM, NAMING THE EVENT AND
+          SAYING WHAT GOES WITH IT. */}
+      {delEvent ? (
+        <ConfirmDialog
+          title="Delete this event?"
+          danger
+          body={
+            <>
+              <p style={{ margin: "0 0 10px" }}>
+                Removes <b>{delEvent.name}</b>
+                {delEvent.date ? ` (${delEvent.date})` : ""} from the events
+                list, along with its cost and its venue.
+              </p>
+              <p style={{ margin: "0 0 10px" }}>
+                {/* 🔴 SAY WHAT DOES **NOT** GO. Everybody assumes a delete
+                    cascades; this one deliberately does not. */}
+                The people met there are contacts and are <b>not</b> deleted.
+                Their record still says they attended this event, which will
+                then point at nothing — they are counted in the caveat box above
+                rather than quietly dropped.
+              </p>
+              <p className="fnote">
+                Any referral credited to this event keeps its partner. This
+                cannot be undone.
+              </p>
+            </>
+          }
+          confirmLabel="Delete event"
+          busy={delBusy}
+          error={delErr}
+          onConfirm={() => void deleteEvent()}
+          onCancel={() => {
+            setDelEvent(null);
+            setDelErr(null);
+          }}
+        />
+      ) : null}
+
+      {/* 🔴 ROUND 124 — REMOVE SOMEBODY FROM AN EVENT. */}
+      {delAttendee ? (
+        <ConfirmDialog
+          title="Remove them from this event?"
+          danger
+          body={
+            <>
+              <p style={{ margin: "0 0 10px" }}>
+                <b>{delAttendee.name}</b> stops counting towards this
+                event&apos;s numbers — people met, legit leads, and cost per
+                legit lead.
+              </p>
+              <p className="fnote">
+                Removes them from this event. The contact stays in GoHighLevel
+                with their name, their outcome and their history; only the event
+                they are linked to is cleared.
+              </p>
+            </>
+          }
+          confirmLabel="Remove from event"
+          busy={delBusy}
+          error={delErr}
+          onConfirm={() => void removeAttendee()}
+          onCancel={() => {
+            setDelAttendee(null);
+            setDelErr(null);
+          }}
         />
       ) : null}
 
@@ -4171,8 +4433,16 @@ function AddEventDialog({
             </div>
             <div className="irow2">
               <div>
-                <label htmlFor="re-venue">Venue</label>
-                <input id="re-venue" value={venue} onChange={(e) => setVenue(e.target.value)} />
+                {/* 🔴 ROUND 124 · ITEM 1 — THE VENUE IS NOW THE CONTACT, so it
+                    is required rather than decorative. It was already asked
+                    for; what changed is what it does. */}
+                <label htmlFor="re-venue">Venue *</label>
+                <input
+                  id="re-venue"
+                  value={venue}
+                  onChange={(e) => setVenue(e.target.value)}
+                  placeholder="Delco Expo Centre"
+                />
               </div>
               <div>
                 <label htmlFor="re-date">Date</label>
@@ -4223,10 +4493,27 @@ function AddEventDialog({
               never shown as a monthly figure, unlike referral value.
             </div>
           </div>
+          {/* 🔴 ROUND 124 · ITEM 1 — SAY WHAT THE VENUE NOW DOES, because it
+              creates a contact record and somebody should not discover that
+              afterwards. */}
           <div className="rfdhint">
-            Creates an opportunity in the Events pipeline with <b>{partner.org}</b>{" "}
-            recorded as the host, so it appears under &ldquo;Events worked&rdquo;
-            on their panel and as &ldquo;Run by&rdquo; on the event card.
+            Creates an opportunity in the Events pipeline attached to{" "}
+            <b>{venue.trim() || "the venue"}</b> as a contact, with{" "}
+            <b>{partner.org}</b> recorded as the host — so it appears under
+            &ldquo;Events worked&rdquo; on their panel and as &ldquo;Run
+            by&rdquo; on the event card.
+          </div>
+          <div className="rfdhint">
+            ⚠️ <b>The venue is the contact, not the partner.</b> GoHighLevel
+            allows one opportunity per contact per pipeline, so attaching events
+            to the partner meant a partner could host exactly one event ever.
+            The venue becomes a contact record — a real place with a real name —
+            and {partner.org} can host as many as they like.
+          </div>
+          <div className="rfdhint">
+            ⚠️ One event per venue, though: a second event at the same venue is
+            refused, and the fix is to name it distinctly —{" "}
+            <b>{(venue.trim() || "Delco Expo Centre") + " (Spring)"}</b>.
           </div>
           {!hostFieldPresent ? (
             <div className="rfdhint">
@@ -4246,7 +4533,7 @@ function AddEventDialog({
             type="button"
             className="cgsave"
             onClick={() => void save()}
-            disabled={busy || !name.trim()}
+            disabled={busy || !name.trim() || !venue.trim()}
           >
             {busy ? "Saving…" : "Add event"}
           </button>

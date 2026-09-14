@@ -1282,6 +1282,11 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 
 .rfev{padding:15px;border-bottom:1px solid var(--line-soft)}
 .rfev:last-child{border-bottom:0}
+/* 🔴 ROUND 124 · ITEM 4 — the event's delete, under its date. `.rfev .dt` is
+   right-aligned in a flex header, so the button needs its own line rather than
+   sitting on the end of "no date · $0 cost". A class used and never defined is
+   the round-120 fault; this is the definition. */
+.rfevdel{margin-top:7px;display:flex;justify-content:flex-end}
 .rfev .hd{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
 .rfev .nm{font-weight:700;font-size:14.5px;color:var(--ink)}
 .rfevsub{font-size:11.5px;color:var(--ink-3);margin-top:3px}
@@ -1413,6 +1418,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rfoc{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
   padding:8px 0;border-bottom:1px solid var(--line-soft)}
 .rfoc:last-child{border-bottom:0}
+/* 🔴 ROUND 124 — remove one person from an event. `.rfoc` is a flex row whose
+   last child was the outcome select; this sits beside it rather than wrapping
+   onto its own line, which is what an unstyled <button> would have done in a
+   row with `align-items:flex-start`. */
+.rfocx{flex:none;width:26px;height:26px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg);color:var(--ink-3);font-size:15px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.rfocx:hover:not(:disabled){background:#fdeeec;border-color:#c0392b;color:#8c2f22}
+.rfocx:disabled{opacity:.45;cursor:not-allowed}
 .rfoc .n{flex:1;min-width:0}
 .rfocname{font-size:12.5px;font-weight:600;color:var(--ink)}
 .rfoc .pf{font-size:11.5px;color:var(--ink-3);margin-top:2px;line-height:1.5}

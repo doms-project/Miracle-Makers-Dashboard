@@ -104,10 +104,15 @@ const ghl = readFileSync("lib/ghl.ts", "utf8");
 const route = readFileSync("app/api/admin/pipelines/route.ts", "utf8");
 ok("🔴 the move uses the location endpoint",
    /customFields\/\$\{encodeURIComponent\(fieldId\)\}/.test(ghl), "still on /custom-fields/");
-ok("🔴 a field already in the folder is not re-attempted",
-   /is already in \$\{FOLDER_NAME\}/.test(route), "no resume check");
-ok("🔴 and the tick is skipped when every move failed",
-   /r\.ok === false\)\) \{/.test(admin), "no guard");
+// ⬜ ROUND 124 RETIRED THE OTHER TWO. They asserted the resume check and the
+// skipped tick INSIDE the attribution migration, which is finished and whose
+// button and route action are both deleted — a completed one-time migration
+// left as a control is a hazard, not a feature. Replaced rather than removed,
+// so nobody has to wonder whether they went red.
+ok("🔴 the attribution migration is gone from the admin route",
+   !/case "attribution-folder"/.test(route), "the action survives");
+ok("⚠️ and the reasoning it existed for is kept on the screen",
+   /so attribution can be shown on a client record without/.test(admin), "the sentence is gone");
 
 console.log(`\n${pass} passed, ${fail} failed.`);
 process.exit(fail ? 1 : 0);

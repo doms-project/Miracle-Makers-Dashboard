@@ -7,6 +7,7 @@ import {
   REASSIGN_STAGE_NAME,
   getEditableFieldDefs,
   updateOpportunity,
+  deleteOpportunity,
   explainGhlError,
   toGhlDate,
   GhlError,
@@ -305,4 +306,111 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string }> },
 ) {
   return withGrants(() => patchHandler(request, ctx));
+}
+
+/**
+ * 🔴 ROUND 124 · ITEM 3 — DELETE THE CASE, NOT THE PERSON.
+ *
+ * This route exported PATCH alone. Mark lost and Move existed; delete did not,
+ * so a test record, a duplicate or obvious junk could only be cleared in
+ * GoHighLevel — and there are several on the account that nobody could remove
+ * from here.
+ *
+ * ⚠️ ADMIN ONLY, AND SERVER-SIDE. A rep who wants a record gone should MARK IT
+ * LOST WITH A REASON: a lost lead with a reason tells you why leads fail, and a
+ * deleted one tells you nothing. Hiding the button is convenience; this is the
+ * rule.
+ *
+ * ⚠️ `canEditRecord` IS NOT ENOUGH and is deliberately not reused. It admits
+ * the owner and any follower, which is exactly the population this is being
+ * withheld from.
+ *
+ * ⚠️ THE CONTACT IS NEVER TOUCHED, and there is no route that deletes one.
+ * GoHighLevel is the right place for that — it has its own safeguards and its
+ * own audit — and a dashboard that can erase a person is a dashboard somebody
+ * erases a person from by accident.
+ */
+async function deleteHandler(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await ctx.params;
+    const body = (await request.json().catch(() => ({}))) as { ssoKey?: string; key?: string };
+    const blob = body.ssoKey || body.key || null;
+
+    let session: { userId: string; role?: string; type?: string } | null = null;
+    const enforce = ssoConfigured();
+    if (enforce) {
+      if (!blob)
+        return NextResponse.json(
+          { error: "Sign-in required.", detail: "No SSO session was provided.", status: 401 } as ApiError,
+          { status: 401 },
+        );
+      const s = decryptSso(blob);
+      session = { userId: s.userId, role: s.role, type: s.type };
+      if (!isAdminSession(session.role, session.type))
+        return NextResponse.json(
+          {
+            error: "Only an admin can delete a record.",
+            detail:
+              "Mark it lost with a reason instead — a lost lead with a reason tells you why leads fail; a deleted one tells you nothing.",
+            refusal: true,
+            status: 403,
+          } as ApiError,
+          { status: 403 },
+        );
+    }
+
+    // ⚠️ READ FIRST, SO THE ANSWER CAN NAME WHAT WENT. A 404 here is also the
+    // honest answer to "somebody already deleted it", and it costs one cached
+    // read rather than a blind write.
+    const target = await getOpportunityById(id);
+    if (!target)
+      return NextResponse.json(
+        {
+          error: "That record no longer exists.",
+          detail: "It may already have been deleted. Refresh to see the current list.",
+          status: 404,
+        } as ApiError,
+        { status: 404 },
+      );
+
+    const label = target.oppName || `${target.first} ${target.last}`.trim() || "the record";
+    await deleteOpportunity(id);
+    // ⚠️ AFTER THE DELETE AND NEVER AWAITED INTO THE RESPONSE — emit() never
+    // throws, and a webhook endpoint being down must not make a completed
+    // delete look like a failure.
+    void emit(
+      "opportunity.deleted",
+      { actor: { userId: session?.userId || "" }, opportunityId: id, contactId: target.contactId || "" },
+      { name: label, pipelineId: target.pipelineId, pipelineName: target.pipelineName || "" },
+    );
+    return NextResponse.json({
+      ok: true,
+      id,
+      name: label,
+      pipelineName: target.pipelineName || "",
+      contactId: target.contactId || "",
+    });
+  } catch (e) {
+    if (e instanceof SsoError)
+      return NextResponse.json({ error: e.message, status: 401 } as ApiError, { status: 401 });
+    if (e instanceof GhlError)
+      return NextResponse.json(
+        { error: await explainGhlError(e), detail: e.detail, status: e.status } as ApiError,
+        { status: e.status >= 400 ? e.status : 502 },
+      );
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Delete failed.", status: 500 } as ApiError,
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withGrants(() => deleteHandler(request, ctx));
 }
