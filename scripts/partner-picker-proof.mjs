@@ -392,7 +392,11 @@ ok("🔴 the last attributed row is fully reachable, not cut off",
 
 // ── 7 · ITEMS 2 + 3 · THE CONTROLS OPEN AND CARRY THE WARNING ─────────────
 console.log("\n7 · 🔴 THE VALUE AND STATUS CONTROLS");
-await frame.$eval(".rfopp:first-child button", (e) => e.click());
+// 🔴 NOT "the first button in the row" — round 120's item 3 added the case NAME
+// as a button, so a positional selector started clicking THAT, which opens the
+// record panel and drops a scrim over everything the rest of this proof clicks.
+// The edit control is `.linkbtn`; name it.
+await frame.$eval(".rfopp:first-child .linkbtn", (e) => e.click());
 await page.waitForTimeout(400);
 const edit = await frame.evaluate(() => {
   const box = document.querySelector(".rfoppedit");
@@ -470,8 +474,12 @@ console.log(`  writes sent: ${writes.map((w) => `${w.m} ${w.u}`).join(", ")}`);
 console.log(`  body (ssoKey elided): ${(writes[0]?.body || "")
   .replace(/"ssoKey":"[^"]*"/, '"ssoKey":"…"')}`);
 ok("🔴 EXACTLY ONE write", writes.length === 1, writes);
-ok("🔴 and it is a PUT to an opportunity, not a create",
-   writes[0]?.m === "PUT" && /^opportunities\//.test(writes[0]?.u || ""), writes[0]);
+// 🔴 PATCH, NOT PUT — round 121, item 2. This assertion read "a PUT to an
+// opportunity" and PASSED, against a fake that answered any method; the real
+// route exports PATCH only, so the write it was proving 405'd in production.
+// The assertion proved the harness.
+ok("🔴 and it is a PATCH to an opportunity, not a create",
+   writes[0]?.m === "PATCH" && /^opportunities\//.test(writes[0]?.u || ""), writes[0]);
 ok("🔴 carrying only the Referring Partner field",
    /customFields/.test(writes[0]?.body || "") &&
    !/firstName|lastName|action/.test(writes[0]?.body || ""), writes[0]?.body);

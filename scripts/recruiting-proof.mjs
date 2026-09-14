@@ -115,11 +115,11 @@ ok("🔴 and cgData is NOT filtered by group anywhere",
 
 console.log("\n5 · ✅ THE SWITCHER REUSES THE REFERRALS CONTROL");
 ok("it is the same classes, not a copy",
-   /className="rfhead cghead"/.test(page) && /className="rfdivpop"/.test(page), "not reused");
+   /className="rfhead rechead"/.test(page) && /className="rfdivpop"/.test(page), "not reused");
 // 🔴 POSITIVE, NOT NEGATIVE. "No <select> mentions cgGroup" matched this
 // file's own comment explaining that it is not a select. What is checkable is
 // the control that IS there: a button with aria-haspopup, and a listbox.
-const sw = page.slice(page.indexOf('className="rfhead cghead"'), page.indexOf('className="rfhead cghead"') + 2600);
+const sw = page.slice(page.indexOf('className="rfhead rechead"'), page.indexOf('className="rfhead rechead"') + 2600);
 ok("🔴 it is a button with a listbox, like the Referrals switcher",
    /aria-haspopup="listbox"/.test(sw) && /role="listbox"/.test(sw) && /role="option"/.test(sw), "not a listbox");
 ok("and the three choices are there",

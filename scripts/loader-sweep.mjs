@@ -269,6 +269,82 @@ for (const d of detailsBlocks) {
        `\`.${d.cls}:not([open]) > :not(summary){display:none}\`.`);
 }
 
+// ── 9 · A FETCH WHOSE METHOD THE TARGET ROUTE DOES NOT EXPORT ─────────────
+//
+// 🔴 THIS SHIPPED TWICE AND A PROOF PASSED OVER IT. "Credit this case" and the
+// attributed row's value/status edit both sent PUT to /api/opportunities/[id],
+// which exports PATCH and nothing else — so Next.js answered 405 with an empty
+// body before any handler ran. 115c's proof asserted "EXACTLY ONE write · a PUT
+// to an opportunity" and passed, because the fake answered any method.
+//
+// ⚠️ BOTH SIDES ARE IN THIS REPO, so this is decidable without running
+// anything: read the methods a route file exports, read the methods the client
+// sends to it, and compare.
+import { existsSync } from "node:fs";
+
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+/** "/api/opportunities/${id}/notes" -> app/api/opportunities/[id]/notes/route.ts */
+const routeFileFor = (apiPath) => {
+  const parts = apiPath.replace(/^\/api\//, "").split("/").filter(Boolean);
+  const tryPath = (segs) => {
+    const f = `app/api/${segs.join("/")}/route.ts`;
+    return existsSync(f) ? f : null;
+  };
+  // Any `${...}` segment is a dynamic param; try the literal first, then the
+  // single [id]-style folder that actually exists beside it.
+  const candidates = [[]];
+  for (const seg of parts) {
+    const next = [];
+    for (const c of candidates) {
+      if (/\$\{/.test(seg)) {
+        // Find whichever bracketed folder exists at this level.
+        for (const guess of ["[id]", "[slug]", "[key]"]) next.push([...c, guess]);
+      } else next.push([...c, seg]);
+    }
+    candidates.length = 0;
+    candidates.push(...next);
+  }
+  for (const c of candidates) {
+    const f = tryPath(c);
+    if (f) return f;
+  }
+  return null;
+};
+
+for (const f of files) {
+  const src = readFileSync(f, "utf8");
+  src.split("\n").forEach((l, i) => {
+    // `fetch("/api/…", { method: "X"` and apiFetch(`/api/…`, { method: "X"
+    const m = l.match(/["`](\/api\/[^"`]+)["`]/);
+    if (!m) return;
+    // ⚠️ THE WINDOW MUST NOT CROSS INTO THE NEXT CALL. A flat 12 lines found a
+    // `method:` belonging to a DIFFERENT fetch and reported it against this
+    // URL — a false positive, which is the one thing a sweep must not produce.
+    // Cut at whichever comes first: the end of this call, or the next /api/.
+    const after = src.split("\n").slice(i, i + 12);
+    const stop = after.findIndex(
+      (ln, k) => k > 0 && (/^\s*\)[;,]?\s*$/.test(ln) || /["`]\/api\//.test(ln)),
+    );
+    const window = (stop > 0 ? after.slice(0, stop) : after).join(" ");
+    const meth = window.match(/method:\s*"([A-Z]+)"/);
+    if (!meth) return;                       // no method given -> GET
+    const method = meth[1];
+    if (!METHODS.includes(method)) return;
+    const routeFile = routeFileFor(m[1].split("?")[0]);
+    if (!routeFile) return;                  // cannot resolve -> say nothing
+    const route = readFileSync(routeFile, "utf8");
+    const exported = METHODS.filter((x) =>
+      new RegExp(`export\\s+(async\\s+)?function\\s+${x}\\b`).test(route),
+    );
+    if (!exported.length) return;
+    if (exported.includes(method)) return;
+    flag("A FETCH USING A METHOD THE ROUTE DOES NOT EXPORT", f, i + 1, l.trim().slice(0, 80),
+         `${method} ${m[1]} -> ${routeFile} exports only ${exported.join(", ")}. ` +
+         "Next.js answers 405 with an EMPTY BODY before any handler runs, so " +
+         "nothing in the app can explain it and no request reaches GoHighLevel.");
+  });
+}
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`

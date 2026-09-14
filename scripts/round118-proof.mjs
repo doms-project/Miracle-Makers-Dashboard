@@ -109,7 +109,16 @@ const server = http.createServer((req, res) => {
       return json(res, 200, {
         customFieldFolder: { id: `new_folder_${++folderSeq}`, name: body?.name },
       });
-    if (path.startsWith("/custom-fields/") && req.method === "PUT") {
+    // 🔴 ROUND 121'S RULE, APPLIED TO THIS FAKE: it must REFUSE what
+    // GoHighLevel refuses. This answered PUT /custom-fields/{id} with a
+    // success, so round 118's proof passed over a field move that the live
+    // account rejects outright — the fourth time in four rounds a fake has
+    // accepted a call the app cannot make.
+    if (/^\/custom-fields\/[^/]+$/.test(path) && req.method === "PUT")
+      return json(res, 400, {
+        message: "Fields with model opportunity is not supported on this route",
+      });
+    if (/^\/locations\/[^/]+\/customFields\/[^/]+$/.test(path) && req.method === "PUT") {
       const id = path.split("/").pop();
       const f = fields.find((x) => x.id === id);
       if (f && body?.parentId) f.parentId = body.parentId;

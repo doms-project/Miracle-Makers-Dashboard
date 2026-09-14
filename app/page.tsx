@@ -4873,7 +4873,14 @@ export default function Dashboard() {
                 are the classes ReferralsSection already uses — borrowed, not
                 copied, so the two switchers cannot drift apart. */}
             {view === "caregivers" ? (
-              <div className="rfhead cghead">
+              <div className="rfhead rechead">
+                {/* 🔴 THE BUTTON LIVES INSIDE THE <h1> — round 121. Round 120
+                    REPLACED the h1 for this section, which took the page's
+                    heading level away from it: a screen reader lost the
+                    landmark and anything keying on `.main h1` stopped finding
+                    one. A heading that behaves as a control is still a
+                    heading; the control goes inside it, not instead of it. */}
+                <h1 className="rechead-h">
                 <button
                   type="button"
                   className="rfdiv"
@@ -4889,6 +4896,7 @@ export default function Dashboard() {
                     <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" />
                   </svg>
                 </button>
+                </h1>
                 {cgGroupOpen ? (
                   <ul className="rfdivpop" role="listbox" aria-label="Recruiting group">
                     {(

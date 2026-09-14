@@ -118,6 +118,22 @@ export async function apiFetch<T = unknown>(
       raw,
     );
 
+  // 🔴 A 405 WITH AN EMPTY BODY IS UNREADABLE — round 121, item 2. Next.js
+  // answers it before any handler runs, so nothing in this app can explain it,
+  // and "something went wrong" sends somebody hunting a GoHighLevel fault that
+  // does not exist. The cause is always the same: this dashboard called its own
+  // API with a method that route does not export.
+  if (res.status === 405)
+    throw new ApiError(
+      `This dashboard called its own API the wrong way: ${method} ${pathOf(url)} ` +
+        "is not a method that route accepts, so the request never reached any " +
+        "code. Nothing was sent to GoHighLevel and nothing was changed. This is " +
+        "a bug in the dashboard, not a problem with your data or your session.",
+      405,
+      url,
+      raw,
+    );
+
   throw new ApiError(
     `${method} ${url} failed with ${res.status}${
       res.statusText ? ` ${res.statusText}` : ""
@@ -165,6 +181,8 @@ export function failureMessage(res: Response, j: unknown): string {
     return `404 — no API route at ${where}. The route exists in the source, so the running build almost certainly predates it: redeploy, then retry.`;
   if (res.status === 401 || res.status === 403)
     return `${res.status} on ${where} — the sign-in session was rejected. Reload the dashboard inside GoHighLevel to refresh it.`;
+  if (res.status === 405)
+    return `This dashboard called its own API the wrong way: ${res.status} on ${where}. The request never reached any code — nothing was sent to GoHighLevel. This is a dashboard bug, not a problem with your data.`;
   if (res.status >= 500)
     return `${res.status} on ${where} — the server errored and sent no reason. Check the Vercel logs for this request.`;
   return `${res.status}${res.statusText ? ` ${res.statusText}` : ""} on ${where} — the server sent no error message.`;

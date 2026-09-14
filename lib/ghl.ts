@@ -161,6 +161,25 @@ export async function explainGhlError(e: unknown): Promise<string> {
     /OPPORTUNITY_NO_DUPLICATE/i.test(raw) ||
     /duplicate opportunity for the contact/i.test(raw)
   ) {
+    // 🔴 ROUND 121 · ITEM 4 — THE EVENT CASE IS NOT A CLIENT BEING MOVED.
+    //
+    // This sentence was written for the Move feature and it is the only one
+    // this limit has ever had. Adding a SECOND event for a partner hits the
+    // same GoHighLevel rule and got told "this client already has a case…
+    // can't be moved there" — three wrong nouns in one line: the contact is an
+    // organisation, not a client; nothing was moved; and "close the existing
+    // case first" is advice that would delete a real event.
+    //
+    // ⚠️ THE ROUTE KNOWS WHICH IT IS AND THIS FUNCTION DOES NOT, so the event
+    // wording is selected on the one thing visible from here: the pipeline
+    // named in GoHighLevel's own message.
+    if (/\bevents?\b/i.test(raw))
+      return (
+        "GoHighLevel allows only ONE opportunity per contact per pipeline, and " +
+        "this partner already hosts an event. That is a limit in GoHighLevel, " +
+        "not a rule this dashboard chose — and it means a partner can currently " +
+        "hold one event ever. Nothing was created and nothing was changed."
+      );
     return "This client already has a case in the destination pipeline. GoHighLevel allows only ONE opportunity per contact per pipeline, so this record can't be moved there. Close or move the existing case first, then try again. (GoHighLevel's own message says \"create\" — it fires on updates too; nothing was duplicated.)";
   }
   // 🔴 WRAP ONCE — round 94's item 8, and round 118's item 1 found it again.
@@ -763,7 +782,39 @@ export async function updateOpportunity(
 interface Pipeline {
   id: string;
   name: string;
-  stages: { id: string; name: string }[];
+  // ⚠️ `position` IS IN THE PAYLOAD AND WAS NOT DECLARED — round 121, item 3.
+  // GoHighLevel sends it on every stage; this interface dropped it, so nothing
+  // in the codebase could sort by it and every caller used array order instead.
+  stages: { id: string; name: string; position?: number }[];
+}
+
+/**
+ * 🔴 THE PIPELINE'S FIRST STAGE — BY POSITION, NOT BY ARRAY ORDER.
+ *
+ * ⚠️ MEASURED LIVE: every one of the five client pipelines answered
+ * "TRANSFERRED IN" from `stages[0]`. That is not five coincidences — GoHighLevel
+ * does not return stages in position order, and `stages[0]` is whatever its
+ * store handed back. A referral is a NEW ENQUIRY; filing one as TRANSFERRED IN
+ * says it came from another agency, which is a different thing entirely.
+ *
+ * 🔴 NO HARDCODED STAGE IDS. A rename or a reorder in GoHighLevel has to keep
+ * working, which is the whole reason this reads position rather than a name.
+ *
+ * ⚠️ AND THE FALLBACK IS ARRAY ORDER, not a guess at a name. If GHL ever stops
+ * sending `position`, the old behaviour is what returns — wrong in the same way
+ * it is wrong today, rather than newly wrong in some other way.
+ */
+export function firstStage(
+  p: { stages?: { id: string; name: string; position?: number }[] } | null | undefined,
+): { id: string; name: string } {
+  const stages = p?.stages || [];
+  if (!stages.length) return { id: "", name: "" };
+  const ordered = [...stages].sort((a, b) => {
+    const pa = Number.isFinite(a.position) ? (a.position as number) : Number.MAX_SAFE_INTEGER;
+    const pb = Number.isFinite(b.position) ? (b.position as number) : Number.MAX_SAFE_INTEGER;
+    return pa - pb;
+  });
+  return { id: ordered[0].id, name: ordered[0].name };
 }
 
 // Full custom-field definition — the single source of truth for editing:
@@ -2473,13 +2524,19 @@ export async function listContactOpportunities(
 }
 
 export async function listPipelines(): Promise<
-  { id: string; name: string; stages: { id: string; name: string }[] }[]
+  { id: string; name: string; stages: { id: string; name: string; position?: number }[] }[]
 > {
   const ps = await getPipelines();
   return ps.map((p) => ({
     id: p.id,
     name: p.name,
-    stages: (p.stages || []).map((s) => ({ id: s.id, name: s.name })),
+    // 🔴 `position` WAS STRIPPED HERE — round 121, item 3, found by the proof.
+    // Every admin surface reads this function, so none of them could order a
+    // pipeline's stages even after firstStage() existed: the field was thrown
+    // away one layer below. GoHighLevel does not return stages in position
+    // order, so dropping the only thing that says what the order IS makes the
+    // array order look authoritative when it is arbitrary.
+    stages: (p.stages || []).map((s) => ({ id: s.id, name: s.name, position: s.position })),
   }));
 }
 
@@ -2815,10 +2872,23 @@ export async function moveFieldToFolder(
 ): Promise<{ ok: boolean; storedParent: string }> {
   const { locationId } = requireEnv();
   if (!fieldId || !parentId) throw new GhlError("A field and a section are required.", 400);
+  // 🔴 ROUND 121 — THE SAME DISEASE AS createFieldFolder, AND IT HALF-RAN LIVE.
+  //
+  //   WRONG  PUT /custom-fields/{id}
+  //          -> "Fields with model opportunity is not supported on this route"
+  //   RIGHT  PUT /locations/{locationId}/customFields/{id}   body { parentId }
+  //
+  // ⚠️ 119 LEFT THIS ALONE ON THE STRENGTH OF "it is proven working on
+  // 10 September". It was not — that was a different call, and the owner has
+  // said so. The lesson is not about that sentence: it is that BOTH halves of
+  // this file's `/custom-fields/` usage were wrong and only one was tested.
+  // Round 90 wrote down that these are different APIs; 93 moved the field
+  // CREATE; 119 moved the folder CREATE; this is the field UPDATE, the last
+  // one on the wrong route.
   const res = await ghlSend<Record<string, unknown>>(
     "PUT",
-    `/custom-fields/${encodeURIComponent(fieldId)}`,
-    { locationId, parentId },
+    `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`,
+    { parentId },
   );
   const storedParent = String(pickCreated(res).parentId ?? "");
   bustFieldCaches();
