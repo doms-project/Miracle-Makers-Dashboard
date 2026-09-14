@@ -25,12 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "125",
+  round: "126",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the contact-search failure message is no longer sliced in half by the " +
-    "scrolling hit list — in both pickers, not just the one that was seen · " +
-    "no double full stop · a sweep rule that catches the shape, proven to fire",
+    "a new enquiry is filed by what a stage MEANS, not by where it sits — so " +
+    "TRANSFERRED IN is never chosen whether or not GoHighLevel sends " +
+    "`position` · the applicant intake was still on stages[0] and is the sixth " +
+    "stage site, not the fifth · a guessed stage says so on screen",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

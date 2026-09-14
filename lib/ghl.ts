@@ -804,6 +804,76 @@ interface Pipeline {
  * sending `position`, the old behaviour is what returns — wrong in the same way
  * it is wrong today, rather than newly wrong in some other way.
  */
+/**
+ * 🔴 WHERE A **NEW ENQUIRY** BELONGS — round 126, and it does not ask where a
+ * stage sits.
+ *
+ * ⚠️ ROUND 121 FIXED THE ORDERING AND THE SCREEN STILL SAYS TRANSFERRED IN.
+ * There are three ways that happens and `firstStage()` cannot tell them apart:
+ *
+ *   a  GoHighLevel does not send `position` on this endpoint → the sort is a
+ *      no-op and the fallback is array order, which is the bug, unchanged.
+ *   b  something strips it between the API and the sort.
+ *   c  🔴 `position` IS sent and TRANSFERRED IN genuinely holds the lowest one
+ *      — in which case the sort is working perfectly and still lands on the
+ *      wrong stage, because the question was never "which stage is first".
+ *
+ * ⚠️ (c) IS THE ONE NOBODY HAD CONSIDERED, and ordering cannot fix it. So this
+ * stops depending on order at all: a new enquiry is filed by what a stage
+ * MEANS.
+ *
+ * 🔴 AND THE HARD RULE IS THE NEGATIVE ONE. Filing a new referral as
+ * TRANSFERRED IN does not merely look untidy — it asserts the case came from
+ * another agency, which is a claim about where the business originated and the
+ * exact thing the referral partner is being credited for. It is never a
+ * defensible default, so it is never chosen while any other stage exists.
+ *
+ * Order of preference:
+ *   1  a stage whose name means "a new one just arrived"
+ *   2  otherwise the earliest stage that is NOT a transfer stage
+ *   3  otherwise `firstStage()` — and `fellBack` says so, so a caller can
+ *      admit it rather than presenting a guess as a decision
+ *
+ * ⚠️ POSITION IS STILL THE TIEBREAK inside each step, so when GoHighLevel does
+ * send it the answer is the earliest matching stage rather than an arbitrary
+ * one. It is used where it helps and never depended on.
+ */
+const NEW_ENQUIRY_STAGE = /\bnew\b|enquir|inquir|\bintake\b|\blead\b|initial call|\bapplied\b|\bapplicant\b/i;
+const TRANSFER_STAGE = /transferred\s*in|^\s*transfer\b/i;
+
+export function entryStage(
+  p: { stages?: { id: string; name: string; position?: number }[] } | null | undefined,
+): { id: string; name: string; fellBack: boolean; why: string } {
+  const stages = p?.stages || [];
+  if (!stages.length) return { id: "", name: "", fellBack: true, why: "the pipeline has no stages" };
+  const byPosition = [...stages].sort((a, b) => {
+    const pa = Number.isFinite(a.position) ? (a.position as number) : Number.MAX_SAFE_INTEGER;
+    const pb = Number.isFinite(b.position) ? (b.position as number) : Number.MAX_SAFE_INTEGER;
+    return pa - pb;
+  });
+  const named = byPosition.find(
+    (s) => NEW_ENQUIRY_STAGE.test(s.name) && !TRANSFER_STAGE.test(s.name),
+  );
+  if (named) return { id: named.id, name: named.name, fellBack: false, why: "named as a new enquiry" };
+  const notTransfer = byPosition.find((s) => !TRANSFER_STAGE.test(s.name));
+  if (notTransfer)
+    return {
+      id: notTransfer.id,
+      name: notTransfer.name,
+      fellBack: false,
+      why: "the earliest stage that is not a transfer",
+    };
+  // ⚠️ EVERY STAGE IS A TRANSFER STAGE. Vanishingly unlikely and not invented
+  // around: the first one is used and the caller is told it was a fallback.
+  const f = byPosition[0];
+  return {
+    id: f.id,
+    name: f.name,
+    fellBack: true,
+    why: "every stage in this pipeline reads as a transfer",
+  };
+}
+
 export function firstStage(
   p: { stages?: { id: string; name: string; position?: number }[] } | null | undefined,
 ): { id: string; name: string } {

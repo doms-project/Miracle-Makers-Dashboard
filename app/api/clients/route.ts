@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  entryStage,
   upsertContact,
   createOpportunity,
   getSelectedPipelines,
@@ -210,7 +211,12 @@ async function postHandler(request: Request) {
       const uncategorized = (dest.stages || []).find(
         (s) => norm(s.name) === "uncategorized",
       );
-      stageId = uncategorized?.id || (dest.stages || [])[0]?.id || "";
+      // 🔴 ROUND 126 — `stages[0]` WAS THE LAST RESORT HERE TOO. The dialog
+      // normally sends an explicit stage, so this fallback is rare — which is
+      // exactly why it would have gone on quietly filing the occasional new
+      // client as TRANSFERRED IN. "Uncategorized" stays the first preference
+      // because it is a deliberate choice somebody made in GoHighLevel.
+      stageId = uncategorized?.id || entryStage(dest).id || "";
     }
     if (!stageId)
       return NextResponse.json(

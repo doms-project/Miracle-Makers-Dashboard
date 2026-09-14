@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getSelectedPipelines,
+  entryStage,
   getPipelineConfig,
   getOpportunitiesInPipeline,
   listPipelines,
@@ -705,10 +706,20 @@ export async function GET(request: Request) {
               id: p.id,
               name: p.name,
               division: divisionLabel(p.name),
-              // ITEM 3 — by POSITION. `stages[0]` answered TRANSFERRED IN on
-              // all five pipelines; see firstStage() in lib/ghl.ts.
-              stage: firstStage(p).name,
-              stageId: firstStage(p).id,
+              // 🔴 ROUND 126 — BY MEANING, NOT BY POSITION. Round 121 sorted by
+              // `position` and the picker still read TRANSFERRED IN live, which
+              // ordering cannot explain away: either the field is not sent (the
+              // sort is a no-op and the fallback IS the bug) or TRANSFERRED IN
+              // genuinely holds position 0. `entryStage` answers "where does a
+              // NEW enquiry go", which is the question that was actually being
+              // asked, and is right under both.
+              stage: entryStage(p).name,
+              stageId: entryStage(p).id,
+              // ⚠️ AND IT ADMITS A GUESS. When no stage reads as a new enquiry
+              // and none is a non-transfer, the picker can say so instead of
+              // presenting a fallback as a decision.
+              stageFellBack: entryStage(p).fellBack,
+              stageWhy: entryStage(p).why,
             })),
           // ── what this answer does NOT know, said out loud ──────────────────
           meta: {
@@ -899,7 +910,10 @@ export async function POST(request: Request) {
                 },
             { status: 409 },
           );
-        const stageId = firstStage(dest).id;
+        // 🔴 ROUND 126 — the same rule that the picker DISPLAYED must be the
+        // one the write USES, or the dialog promises one stage and files
+        // another. One function, both places.
+        const stageId = entryStage(dest).id;
         if (!stageId)
           return NextResponse.json(
             {
@@ -1006,7 +1020,7 @@ export async function POST(request: Request) {
           contactId: contact.id,
           opportunityId: oppId,
           pipelineName: dest.name,
-          stageName: firstStage(dest).name,
+          stageName: entryStage(dest).name,
           monthly,
           noteSaved,
           // ⚠️ STATED, NEVER SILENT. If the event link could not be written the
@@ -1040,7 +1054,10 @@ export async function POST(request: Request) {
             } as ApiError,
             { status: 409 },
           );
-        const stageId = firstStage(evPipe).id;
+        // ⚠️ AN EVENT TOO. An Events pipeline has no transfer stage, so this
+        // resolves to the same stage `firstStage` did — but a pipeline that
+        // grows one must not start filing events into it.
+        const stageId = entryStage(evPipe).id;
         if (!stageId)
           return NextResponse.json(
             {

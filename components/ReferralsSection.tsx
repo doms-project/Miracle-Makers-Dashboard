@@ -53,6 +53,16 @@ interface PipelineChoice {
   division: string;
   stage: string;
   stageId: string;
+  /**
+   * 🔴 ROUND 126 — TRUE WHEN THE ENTRY STAGE IS A GUESS, so the dialog can say
+   * so. The whole reason this bug survived round 121 is that a fallback looks
+   * exactly like a decision from the outside: filing into TRANSFERRED IN
+   * because nothing better was found reads identically to filing there on
+   * purpose. A guess that admits it can be corrected; one that does not, is not
+   * even noticed.
+   */
+  stageFellBack?: boolean;
+  stageWhy?: string;
 }
 
 /**
@@ -4129,7 +4139,15 @@ function LogReferralDialog({
             {dest ? (
               <>
                 Creates an opportunity in <b>{dest.name}</b>
-                {dest.stage ? ` at ${dest.stage}` : ""}, attributed to{" "}
+                {dest.stage ? (
+                  <>
+                    {" "}
+                    at <b>{dest.stage}</b>
+                  </>
+                ) : (
+                  ""
+                )}
+                , attributed to{" "}
                 <b>{partner ? partner.org : event ? event.name : "no source"}</b>
                 {partner && event ? ` (met at ${event.name})` : ""}.{" "}
                 {(partner?.division || event?.division)
@@ -4140,6 +4158,18 @@ function LogReferralDialog({
               "There is no client pipeline configured to file this in."
             )}
           </div>
+          {/* 🔴 ROUND 126 — A GUESSED STAGE SAYS SO. `entryStage` falls back only
+              when no stage reads as a new enquiry AND every stage reads as a
+              transfer; that is rare, and it is precisely the case where filing
+              a new referral asserts it came from another agency. */}
+          {dest?.stageFellBack ? (
+            <div className="rfdhint rfdbad">
+              ⚠️ <b>{dest.name}</b> has no stage that reads as a new enquiry —{" "}
+              {dest.stageWhy}. It will be filed at <b>{dest.stage}</b>, which
+              may say this case came from somewhere it did not. Add or rename a
+              first stage in GoHighLevel.
+            </div>
+          ) : null}
           {/* ⚠️ WHO WORKS IT IS NOT ASKED, AND THAT IS THE ANSWER TO (a).
               Option (b): the pipeline's notification workflow decides. One place
               owns that decision and it already works, so this form sends no
