@@ -1598,3 +1598,61 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    did — the rotation was the only thing the click changed. */
 .sysinfo:not([open]) > :not(summary){display:none;}
 .unfiled:not([open]) > :not(summary){display:none;}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ROUND 117 · ITEM 1 — ONE SHAPE FOR ALL FOUR REFERRAL MODALS
+
+   115c gave "Log a referral" 760px and `.irow2`; the other three never got
+   either, so four dialogs doing the same kind of work looked like four
+   different applications. These are the shared parts: a labelled GROUP, and
+   one rhythm for label / input / hint.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 🔴 GROUPING IS THE FAULT THE OTHERS SHARE. A dialog that asks eleven
+   questions in one undifferentiated column reads as a wall, and the eye has
+   nothing to step down. A heading every three or four fields is what lets
+   somebody scan for the part they are changing. */
+/* ⚠️ THE SEPARATOR IS ON THE HEADING, NOT ON A WRAPPER. Put on `.rfgroup` it
+   would force every dialog to re-nest its JSX to gain a heading — and "Log a
+   referral" is a mode-switching form whose blocks are conditional, so wrapping
+   it was the one change with a real chance of breaking it. A heading that
+   separates itself can be dropped in beside the fields it names. */
+.rfgroup{margin:0;}
+.rfglab{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-3);margin:14px 0 2px;padding-top:12px;
+  border-top:1px solid var(--line-soft);}
+/* The first heading in a dialog has nothing above it to be separated from. */
+.movebody > .rfglab:first-child,
+.movebody > .rfgroup:first-child .rfglab,
+.movebody > .rfgroup:first-child > .rfglab{margin-top:0;padding-top:0;border-top:0;}
+/* ⚠️ THE GROUP'S OWN HINT sits under the heading, not under the last input —
+   it explains what is about to be asked, which is only useful before. */
+.rfglab + .rfdhint{margin-top:2px;margin-bottom:4px;}
+
+/* One rhythm. `.movebody .irow label{margin-top:6px}` already sets the step
+   between a control and the next label; `.irow2` matched it (line 873) and
+   these make the hint match too, so the vertical spacing is the same whether a
+   field is paired or full width. */
+.movebody .rfdhint{margin-top:6px;}
+.movebody .irow2 + .rfdhint,.movebody .irow + .rfdhint{margin-top:6px;}
+
+/* ⚠️ A SIDE NOTE IN A PAIR CELL. "Log a touch" has ONE short field and no
+   partner for it, so rather than invent a field to pair it with, the second
+   cell carries what the first one means. It is not a control, so it does not
+   get a control's top margin. */
+.irow2 .rfpaircell{font-size:11.5px;color:var(--ink-3);line-height:1.5;
+  align-self:end;padding-bottom:9px;}
+
+/* 🔴 ROUND 117 · ITEM 1 — THE ONE MISALIGNMENT IN THE MODAL 115c "FIXED".
+   `.rfvalue` is a padded card (margin 13px, padding 12px) and it sits in an
+   `.irow2` beside a plain phone input, so the two inputs on that line were
+   ~25px apart vertically. Measured: 6 controls in 5 rows, only ONE paired —
+   the pair was in the markup and not on the screen.
+
+   ⚠️ THE EMPHASIS IS KEPT, THE BOX IS NOT. 115c gave this field weight because
+   the rep TYPES it and it must not read as a system number — and what actually
+   says that is the `$` and the `/mo` affixes and the hint, all still here. The
+   grey card was decoration, and it was the half that broke the rhythm. */
+.irow2 > .rfvalue{margin:0;padding:0;background:transparent;}
+.irow2 > .rfvalue > label{margin-top:6px;margin-bottom:0;}
+.irow2 > .rfvalue .rfvaluebox input{flex:1 1 auto;}
