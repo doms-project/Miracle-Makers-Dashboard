@@ -296,7 +296,13 @@ await frame.fill("#rf-find", "zzzzz");
 await page.waitForTimeout(2500);
 const none = await frame.evaluate(() => ({
   hits: document.querySelectorAll(".rfhit").length,
-  hint: document.querySelector(".rfhits .rfdhint")?.textContent?.trim().replace(/\s+/g, " ") || null,
+  // ⚠️ ROUND 125 MOVED THE THREE NON-LIST STATES OUT OF `.rfhits` — a
+  // scrolling box clipped the failure message's first line. The property is
+  // "the dialog says it", not "it is inside that div", so this reads the
+  // states wherever they are drawn.
+  hint: [...document.querySelectorAll(".addbox .movebody .rfdhint")]
+    .map((e) => e.textContent.trim().replace(/\s+/g, " "))
+    .find((t) => /No contact matches|search failed/i.test(t)) || null,
 }));
 console.log(`  ${JSON.stringify(none)}`);
 ok("no rows", none.hits === 0, none);
@@ -312,7 +318,13 @@ await frame.fill("#rf-find", "Riddle again");
 await page.waitForTimeout(2500);
 const failed = await frame.evaluate(() => ({
   hits: document.querySelectorAll(".rfhit").length,
-  hint: document.querySelector(".rfhits .rfdhint")?.textContent?.trim().replace(/\s+/g, " ") || null,
+  // ⚠️ ROUND 125 MOVED THE THREE NON-LIST STATES OUT OF `.rfhits` — a
+  // scrolling box clipped the failure message's first line. The property is
+  // "the dialog says it", not "it is inside that div", so this reads the
+  // states wherever they are drawn.
+  hint: [...document.querySelectorAll(".addbox .movebody .rfdhint")]
+    .map((e) => e.textContent.trim().replace(/\s+/g, " "))
+    .find((t) => /No contact matches|search failed/i.test(t)) || null,
 }));
 console.log(`  ${JSON.stringify(failed)}`);
 ok("🔴 a failed search is NAMED, not silently 'no matches'",

@@ -25,14 +25,12 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "124",
+  round: "125",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the venue is the event's contact, so a partner can host more than one · " +
-    "the Events pipeline is found by a stored role, not by its name, and its " +
-    "records are read by id · delete a case and delete an event, admin only · " +
-    "take somebody off an event · the attendee outcome dropdown works at all · " +
-    "the finished attribution migration is removed",
+    "the contact-search failure message is no longer sliced in half by the " +
+    "scrolling hit list — in both pickers, not just the one that was seen · " +
+    "no double full stop · a sweep rule that catches the shape, proven to fire",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;
