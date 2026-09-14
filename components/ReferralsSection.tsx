@@ -2430,28 +2430,44 @@ function AddPartnerDialog({
           </div>
           </>
           ) : null}
-          <div className="irow">
-            <label htmlFor="rf-first">Contact first name</label>
-            <input id="rf-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
-            <label htmlFor="rf-last">Last name</label>
-            <input id="rf-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
-          </div>
-          <div className="irow">
-            <label htmlFor="rf-email">Email</label>
-            <input
-              id="rf-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <label htmlFor="rf-phone">Phone</label>
-            <input
-              id="rf-phone"
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-          </div>
+          {/* 🔴 NOT ASKED FOR WHEN PROMOTING — round 113, item H.
+              A promote adds a ROLE to a contact that already exists; the picker
+              just found them BY these very details. Asking again was neither
+              pointless nor destructive but something worse than both: the
+              promote branch (app/api/referrals/route.ts:1038-1048) reads only
+              the partner custom fields and the owner, so anything typed here
+              was SILENTLY DISCARDED — the screen collected four values and
+              threw them away without saying so.
+              ⚠️ And it cannot blank the record either, for the same reason.
+              Correcting a contact's details is the record panel's job.
+              They are rendered only when a NEW organisation is being created,
+              which is the one case where they have somewhere to go. */}
+          {mode === "existing" && picked ? null : (
+            <>
+              <div className="irow">
+                <label htmlFor="rf-first">Contact first name</label>
+                <input id="rf-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+                <label htmlFor="rf-last">Last name</label>
+                <input id="rf-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+              </div>
+              <div className="irow">
+                <label htmlFor="rf-email">Email</label>
+                <input
+                  id="rf-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <label htmlFor="rf-phone">Phone</label>
+                <input
+                  id="rf-phone"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+              </div>
+            </>
+          )}
           <div className="irow">
             <label htmlFor="rf-cat">Category</label>
             <select id="rf-cat" value={cat} onChange={(e) => setCat(e.target.value)}>

@@ -195,7 +195,10 @@ tbody tr:last-child td{border-bottom:0;}
 .phead .sub{font-size:11.5px;color:var(--plum);}
 .x{width:32px;height:32px;border-radius:8px;color:var(--plum);font-size:19px;line-height:1;flex:none;background:rgba(255,255,255,.6);transition:background .12s;}
 .x:hover{background:#fff;}
-.pbody{flex:1;overflow:auto;padding:20px 22px 28px;}
+/* min-height:0 — same family as .movebody/.rfdbd/.rfhits. The record panel
+   body scrolls inside a fixed-height panel; without an explicit minimum its
+   last field is unreachable on a long record. Found by loader-sweep rule 6. */
+.pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:20px 22px 28px;}
 .sechead{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:24px 0 12px;display:flex;align-items:center;gap:9px;}
 .sechead::after{content:"";flex:1;height:1px;background:var(--line);}
 .sechead:first-child{margin-top:0;}
@@ -610,7 +613,9 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .previewhead{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--canvas);}
 .previewname{flex:1;font-weight:700;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .previewopen{font-size:12px;font-weight:600;color:var(--plum);}
-.previewbody{flex:1;overflow:auto;background:#f0edf5;display:flex;align-items:center;justify-content:center;}
+/* Same rule: a tall preview image must scroll, not push the modal open and
+   get clipped by it. */
+.previewbody{flex:1 1 auto;min-height:0;overflow:auto;background:#f0edf5;display:flex;align-items:center;justify-content:center;}
 .previewbody iframe{width:100%;height:100%;border:0;}
 .previewbody img{max-width:100%;max-height:100%;object-fit:contain;}
 
@@ -719,7 +724,16 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .cgsave{border:1px solid var(--plum);background:var(--plum);color:#fff;border-radius:9px;padding:11px 20px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
 .cgsave:hover:not(:disabled){background:#4a2170;}
 .cgsave:disabled{opacity:.45;cursor:default;}
-.movebody{padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
+/* 🔴 THE THIRD TIME THIS EXACT SHAPE HAS CLIPPED CONTENT — round 113, item H.
+   `.movebox` is a column flex container with max-height:90vh and
+   overflow:hidden; `.movebody` is its scrolling child. A flex item's automatic
+   minimum (`min-height:auto`) stops it shrinking below its content, so the body
+   grew past the box and the box clipped it — the Add-partner modal ended at
+   Owner with Notes and its hint unreachable.
+   Previously: `.rfhits` collapsed to 0px (round 112 item 6) and `.rfdbd` cut off
+   its last attributed row (round 112 item 4). Same rule, three symptoms.
+   ⚠️ scripts/loader-sweep.mjs now has a rule for it so there is not a fourth. */
+.movebody{flex:1 1 auto;min-height:0;padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
 .movebody .irow{gap:4px;}
 .movebody .irow label{margin-top:6px;}
 /* Same exclusion: a 100%-wide tickbox is the same bug in a modal. */

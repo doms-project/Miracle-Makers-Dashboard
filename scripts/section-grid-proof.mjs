@@ -48,11 +48,29 @@ const SECTIONS = LABELS.map(([label, n], i) => ({
   fields: Array.from({ length: n }, (_, j) => ({ id: `${i}_${j}`, name: `Field ${j + 1}` })),
 }));
 
+// ── ROUND 113 · ITEM J ───────────────────────────────────────────────────
+// Three rows, so "it works for some and not this one" is testable in one run:
+//   pipe_oltl    an entry written THROUGH this screen — folder KEYS
+//   pipe_events  an entry written by an API SCRIPT — folder RAW IDS
+//   pipe_test    genuinely unconfigured, no entry at all
+// ⚠️ The middle one is the hypothesis under test, not a decoration: `s.key` is
+// a code key where one exists, so a stored raw id cannot match it.
 const PAYLOAD = {
-  pipelines: [{ id: "pipe_oltl", name: "OLTL Enrollment",
-    stages: [{ id: "s1", name: "INITIAL CALL" }], division: "OLTL", configured: true }],
-  config: { seeded: true, pipelines: { pipe_oltl: { scope: "client", folders: ["k0", "k1"] } },
-            folderNames: {} },
+  pipelines: [
+    { id: "pipe_oltl", name: "OLTL Enrollment",
+      stages: [{ id: "s1", name: "INITIAL CALL" }], division: "OLTL", configured: true },
+    { id: "pipe_events", name: "Events",
+      stages: [{ id: "s9", name: "PLANNED" }], division: "Events", configured: true },
+    { id: "pipe_test", name: "test",
+      stages: [{ id: "s0", name: "NEW" }], division: "test", configured: false },
+  ],
+  config: { seeded: true, pipelines: {
+    pipe_oltl: { scope: "client", folders: ["k0", "k1"] },
+    // The same three folders the live Events entry holds, but addressed by the
+    // sections' `id` rather than their `key` — what a script that read GHL's
+    // folder ids directly would have written.
+    pipe_events: { scope: "client", folders: ["f0", "f3", "f9"] },
+  }, folderNames: {} },
   stale: [], sections: SECTIONS, known: [], sharedKey: "k0",
   unconfiguredFolders: [], inertSections: [],
 };
@@ -251,6 +269,37 @@ console.log(`  list height ${beforeH} → ${afterH}   last card moved ${lastMove
 ok("the list grew", afterH > beforeH, { beforeH, afterH });
 ok("🔴 and a later row was pushed DOWN, not overlapped",
    lastMoved > 0 || afterH > beforeH, { lastMoved, beforeH, afterH });
+
+// ── 4 · ITEM J · THE SCOPE DROPDOWN AND THE TICKS ─────────────────────────
+console.log("\n4 · 🔴 ITEM J — DOES A ROW SHOW ITS OWN STORED ENTRY?");
+const rowsJ = await frame.evaluate(() => {
+  const out = [];
+  for (const row of document.querySelectorAll(".pfrow")) {
+    row.open = true;
+    const name = row.querySelector("summary b")?.textContent?.trim() || "";
+    const header = row.querySelector(".pfscope")?.textContent?.trim() || "";
+    const count = row.querySelector(".pfcount")?.textContent?.trim() || "";
+    const sel = row.querySelector(".pfscopeedit select");
+    const ticked = [...row.querySelectorAll('.pfseclist input[type="checkbox"]')]
+      .filter((c) => c.checked).length;
+    out.push({ name, header, count, dropdown: sel ? sel.value : null, ticked });
+  }
+  return out;
+});
+for (const r of rowsJ)
+  console.log(`  ${r.name.padEnd(18)} header="${r.header}" ${r.count.padEnd(14)}` +
+              ` dropdown="${r.dropdown}" ticked=${r.ticked}`);
+const oltl = rowsJ.find((r) => r.name === "OLTL Enrollment");
+const events = rowsJ.find((r) => r.name === "Events");
+const test = rowsJ.find((r) => r.name === "test");
+ok("a screen-written entry shows Client in the dropdown",
+   oltl?.dropdown === "client", oltl);
+ok("and its two ticks render", oltl?.ticked === 2, oltl);
+ok("🔴 the SCRIPT-written entry also shows Client, not 'Choose a scope…'",
+   events?.dropdown === "client", events);
+ok("🔴 and its three ticks render too", events?.ticked === 3, events);
+ok("a genuinely unconfigured row is the ONLY one reading 'Choose a scope…'",
+   test?.dropdown === "" && test?.header === "not configured", test);
 
 await page.screenshot({ path: "scripts/section-grid.png" });
 console.log(`\n${pass} passed, ${fail} failed`);
