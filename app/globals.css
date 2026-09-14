@@ -66,9 +66,21 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 /* A tile that FILTERS. Same box as .stat — a button element so it is
    keyboard-reachable and announces itself — with the lit state the board's
    source picker already uses. */
-.statbtn{display:block;width:100%;text-align:left;font:inherit;cursor:pointer;}
-.statbtn:hover{border-color:var(--plum-line);background:var(--plum-soft);}
+/* 🔴 ONE DEFINITION — round 115. Round 114 wrote `.statbtn` TWICE, here and
+   again 1000 lines further down, with different properties in each. Nothing
+   looked broken because the cascade merges them per-property, which is exactly
+   what makes it dangerous: the next person to edit one of them changes half a
+   rule. scripts/loader-sweep.mjs now refuses a class defined twice in this
+   file. */
+.statbtn{appearance:none;display:block;width:100%;text-align:left;font:inherit;
+  color:inherit;cursor:pointer;}
+.statbtn:hover:not(:disabled){border-color:var(--plum-line);background:var(--plum-soft);}
+.statbtn:disabled{cursor:default;opacity:.55;}
 .statbtn.on{border-color:var(--plum);background:var(--plum-soft);box-shadow:0 0 0 2px var(--plum-soft);}
+
+/* The build stamp — deliberately quiet, deliberately always there. */
+.railbuild{margin-top:4px;font-size:9px;letter-spacing:.06em;text-align:center;
+  color:var(--ink-3);opacity:.75;user-select:all;cursor:default;}
 /* The excluded-count, beside the number it is excluded from. */
 .vsub{font-size:12px;font-weight:600;color:var(--ink-3);}
 /* The master view's tile row scrolls with the page rather than pinning. */
@@ -425,6 +437,7 @@ tbody tr:last-child td{border-bottom:0;}
 /* ITEM 7b — cards side by side, expanding IN PLACE. The chevron must not push
    its neighbours out of view or collapse the grid to one column, and the tick
    target is the checkbox alone so expanding and ticking cannot fight. */
+/* deliberate-override: one extra property on the checklist card. */
 .pfsec{align-content:start;}
 .pfsec .pfseclab{cursor:default;}
 .pfsec .pfseclab input{cursor:pointer;}
@@ -933,7 +946,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    so the cursor must not promise one. */
 .card.mcard{cursor:pointer;}
 .card.mcard .cm{margin-bottom:6px;}
-.mstage{font-size:11.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:7px;padding:4px 8px;margin-bottom:8px;}
+.mstage{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:7px;padding:4px 8px;margin-bottom:8px;}
 .pill.divpill{background:var(--gold-soft);color:var(--gold-ink);font-weight:700;text-transform:uppercase;font-size:9.5px;letter-spacing:.05em;}
 
 /* ── ITEM 6c: RESOURCES, ONE SECTION PER FOLDER ───────────────────────────
@@ -965,14 +978,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* The PIPELINE name, not the division — with category columns "ODP" no longer
    says which pipeline a card is in. */
 .pill.pipepill{background:var(--plum-soft);color:var(--plum);font-weight:600;border:1px solid var(--plum-line);}
-.mstage{display:flex;align-items:center;gap:6px;}
 .mage{margin-left:auto;font-size:10px;font-weight:700;color:var(--ink-3);background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:0 6px;}
 /* A lead sitting for a fortnight is what this view exists to surface. */
 .mage.stale{color:var(--blk);background:var(--blk-soft);border-color:#f3c6bf;}
 /* Names what was dropped, and what still has to be decided. */
 .moveintro{font-size:12.5px;line-height:1.6;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:10px 12px;margin-bottom:12px;}
 
-/* ── ITEM 4 layout: four columns, not five pipelines ──────────────────────
+/* deliberate-override — this block intentionally re-opens .masterboard and
+   .mstage to widen them for the four-column layout.
+   ── ITEM 4 layout: four columns, not five pipelines ──────────────────────
    Four columns left the board mostly empty. Wider columns and cards, larger
    type, more room to breathe.
    ⚠️ Deliberately NOT more fields: this view answers "where is everything",
@@ -984,6 +998,7 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .masterboard .card{padding:15px 16px;}
 .masterboard .card .cn{font-size:14px;margin-bottom:5px;}
 .masterboard .card .cm{font-size:12px;margin-bottom:8px;}
+/* deliberate-override: larger type for the four-column master layout. */
 .mstage{font-size:12.5px;padding:5px 10px;}
 
 /* ── ITEM 11: delete one file ─────────────────────────────────────────────
@@ -1067,14 +1082,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .contactbar .cbitem.none{color:var(--ink-3);font-weight:500;}
 /* A pipeline that failed to load — louder than a hint, quieter than an error
    page, because the rest of the screen is still valid data. */
-/* A stat tile that is also a control — round 114. It keeps the tile's own
-   look; this only strips the button chrome and marks the selected state. */
-.statbtn{appearance:none;border:1px solid var(--line);font:inherit;text-align:left;
-  cursor:pointer;color:inherit;}
-.statbtn:hover:not(:disabled){border-color:var(--plum-line);}
-.statbtn:disabled{cursor:default;opacity:.55;}
-.statbtn.on{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
-
 .loadwarn{margin:0 22px 12px;padding:9px 13px;border:1px solid #f0c9c9;background:#fdf2f2;border-radius:9px;font-size:12px;color:#7a2727;}
 .loadwarn b{font-weight:700;}
 .loadwarn .linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#7a2727;text-decoration:underline;cursor:pointer;}

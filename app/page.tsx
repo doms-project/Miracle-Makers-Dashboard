@@ -27,6 +27,7 @@ import type {
 import { useGhlSession, ssoResolved, ssoWaiting } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
+import { BUILD, BUILD_LABEL } from "@/lib/build";
 import EmailComposer from "@/components/EmailComposer";
 import { groupFieldsForPipeline, groupContactFields, fieldLabel } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
@@ -2602,8 +2603,12 @@ export default function Dashboard() {
           return r.office === clientFocus.value;
         // An empty value means "unassigned" — the same convention cgFocus uses
         // for its recruiter tile, so the two sections read identically.
+        // 🔴 THE OWNER ID, NOT THE DISPLAY NAME — round 115. See the note on
+        // repStats: `r.rep` is a lookup result and can differ from the string
+        // the tile was built with, which is a filter that silently matches
+        // nothing while its tile still shows a count.
         case "rep":
-          return clientFocus.value === "" ? !r.ownerId : r.rep === clientFocus.value;
+          return clientFocus.value === "" ? !r.ownerId : r.ownerId === clientFocus.value;
         case "blocked":
           return r.block !== "None";
         case "checked":
@@ -3022,7 +3027,7 @@ export default function Dashboard() {
         !preSrc.some((r) => r.office === clientFocus.value))
       setClientFocus(null);
     if (clientFocus.kind === "rep" && clientFocus.value &&
-        !preSrc.some((r) => r.rep === clientFocus.value))
+        !preSrc.some((r) => r.ownerId === clientFocus.value))
       setClientFocus(null);
   }, [preSrc, clientFocus]);
 
@@ -3438,7 +3443,32 @@ export default function Dashboard() {
       .sort((a, b) => b[1].n - a[1].n)
       .map(([key, v]) => ({ key, k: v.k, n: v.n }))
       .slice(0, 4);
-    const repStats = tally((r) => (r.rep && r.rep !== "—" ? r.rep : ""));
+    // 🔴 KEYED BY ownerId, LABELLED BY NAME — round 115.
+    //
+    // This tallied `r.rep`, which is a RESOLVED DISPLAY NAME:
+    //   lib/ghl.ts:1108  rec.rep = userMap.get(opp.assignedTo) || "Former user"
+    //
+    // So the tile's key was a string produced by a lookup that can miss. Two
+    // people who have left the account both collapse to "Former user" and
+    // become ONE tile entry; clicking it filters both. And any difference
+    // between the tallied name and the record's — a userMap that resolved late,
+    // a renamed user, stray whitespace — silently matches nothing while the
+    // tile still shows a count.
+    //
+    // The record carries `ownerId`, which is stable and cannot collide. Tally
+    // on that, label with the name, and match on the id.
+    const repMap = new Map<string, { id: string; k: string; n: number }>();
+    for (const r of filtered) {
+      if (!r.ownerId) continue;
+      const hit = repMap.get(r.ownerId);
+      if (hit) hit.n += 1;
+      else repMap.set(r.ownerId, {
+        id: r.ownerId,
+        k: r.rep && r.rep !== "—" ? r.rep : "Former user",
+        n: 1,
+      });
+    }
+    const repStats = [...repMap.values()].sort((a, b) => b.n - a.n);
     const assigned = repStats.reduce((s, x) => s + x.n, 0);
     return {
       blocked,
@@ -4694,6 +4724,14 @@ export default function Dashboard() {
         >
           GHL
         </div>
+        {/* 🔴 WHICH BUILD AM I LOOKING AT — round 115. See lib/build.ts: every
+            live investigation so far has started by assuming the deployed code
+            is the code just written, and that has never been checkable. The
+            tooltip carries what the round changed, so a bug report can say
+            "footer reads v114" and end an investigation in one line. */}
+        <div className="railbuild" title={`Round ${BUILD.round} — ${BUILD.summary}`}>
+          {BUILD_LABEL}
+        </div>
       </nav>
 
       <div className="main">
@@ -5045,11 +5083,11 @@ export default function Dashboard() {
                 stats.repStats.map((x) => (
                   <button
                     type="button"
-                    key={x.k}
-                    className={`srcpick${clientF("rep", x.k) ? " on" : ""}`}
-                    onClick={() => setClientF("rep", x.k)}
+                    key={x.id}
+                    className={`srcpick${clientF("rep", x.id) ? " on" : ""}`}
+                    onClick={() => setClientF("rep", x.id)}
                     title={
-                      clientF("rep", x.k)
+                      clientF("rep", x.id)
                         ? `Showing ${x.k} only — click to clear`
                         : `Show ${x.k} only (${x.n})`
                     }
@@ -5115,7 +5153,14 @@ export default function Dashboard() {
                   ? "records checked this week"
                   : clientFocus.kind === "rep" && clientFocus.value === ""
                     ? "unassigned records"
-                    : `${clientFocus.kind}: ${clientFocus.value}`}
+                    : clientFocus.kind === "rep"
+                      ? // ⚠️ The focus stores an ID now; a banner reading
+                        // "rep: aBc123XyZ" would be worse than no banner.
+                        `rep: ${
+                          stats.repStats.find((x) => x.id === clientFocus.value)?.k ||
+                          clientFocus.value
+                        }`
+                      : `${clientFocus.kind}: ${clientFocus.value}`}
             </b>{" "}
             —{" "}
             <button type="button" onClick={() => setClientFocus(null)}>
@@ -6268,7 +6313,45 @@ export default function Dashboard() {
               noPipelineAccess ? (
                 <NoAccessNotice />
               ) : (
-                <div className="empty">No records match this filter.</div>
+                /* 🔴 A ZERO RESULT MUST SAY WHAT IT SEARCHED — round 115.
+                   "No records match this filter" is true and useless: it does
+                   not say WHICH filter, over how many, or what a search term
+                   was compared against. Live, "Broomall → 0" could not be told
+                   apart from a broken search without reading the source, and
+                   that cost a round. Every active narrowing is now named, so
+                   the next report can say which one is wrong. */
+                <div className="empty">
+                  <b>Nothing matches the filters in use.</b>
+                  <br />
+                  {(() => {
+                    const on: string[] = [];
+                    if (q.trim()) on.push(`search “${q.trim()}”`);
+                    if (office !== "all") on.push(`office ${office}`);
+                    if (scope !== "all") on.push(`division ${scope}`);
+                    if (adminPipeline !== "all")
+                      on.push(
+                        `pipeline ${
+                          pipelines.find((p) => p.id === adminPipeline)?.name ||
+                          adminPipeline
+                        }`,
+                      );
+                    if (srcF !== "all") on.push(`source ${srcF}`);
+                    if (stageActive && stage !== "all") on.push(`stage ${stage}`);
+                    if (clientFocus) on.push(`the ${clientFocus.kind} tile`);
+                    return on.length
+                      ? `Active: ${on.join(" · ")} — over ${scopedTotal} record${
+                          scopedTotal === 1 ? "" : "s"
+                        } in ${headerLabel}.`
+                      : `No filters are active, and there are ${scopedTotal} records in ${headerLabel} — if this is empty, that is a fault, not a filter.`;
+                  })()}
+                  {q.trim() ? (
+                    <>
+                      <br />
+                      Search compares the opportunity name, contact name, office,
+                      stage, Harmony ID, case manager, caregiver, rep and source.
+                    </>
+                  ) : null}
+                </div>
               )
             ) : null}
           </div>

@@ -133,6 +133,41 @@ css.forEach((l, i) => {
        "for a section label and wrapped it one character per line.");
 });
 
+// ── 7 · THE SAME CLASS DEFINED TWICE IN globals.css ───────────────────────
+// Round 114 wrote `.statbtn` twice, ~1000 lines apart, with different
+// properties. Nothing looked wrong — the cascade merges them per-property — so
+// the file grew a rule that only half exists in either place, and the next edit
+// to either half silently changes something else.
+// ⚠️ A LATER OVERRIDE BLOCK IS A REAL PATTERN AND NOT A BUG. The master-board
+// layout refinements deliberately re-open `.masterboard` and `.mstage` to widen
+// them; `.pfsec` gets one extra property the same way. Those are intentional and
+// commented as such. What is NOT intentional is the same class written twice by
+// accident, which is what happened to `.statbtn`.
+//
+// So intent has to be DECLARABLE rather than guessed: a rule preceded by a
+// comment carrying `deliberate-override` is allowed a second definition. That
+// keeps the check honest — anything unmarked is still flagged — without
+// rewriting working CSS to satisfy a grep.
+const cssAll = readFileSync("app/globals.css", "utf8").split("\n");
+const seen = new Map();
+cssAll.forEach((l, i) => {
+  // Only plain single-class selectors at the start of a rule; pseudo-classes,
+  // descendants and compound selectors are legitimately repeated.
+  const m = l.match(/^\.([a-zA-Z][\w-]*)\s*\{/);
+  if (!m) return;
+  const cls = m[1];
+  if (!seen.has(cls)) { seen.set(cls, i + 1); return; }
+  // Look back a few lines for the marker.
+  const marked = cssAll.slice(Math.max(0, i - 8), i)
+    .some((x) => /deliberate-override/.test(x));
+  if (marked) return;
+  flag("A CLASS DEFINED TWICE IN globals.css", "app/globals.css", i + 1, l,
+       `.${cls} is also defined at line ${seen.get(cls)} — merge them, or mark ` +
+       "the block `deliberate-override` if the second definition is a " +
+       "considered refinement; the cascade hides duplication until someone " +
+       "edits one half.");
+});
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`
