@@ -302,7 +302,10 @@ const stamp = await frame.evaluate(() => {
   return el ? { text: el.textContent.trim(), title: el.title } : null;
 });
 console.log(`  build stamp: ${JSON.stringify(stamp)}`);
-ok("🔴 the build is stamped on screen", !!stamp?.text && /^v\d+$/.test(stamp.text), stamp);
+// ⚠️ A LABEL, NOT A NUMBER. Rounds can carry a suffix — 115 and 115b exist —
+// and an assertion that assumed digits only failed a stamp that was correct.
+ok("🔴 the build is stamped on screen",
+   !!stamp?.text && /^v\d+[a-z]?$/.test(stamp.text), stamp);
 ok("and its tooltip names what the round changed",
    !!stamp?.title && stamp.title.length > 20, stamp?.title);
 

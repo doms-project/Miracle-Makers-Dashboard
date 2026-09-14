@@ -476,7 +476,31 @@ tbody tr:last-child td{border-bottom:0;}
 .pullsec-pop > button span{font-size:10.5px;color:var(--ink-3);}
 .pullsec-note{padding:7px 10px 4px;font-size:10.5px;line-height:1.5;color:var(--ink-3);border-top:1px solid var(--line-soft);margin-top:4px;}
 
-.pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:6px 8px;margin-top:3px;overflow-wrap:anywhere;}
+/* 🔴 AN OPEN SECTION IS A ROW OF ITS OWN — round 115b, item I.
+   The chips are inline and wrap; the panel underneath them is not a chip and
+   must not inherit a chip's width. Spanning every column of `.pfseclist` is
+   what turns a 220px column of broken words into a readable two-column list. */
+/* The instruction block above the checklist. Quiet, but not a footnote: an
+   admin who reads it ticks sensibly, and one who does not ticks everything. */
+.pfgovern{margin:0 0 12px;padding:11px 13px;border:1px solid var(--line);
+  background:var(--canvas);border-radius:9px;font-size:11.5px;line-height:1.6;
+  color:var(--ink-2);}
+.pfgovern p{margin:0 0 8px;}
+.pfgovern p:last-child{margin-bottom:0;}
+.pfgovern b{color:var(--ink);}
+
+.pfsec.open{grid-column:1 / -1;}
+.pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:7px 9px;margin-top:4px;}
+/* One field per line: name left, type right, the gap filled so the eye can
+   travel across it. `min-width:0` on the name is what lets a long question
+   ellipsise instead of pushing the type off the row. */
+.pffieldlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;}
+.pffieldlist li{display:flex;align-items:baseline;gap:10px;padding:2px 0;
+  border-bottom:1px dotted var(--line);}
+.pffieldlist li:last-child{border-bottom:0;}
+.pffname{flex:1 1 auto;min-width:0;color:var(--ink);overflow-wrap:anywhere;}
+.pfftype{flex:0 0 auto;font-size:10.5px;font-weight:600;color:var(--ink-3);
+  white-space:nowrap;}
 
 .pfnew{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
 /* Explicit two-column grid — label, control. Nothing can wrap into a position
