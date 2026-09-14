@@ -1680,3 +1680,12 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .savemsg.warn{color:var(--gold-ink);background:var(--gold-soft);
   border:1px solid #f3e2c4;border-radius:8px;padding:7px 10px;font-size:11px;
   line-height:1.5;font-weight:500;}
+
+/* ROUND 119 · ITEM 4 — the row says it is working, where the work is.
+   ⚠️ A SPINNER IS NOT THE IMPORTANT HALF — the disabled controls are. This is
+   here so "disabled" reads as "busy" rather than as "broken". */
+.pfrowbusy{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-3);}
+.pfspin{width:11px;height:11px;flex:0 0 auto;border-radius:50%;
+  border:2px solid var(--line);border-top-color:var(--plum);
+  animation:pfspin .7s linear infinite;}
+@keyframes pfspin{to{transform:rotate(360deg)}}

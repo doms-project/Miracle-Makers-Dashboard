@@ -90,13 +90,25 @@ const server = http.createServer((req, res) => {
       return json(res, 200, { opportunity: { id: "opp1" } });
     }
 
-    if (path.startsWith("/locations/") && path.includes("/customFields"))
+    // ⚠️ GET ONLY. Without the method guard this caught the folder-create POST
+    // that round 119 moved here and answered it with a field LIST — which is
+    // how "Reply keys: customFields" ended up in the failure.
+    if (path.startsWith("/locations/") && path.includes("/customFields") && req.method === "GET")
       return json(res, 200, { customFields: fields });
 
-    if (path === "/custom-fields/folder" && req.method === "POST") {
-      const id = `new_folder_${++folderSeq}`;
-      return json(res, 200, { folder: { id, name: body?.name } });
-    }
+    // ⚠️ ROUND 119 MOVED createFieldFolder TO THE LOCATION ENDPOINT — the write
+    // API refuses folders for opportunity/contact objects. This fake answered
+    // only the old path, so after the fix it fell through to the customFields
+    // stub and returned no id. The harness was outdated by a correct change,
+    // not broken by a regression.
+    if (path === "/custom-fields/folder" && req.method === "POST")
+      return json(res, 400, {
+        message: "Api does not support objectKey of type contact or opportunity",
+      });
+    if (path.startsWith("/locations/") && path.endsWith("/customFields") && req.method === "POST")
+      return json(res, 200, {
+        customFieldFolder: { id: `new_folder_${++folderSeq}`, name: body?.name },
+      });
     if (path.startsWith("/custom-fields/") && req.method === "PUT") {
       const id = path.split("/").pop();
       const f = fields.find((x) => x.id === id);
@@ -197,8 +209,25 @@ ok("its fields come with it", partner?.fields.length === 2, partner?.fields.map(
 
 // ═══ 3 · THE ATTRIBUTION FOLDER MOVE ══════════════════════════════════════
 console.log("\n3 · 🔴 CREATE Referral Attribution, MOVE THE FIELDS, TICK IT ON");
-const attribRes = await post(PIPES, { action: "attribution-folder" });
-const attrib = await attribRes.json();
+// ⚠️ THREE REQUESTS NOW, not one — round 119, item 1. Returning every step at
+// the end is what made a slow run indistinguishable from a hang.
+const runAttrib = async () => {
+  const steps = [];
+  let folderId = "";
+  let lastStatus = 200;
+  for (const step of ["folder", "fields", "tick"]) {
+    const r = await post(PIPES, { action: "attribution-folder", step, folderId: folderId || undefined });
+    lastStatus = r.status;
+    const j = await r.json();
+    if (j.folderId) folderId = j.folderId;
+    if (Array.isArray(j.results)) for (const x of j.results) steps.push({ step, ...x });
+    else steps.push({ step, ok: j.ok !== false, detail: j.detail || j.error || "" });
+    if (!r.ok) break;
+  }
+  return { steps, folderId, status: lastStatus };
+};
+const attrib = await runAttrib();
+const attribRes = { status: attrib.status };
 for (const s of attrib.steps || [])
   console.log(`  ${s.ok ? "ok  " : "FAIL"} [${s.step}] ${s.detail}`);
 ok("the run succeeded", attribRes.status === 200, attrib);
@@ -221,7 +250,7 @@ ok("🔴 ticked onto BOTH client pipelines",
 
 console.log("\n  …and running it a second time:");
 const madeBefore = folderSeq;
-const again = await (await post(PIPES, { action: "attribution-folder" })).json();
+const again = await runAttrib();
 for (const s of again.steps || []) console.log(`  ${s.ok ? "ok  " : "FAIL"} [${s.step}] ${s.detail}`);
 ok("🔴 NO second folder was created — round 93's orphan cannot recur",
    folderSeq === madeBefore, { madeBefore, now: folderSeq });

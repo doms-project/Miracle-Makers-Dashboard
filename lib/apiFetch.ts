@@ -21,6 +21,16 @@ export class ApiError extends Error {
     readonly status: number,
     readonly url: string,
     readonly body?: string,
+    /**
+     * 🔴 TRUE WHEN THE SERVER SAID IT DECLINED ON PURPOSE — round 119, item 3.
+     *
+     * Carried through from the response body's `refusal` flag, because the
+     * route is the only thing that can tell a deliberate decline ("12 records
+     * are in this pipeline") from a fault ("GoHighLevel returned 400"). A
+     * caller that renders errors can then show the first as an instruction
+     * instead of wrapping it in "Something went wrong".
+     */
+    readonly refusal?: boolean,
   ) {
     super(message);
     this.name = "ApiError";
@@ -132,10 +142,17 @@ export async function apiFetch<T = unknown>(
 // existing `catch (e) { e instanceof Error }` path keeps working unchanged.
 export function apiError(res: Response, j: unknown, raw?: string): ApiError {
   return new ApiError(
-    failureMessage(res, j),
+    // ⚠️ A REFUSAL'S MESSAGE IS THE SENTENCE ALONE. `failureMessage` joins
+    // `error` and `detail` with an em dash, which is right for a fault — the
+    // detail is GoHighLevel's own words — and wrong for a refusal, where the
+    // `error` field already IS the instruction and there is nothing to append.
+    (j as { refusal?: boolean } | null)?.refusal
+      ? String((j as { error?: string }).error || failureMessage(res, j))
+      : failureMessage(res, j),
     res.status,
     res.url,
     raw ?? (j == null ? undefined : JSON.stringify(j)),
+    (j as { refusal?: boolean } | null)?.refusal === true,
   );
 }
 

@@ -34,6 +34,16 @@ import type { ApiError, EditableFieldDef } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// 🔴 ROUND 119 · ITEM 1(b) — THERE WAS NO LIMIT DECLARED, so this route took
+// the platform default (10s on Vercel's Hobby tier). `attribution-folder` makes
+// four GoHighLevel writes, each of which 117 may retry three times with up to
+// 6s of backoff — so a bad minute could exceed the limit and the function is
+// killed mid-run with nothing returned. That is precisely the hang.
+//
+// ⚠️ A LIMIT IS NOT THE FIX, THOUGH — the steps are. See the action below: it
+// now runs ONE step per request, so no single call can be long enough to be
+// killed. This raises the ceiling for everything else on the route.
+export const maxDuration = 60;
 
 // 🔴 ADMIN-ONLY, ENFORCED HERE — NOT BY THE HIDDEN RAIL ENTRY.
 //
@@ -315,6 +325,9 @@ interface Body {
   config?: unknown;
   // delete-pipeline
   pipelineId?: string;
+  // attribution-folder — which step. (`folderId` already exists below, shared
+  // with name-folder: the folder the previous step made travels in it.)
+  step?: string;
   // create-section / create-field
   parentId?: string;
   fieldId?: string;
@@ -336,7 +349,11 @@ export async function POST(request: Request) {
         const scope = body.scope === "caregiver" ? "caregiver" : body.scope === "client" ? "client" : null;
         if (!scope)
           return NextResponse.json(
-            { error: "Choose whether this is a client or a caregiver pipeline.", status: 400 } as ApiError,
+            {
+              error: "Choose whether this is a client or a caregiver pipeline.",
+              status: 400,
+              refusal: true,
+            } as ApiError,
             { status: 400 },
           );
         const created = await createPipeline({
@@ -418,6 +435,7 @@ export async function POST(request: Request) {
               error:
                 "I could not count the records in this pipeline, so I will not delete it. Try again in a moment.",
               status: 503,
+              refusal: true,
             } as ApiError,
             { status: 503 },
           );
@@ -428,6 +446,9 @@ export async function POST(request: Request) {
                 count === 1 ? "it" : "them"
               } in GoHighLevel first.`,
               status: 409,
+              // 🔴 A REFUSAL, NOT A FAULT — round 119, item 3. Nothing went
+              // wrong: the screen declined, deliberately, and said why.
+              refusal: true,
             } as ApiError,
             { status: 409 },
           );
@@ -505,123 +526,130 @@ export async function POST(request: Request) {
        * half-moved first attempt.
        */
       case "attribution-folder": {
-        const steps: { step: string; ok: boolean; detail: string }[] = [];
-        const note = (step: string, ok: boolean, detail: string) => {
-          steps.push({ step, ok, detail });
-          return ok;
-        };
+        // 🔴 ONE STEP PER REQUEST — round 119, item 1.
+        //
+        // ⚠️ IT RETURNED EVERY STEP AT THE END, and that is why it looked like a
+        // hang: a slow run and a dead run are IDENTICAL from the browser when
+        // nothing arrives until the last write lands. The step log was built to
+        // be watched and it could not be, because it did not exist until the
+        // work was over.
+        //
+        // 🔴 AND IT ANSWERS (c) AS WELL AS (a). A function killed mid-run used
+        // to leave a folder created and fields unmoved with nothing on screen —
+        // round 93's orphan. Now each step is its own request: whatever
+        // completed has been REPORTED, and the next click resumes from there
+        // because every step is idempotent (the folder is reused, a field
+        // already in place is skipped, a tick already present is left alone).
+        const step = String(body.step || "folder");
+        const cfg = await getPipelineConfig();
         const FOLDER_NAME = "Referral Attribution";
-        // The two fields that move, BY NAME — ids differ per account and a
-        // hardcoded id is what section 9 forbids.
         const MOVE = ["referring partner", "event source"];
 
-        const cfg = await getPipelineConfig();
-        const defs = await getEditableFieldDefs("opportunity");
-        const secs = sectionsFromDefs(defs, cfg.folderNames);
-
-        // ── 1 · the folder, created or reused ────────────────────────────
-        let folderId = "";
-        // 🔴 LOOK IN `folderNames` FIRST, NOT ONLY IN THE SECTIONS.
-        //
-        // `sectionsFromDefs` builds sections from folders that HAVE FIELDS, so
-        // a folder created a moment ago — or one whose fields have not been
-        // re-read yet — is invisible to it. The name we stored ourselves is the
-        // authoritative record that this folder exists, and it is the one that
-        // makes a second run reuse rather than create.
-        const namedId = Object.entries(cfg.folderNames || {}).find(
-          ([, n]) => (n || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
-        )?.[0];
-        const existing = namedId
-          ? { id: namedId }
-          : secs.find(
+        // 🔴 LOOK IN `folderNames` FIRST. `sectionsFromDefs` builds sections
+        // only from folders that HAVE FIELDS, so a folder created a moment ago
+        // is invisible to it — round 118 found that by running this twice.
+        const findFolder = async (): Promise<string> => {
+          const named = Object.entries(cfg.folderNames || {}).find(
+            ([, n]) => (n || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
+          )?.[0];
+          if (named) return named;
+          const secs = sectionsFromDefs(
+            await getEditableFieldDefs("opportunity"),
+            cfg.folderNames,
+          );
+          return (
+            secs.find(
               (x) => (x.label || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
-            );
-        if (existing) {
-          folderId = existing.id;
-          note("folder", true, `Reused the existing “${FOLDER_NAME}” (${folderId}).`);
-        } else {
-          try {
-            const made = await createFieldFolder({ name: FOLDER_NAME });
-            folderId = String(made.id || "");
-            if (!folderId)
-              return NextResponse.json(
-                {
-                  error: "GoHighLevel created the folder but returned no id.",
-                  detail:
-                    "Nothing was moved. Check GoHighLevel for a folder named " +
-                    `“${FOLDER_NAME}” before running this again — it may exist without this app knowing its id.`,
-                  status: 502,
-                  steps,
-                } as ApiError & { steps: typeof steps },
-                { status: 502 },
-              );
-            await rememberFolderName(folderId, FOLDER_NAME);
-            note("folder", true, `Created “${FOLDER_NAME}” (${folderId}) and recorded its name.`);
-          } catch (e) {
+            )?.id || ""
+          );
+        };
+
+        if (step === "folder") {
+          const found = await findFolder();
+          if (found)
+            return NextResponse.json({
+              step, done: "fields", folderId: found, ok: true,
+              detail: `Reused the existing “${FOLDER_NAME}” (${found}).`,
+            });
+          const made = await createFieldFolder({ name: FOLDER_NAME });
+          const folderId = String(made.id || "");
+          if (!folderId)
             return NextResponse.json(
               {
-                error: `Could not create “${FOLDER_NAME}”.`,
-                detail: await explainGhlError(e),
+                error: "GoHighLevel created the folder but returned no id.",
+                detail:
+                  `Nothing was moved. Check GoHighLevel for a folder named “${FOLDER_NAME}” ` +
+                  "before running this again — it may exist without this app knowing its id.",
                 status: 502,
-                steps,
-              } as ApiError & { steps: typeof steps },
+              } as ApiError,
               { status: 502 },
             );
-          }
+          // 🔴 THE NAME IS STORED IMMEDIATELY, not at the end. It is what makes
+          // the NEXT request find this folder instead of making a second one —
+          // so a kill between steps costs nothing.
+          await rememberFolderName(folderId, FOLDER_NAME);
+          return NextResponse.json({
+            step, done: "fields", folderId, ok: true,
+            detail: `Created “${FOLDER_NAME}” (${folderId}) and recorded its name.`,
+          });
         }
 
-        // ── 2 · the fields ───────────────────────────────────────────────
-        for (const want of MOVE) {
-          const def = defs.find((d) => (d.name || "").trim().toLowerCase() === want);
-          if (!def) {
-            // ⚠️ NOT AN ABORT. Event Source may not exist on an account that
-            // has never run an event; the other field must still move.
-            note("field", false, `No field named “${want}” on this account — skipped.`);
-            continue;
+        if (step === "fields") {
+          const folderId = String(body.folderId || "") || (await findFolder());
+          if (!folderId)
+            return NextResponse.json(
+              { error: `“${FOLDER_NAME}” does not exist yet. Run the first step.`, status: 400 } as ApiError,
+              { status: 400 },
+            );
+          const defs = await getEditableFieldDefs("opportunity");
+          const out: { ok: boolean; detail: string }[] = [];
+          for (const want of MOVE) {
+            const def = defs.find((d) => (d.name || "").trim().toLowerCase() === want);
+            // ⚠️ NOT AN ABORT. Event Source may not exist on an account that has
+            // never run an event; the other field must still move.
+            if (!def) { out.push({ ok: false, detail: `No field named “${want}” on this account — skipped.` }); continue; }
+            if (def.parentId === folderId) { out.push({ ok: true, detail: `“${def.name}” is already in ${FOLDER_NAME}.` }); continue; }
+            try {
+              await moveFieldToFolder(def.id, folderId);
+              out.push({ ok: true, detail: `Moved “${def.name}” into ${FOLDER_NAME}.` });
+            } catch (e) {
+              out.push({ ok: false, detail: `“${def.name}” did not move: ${await explainGhlError(e)}` });
+            }
           }
-          if (def.parentId === folderId) {
-            note("field", true, `“${def.name}” is already in ${FOLDER_NAME}.`);
-            continue;
-          }
-          try {
-            await moveFieldToFolder(def.id, folderId);
-            note("field", true, `Moved “${def.name}” into ${FOLDER_NAME}.`);
-          } catch (e) {
-            note("field", false, `“${def.name}” did not move: ${await explainGhlError(e)}`);
-          }
+          return NextResponse.json({ step, done: "tick", folderId, results: out });
         }
 
-        // ── 3 · tick it onto every CLIENT pipeline ───────────────────────
-        // 🔴 CLIENT ONLY. An applicant has no referring partner in this sense —
-        // item 6 is where the caregiver half is considered, and it is not this
-        // round.
+        // step === "tick"
+        const folderId = String(body.folderId || "") || (await findFolder());
+        if (!folderId)
+          return NextResponse.json(
+            { error: `“${FOLDER_NAME}” does not exist yet. Run the first step.`, status: 400 } as ApiError,
+            { status: 400 },
+          );
         const token = folderKeyById(folderId) || folderId;
-        // 🔴 RE-READ, DO NOT REUSE `cfg`. `rememberFolderName` above wrote the
-        // folder's name into the stored value; saving from the `cfg` captured
-        // BEFORE that write put the old folderNames back and ERASED the name —
-        // so a second run could not find the folder and made another one.
-        //
-        // ⚠️ FOUND BY RUNNING IT TWICE, which is the only way this shows up:
-        // every assertion about the first run passed. Same class as round
-        // 115b's "folderNames are merged, never replaced".
+        // 🔴 RE-READ. `rememberFolderName` wrote to this value in the FIRST
+        // step; saving from a config captured before it would put the old
+        // folderNames back and erase the name — round 118's finding, and it
+        // matters more now that the steps are separate requests.
         const fresh = await getPipelineConfig();
         const pipelines = { ...fresh.pipelines };
         const ticked: string[] = [];
         for (const [pid, entry] of Object.entries(pipelines)) {
+          // 🔴 CLIENT ONLY. An applicant has no referring partner in this sense.
           if (entry.scope !== "client") continue;
           if (entry.folders.includes(token)) continue;
           pipelines[pid] = { ...entry, folders: [...entry.folders, token] };
           ticked.push(pid);
         }
-        let config = fresh;
-        if (ticked.length) {
-          config = await savePipelineConfig({ ...fresh, seeded: true, pipelines });
-          note("tick", true, `Ticked onto ${ticked.length} client pipeline(s).`);
-        } else {
-          note("tick", true, "Every client pipeline already had it ticked.");
-        }
-
-        return NextResponse.json({ folderId, steps, config });
+        const config = ticked.length
+          ? await savePipelineConfig({ ...fresh, seeded: true, pipelines })
+          : fresh;
+        return NextResponse.json({
+          step: "tick", done: null, folderId, config, ok: true,
+          detail: ticked.length
+            ? `Ticked onto ${ticked.length} client pipeline(s).`
+            : "Every client pipeline already had it ticked.",
+        });
       }
 
       case "save-config": {

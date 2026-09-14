@@ -236,7 +236,25 @@ export default function PipelineAdmin({
    * now appears IN ITS OWN ROW and stays there until the next action on that
    * row, so a failure can be read, quoted, and reported.
    */
-  const [rowMsg, setRowMsg] = useState<{ id: string; err?: unknown; ok?: string } | null>(null);
+  const [rowMsg, setRowMsg] = useState<{
+    id: string;
+    err?: unknown;
+    ok?: string;
+    /**
+     * 🔴 A REFUSAL — round 119, item 3. The app declined ON PURPOSE and the
+     * message IS the instruction, so it is shown directly, in amber, with no
+     * "Something went wrong" and no details toggle. A FAULT keeps the
+     * ErrorMessage wrapper, which is right for something unexpected.
+     */
+    refusal?: string;
+  } | null>(null);
+  /**
+   * 🔴 WHICH ROW IS WRITING — round 119, item 4. `busy` is global, so nothing
+   * on screen said WHERE the work was happening, and a tick was silent while it
+   * saved. An admin then clicks again — which is a second write, and the
+   * read-back compares against whichever landed last.
+   */
+  const [busyRow, setBusyRow] = useState("");
 
   const ssoHeader = useCallback(
     (): Record<string, string> => (ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {}),
@@ -278,6 +296,7 @@ export default function PipelineAdmin({
   const post = async (payload: Record<string, unknown>, rowId?: string) => {
     setBusy(true);
     setBusyAction(String(payload.action || ""));
+    setBusyRow(rowId || "");
     if (rowId) setRowMsg(null);
     else {
       setSaveErr(null);
@@ -293,12 +312,21 @@ export default function PipelineAdmin({
       if (!res.ok) throw apiError(res, j);
       return j;
     } catch (e) {
-      if (rowId) setRowMsg({ id: rowId, err: e });
+      // ⚠️ A REFUSAL THE SERVER MARKED travels as one to the screen. The route
+      // is the only thing that knows whether a 409 was a deliberate decline or
+      // GoHighLevel objecting, so it says so rather than leaving this to infer
+      // it from the status code.
+      const refusal =
+        e && typeof e === "object" && (e as { refusal?: boolean }).refusal
+          ? String((e as { message?: string }).message || "")
+          : "";
+      if (rowId) setRowMsg(refusal ? { id: rowId, refusal } : { id: rowId, err: e });
       else setSaveErr(e);
       return null;
     } finally {
       setBusy(false);
       setBusyAction("");
+      setBusyRow("");
     }
   };
 
@@ -595,39 +623,78 @@ export default function PipelineAdmin({
     { step: string; ok: boolean; detail: string }[] | null
   >(null);
 
+  /** The step in flight, named — so the button is never silent. */
+  const [attribNow, setAttribNow] = useState("");
+
+  /**
+   * 🔴 THREE REQUESTS, NOT ONE — round 119, item 1.
+   *
+   * ⚠️ IT SHOWED "1." AND THEN NOTHING, and the reason was structural: the
+   * route returned every step at the END, so a slow run and a dead run looked
+   * identical. The step log existed only once the work was over, which is the
+   * one moment it is no longer useful.
+   *
+   * Now each step is its own request and renders the moment it lands. A run
+   * that dies part-way has REPORTED what it did, and clicking again resumes —
+   * every step is idempotent.
+   */
   const runAttribution = async () => {
-    setAttribSteps(null);
+    setAttribSteps([]);
     setBusy(true);
     setBusyAction("attribution-folder");
     setSaveErr(null);
     setSaved("");
+    const add = (step: string, ok: boolean, detail: string) =>
+      setAttribSteps((prev) => [...(prev || []), { step, ok, detail }]);
     try {
-      const res = await fetch("/api/admin/pipelines", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...ssoHeader() },
-        body: JSON.stringify({
-          ssoKey: ssoBlob ?? undefined,
-          action: "attribution-folder",
-        }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (Array.isArray(j.steps)) setAttribSteps(j.steps);
-      if (!res.ok) throw apiError(res, j);
-      if (j.config) {
-        setData((d) => (d ? { ...d, config: j.config } : d));
-        announce(j.config);
+      let folderId = "";
+      // ⚠️ NAMED IN THE PRESENT TENSE, because the button has to say what is
+      // happening while it happens — not afterwards.
+      const labels: Record<string, string> = {
+        folder: "creating the folder…",
+        fields: "moving Referring Partner and Event Source…",
+        tick: "ticking it onto the client pipelines…",
+      };
+      for (const step of ["folder", "fields", "tick"] as const) {
+        setAttribNow(labels[step]);
+        const res = await fetch("/api/admin/pipelines", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...ssoHeader() },
+          body: JSON.stringify({
+            ssoKey: ssoBlob ?? undefined,
+            action: "attribution-folder",
+            step,
+            folderId: folderId || undefined,
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // 🔴 THE STEPS THAT DID SUCCEED STAY ON SCREEN. "The folder was
+          // created, the first field moved, the second did not" is actionable;
+          // "it failed" is round 93's orphan seen from the outside.
+          add(step, false, String(j.detail || j.error || `Step failed (${res.status}).`));
+          throw apiError(res, j);
+        }
+        if (j.folderId) folderId = j.folderId;
+        if (Array.isArray(j.results)) for (const r of j.results) add(step, r.ok, r.detail);
+        else add(step, j.ok !== false, String(j.detail || "Done."));
+        if (j.config) {
+          setData((d) => (d ? { ...d, config: j.config } : d));
+          announce(j.config);
+        }
       }
       setSaved("Referral Attribution is in place.");
       await load(); // the folder is new, so the section list has to be re-read
     } catch (e) {
       setSaveErr(e);
     } finally {
+      setAttribNow("");
       setBusy(false);
       setBusyAction("");
     }
   };
 
-  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
+  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
   const deletePipelineRow = async (p: PipelineRow) => {
     const j = await post({ action: "delete-pipeline", pipelineId: p.id }, p.id);
     if (!j || !data) return;
@@ -754,7 +821,13 @@ export default function PipelineAdmin({
       key={s.key}
     >
       <label className="pfseclab">
-        <input type="checkbox" checked={checked} onChange={onToggle} />
+        {/* 🔴 ITEM 4 — DISABLED IS THE IMPORTANT HALF. Every other write control
+            on this screen already carried `disabled={busy}`; this one, the most
+            clicked of them all, did not. A second click during the first
+            request is a second write, and the read-back then compares against
+            whichever landed last — which is where item 2's false "truncated"
+            and 115c's "fails once, works the second time" both live. */}
+        <input type="checkbox" checked={checked} disabled={busy} onChange={onToggle} />
         {/* 🔴 A NAME AND A DIAGNOSIS ARE NOT THE SAME THING, so they are not
             styled the same.
 
@@ -1358,11 +1431,21 @@ export default function PipelineAdmin({
                   the screen, where it flashed past unread. It stays here until
                   the next action on this row. */}
               {rowMsg && rowMsg.id === p.id ? (
-                rowMsg.err ? (
+                rowMsg.refusal ? (
+                  // 🔴 AMBER, DIRECT, NO TOGGLE. The message is the instruction.
+                  <div className="savemsg warn pfrowmsg">{rowMsg.refusal}</div>
+                ) : rowMsg.err ? (
                   <ErrorMessage error={rowMsg.err} className="savemsg err pfrowmsg" />
                 ) : (
                   <div className="savemsg ok pfrowmsg">{rowMsg.ok}</div>
                 )
+              ) : null}
+              {/* ITEM 4 — the row says it is working, where the work is. */}
+              {busy && busyRow === p.id ? (
+                <div className="pfrowbusy pfrowmsg">
+                  <span className="pfspin" aria-hidden="true" />
+                  Saving…
+                </div>
               ) : null}
               <div className="pfscopeedit">
                 {/* 🔴 ITEM K — THE LABEL WAS WRONG, NOT JUST SHORT. "Decides
@@ -1466,14 +1549,21 @@ export default function PipelineAdmin({
                     // the first folder tick chose for everybody. A scope is a
                     // decision; it is now asked for rather than assumed.
                     if (!entry) {
+                      // 🔴 ROUND 119 · ITEM 3 — A REFUSAL, SHOWN DIRECTLY.
+                      // This was `err: new Error(...)`, so round 112's guard —
+                      // a deliberate decision, with the instruction in it —
+                      // rendered as "✗ Something went wrong. The details below
+                      // will help us fix it." with the sentence hidden behind a
+                      // disclosure triangle. Nothing went wrong.
                       setRowMsg({
                         id: p.id,
-                        err: new Error(
-                          `"${p.name}" has no scope yet. Choose Client or Caregiver ` +
-                            `above before ticking sections — picking one for you is ` +
-                            `how a pipeline ends up in the wrong section.`,
-                        ),
+                        refusal:
+                          `“${p.name}” has no scope yet. Choose a scope above ` +
+                          `before ticking sections — picking one for you is how a ` +
+                          `pipeline ends up in the wrong section.`,
                       });
+                      // ⚠️ AND POINT AT THE FIX. The dropdown is on this row.
+                      document.getElementById(`pfscope-${p.id}`)?.focus();
                       return;
                     }
                     const next = {
@@ -1644,7 +1734,7 @@ export default function PipelineAdmin({
           onClick={() => void runAttribution()}
         >
           {busy && busyAction === "attribution-folder"
-            ? "Working…"
+            ? attribNow || "Working…"
             : "Create Referral Attribution and move the fields"}
         </button>
         {attribSteps ? (
