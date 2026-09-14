@@ -1368,3 +1368,31 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rfpicked{background:var(--ok-soft);border-radius:7px;padding:9px 11px;margin-bottom:10px;
   font-size:12px;line-height:1.6;color:var(--ink-2)}
 .rfpicked b{color:var(--ink)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   🔴 .rfpanel — AND WHY IT IS NOT CALLED .panel.
+
+   Every list in the Referrals section was wrapped in `<div class="panel">`,
+   copied from the prototype's markup, where `.panel` is an ordinary card.
+   In THIS stylesheet `.panel` is the record slide-over:
+
+       .panel { position:fixed; top:0; right:0; height:100%;
+                transform:translateX(100%); z-index:5; }
+       .panel.on { transform:none; }
+
+   So from round 100 to round 109 the Sources table, the Touch queue, the event
+   cards, the attendee list and the drawer's inner lists were all
+   position-fixed and translated 100% off the right edge of the window. They
+   rendered perfectly and were parked off-screen. Every count was right because
+   counts are computed, not drawn — which is exactly why nine rounds of
+   arithmetic proofs never caught it.
+
+   ⚠️ THE THIRD COLLISION: .iskip (round 88), .addsec (round 98), .panel. The
+   round-100 comment above boasts that every class here is rf-prefixed to avoid
+   a third one — while this very name sat unprefixed in the markup. A list of
+   names I remembered to avoid is not a check; scripts/class-collision-proof.mjs
+   now is one.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.rfpanel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
+  overflow:hidden}
+.rfpanel + .rffoot{margin-top:11px}
