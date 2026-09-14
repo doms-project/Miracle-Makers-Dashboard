@@ -25,12 +25,11 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "121",
+  round: "121b",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the field move was on the route that refuses it · two PUTs to a PATCH-only " +
-    "route · a referral files at NEW LEAD, read by position · the duplicate " +
-    "message stops talking about clients and moves",
+    "the Recruiting empty state tells three causes apart · the row header " +
+    "names the board, so scope and recruiting group stop sharing one word",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

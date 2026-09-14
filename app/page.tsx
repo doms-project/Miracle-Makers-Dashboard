@@ -3292,6 +3292,56 @@ export default function Dashboard() {
     );
   }, [cgPipelines, cgHomeIds, isAdminViewer, cgGroup, pipelineGroups]);
 
+  /**
+   * 🔴 WHY THE RECRUITING SECTION IS EMPTY — round 121b, item 3.
+   *
+   * Three causes, and they need three different actions:
+   *   no pipeline is marked for this group -> an admin marks one
+   *   pipelines exist but hold no records  -> nothing to do, wait
+   *   none is granted to this viewer       -> an admin grants access
+   *
+   * ⚠️ ORDER MATTERS. The group test comes FIRST because it is the one that
+   * can be true while the viewer has perfect access — which is exactly the
+   * case that blamed the Access tab for a dropdown nobody had set.
+   */
+  const recruitingEmpty = useMemo(() => {
+    const label = cgGroup === "staff" ? "staff" : cgGroup === "all" ? "recruiting" : "applicant";
+    // What EXISTS in this group, before the viewer's own access narrows it.
+    const inGroup =
+      cgGroup === "all"
+        ? cgPipelines
+        : cgPipelines.filter(
+            (p) => (pipelineGroups[p.id] === "staff" ? "staff" : "caregiver") === cgGroup,
+          );
+    if (!inGroup.length)
+      return (
+        <>
+          <b>No {label} pipelines are set up yet.</b>
+          <br />
+          {cgGroup === "staff" ? (
+            <>
+              An admin marks a pipeline as <b>Staff</b> under Recruiting group on
+              the Pipelines screen. ⚠️ A pipeline with no group set reads as
+              Caregivers, so a staff pipeline that has never been marked is
+              listed there instead of here.
+            </>
+          ) : (
+            <>An admin sets this up on the Pipelines screen.</>
+          )}
+        </>
+      );
+    // They exist and the viewer holds none of them — the original case.
+    return (
+      <>
+        <b>No {label} pipelines assigned yet</b>
+        <br />
+        {inGroup.length} {label} pipeline{inGroup.length === 1 ? " exists" : "s exist"}, but none is
+        yours yet. You&apos;ll see records here once an admin gives you access to
+        one in the Access tab.
+      </>
+    );
+  }, [cgGroup, cgPipelines, pipelineGroups]);
+
   const cgActivePipeline = useMemo(
     () =>
       cgPipeline !== "all"
@@ -5612,14 +5662,16 @@ export default function Dashboard() {
               </div>
             </div>
           ) : cgVisiblePipelines.length === 0 ? (
-            // The SAME empty-state pattern as no pipeline access. A caregiver
-            // pipeline is granted in the Access tab like any other.
-            <div className="empty noaccess">
-              <b>No applicant pipelines assigned yet</b>
-              <br />
-              You&apos;ll see caregiver and DSP applicants here once an admin
-              gives you access to one in the Access tab.
-            </div>
+            /* 🔴 ROUND 121b · ITEM 3 — THREE STATES, SAID APART.
+               One sentence covered all three and named the wrong cause twice:
+               it blamed ACCESS when the real reason was an unset group, and it
+               said "caregiver and DSP applicants" while the switcher said
+               Staff — copy written before the switcher existed and never read
+               by it.
+               ⚠️ SAME FAULT AS THE SOURCES TABLE'S "no records match", which
+               cost round 108 a whole round. An empty state that guesses its own
+               cause sends somebody to fix the wrong thing. */
+            <div className="empty noaccess">{recruitingEmpty}</div>
           ) : (
             <>
               {cgStaleError ? (
@@ -5864,6 +5916,29 @@ export default function Dashboard() {
                   )}
                 </span>
               </div>
+              {/* 🔴 ROUND 121b · ITEM 3, THE MIDDLE STATE. Pipelines exist and
+                  hold nothing — which is where the three staff pipelines are
+                  today. A board of empty columns beside "0 applicants" is
+                  accurate and says nothing; this names the state so nobody goes
+                  looking for a filter or an access problem that is not there.
+                  ⚠️ ONLY WHEN NOTHING IS NARROWING THE SET. With a search or a
+                  stage chip on, zero means "none match", which is a different
+                  sentence and one the chips already tell. */}
+              {cgData.length === 0 && !cgQuery.trim() && !cgStage && !cgFocus ? (
+                <div className="imeta cgempty">
+                  No{" "}
+                  {cgGroup === "staff"
+                    ? "staff applicants"
+                    : cgGroup === "all"
+                      ? "records"
+                      : "applicants"}{" "}
+                  yet — the{" "}
+                  {cgVisiblePipelines.length === 1
+                    ? "pipeline is"
+                    : `${cgVisiblePipelines.length} pipelines are`}{" "}
+                  empty. Nothing is filtered out.
+                </div>
+              ) : null}
               {/* ITEM A3 — STAGE CHIPS. Counted against `cgPreStage` (everything
                   but the stage filter itself), so a chip says how many it would
                   reveal, not how many are showing now. */}
