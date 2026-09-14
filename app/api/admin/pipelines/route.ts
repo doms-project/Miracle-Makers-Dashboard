@@ -300,6 +300,7 @@ interface Body {
     | "create-pipeline"
     | "delete-pipeline"
     | "count-records"
+    | "attribution-folder"
     | "save-config"
     | "create-section"
     | "create-field"
@@ -430,7 +431,39 @@ export async function POST(request: Request) {
             } as ApiError,
             { status: 409 },
           );
-        await deletePipeline(pipelineId);
+        // 🔴 ITEM 1's SECOND QUESTION, AND THE ANSWER WAS YES — THE ENTRY WAS
+        // LEFT BEHIND.
+        //
+        // `deletePipeline` threw on the 400, so the `savePipelineConfig` below
+        // it never ran: the pipeline was gone from GoHighLevel and still in MM
+        // Pipeline Folders. Exactly round 90's stale-key case, manufactured by
+        // the screen that exists to prevent it.
+        //
+        // ⚠️ TWO FIXES, AND BOTH ARE NEEDED. `deletePipeline` no longer treats
+        // "is deleted" as a failure, so this line stops throwing — but a
+        // DIFFERENT failure after the pipeline is gone would strand the entry
+        // again. So the config write is in a `finally`-shaped path: if the
+        // delete threw for any reason, we ask GoHighLevel whether the pipeline
+        // is actually still there, and reconcile on what is true rather than on
+        // whether a request 4xx'd.
+        let deleteErr: unknown = null;
+        try {
+          await deletePipeline(pipelineId);
+        } catch (e) {
+          deleteErr = e;
+        }
+        if (deleteErr) {
+          const still = (await listPipelines()).some((p) => p.id === pipelineId);
+          // Still there — the delete genuinely failed. Report it, change
+          // nothing, and leave the mapping alone.
+          if (still) throw deleteErr;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[pipelines] delete of ${pipelineId} reported an error but the ` +
+              "pipeline is gone from GoHighLevel. Removing the stored entry so " +
+              "it does not become a stale key.",
+          );
+        }
         // 🔴 AND THE STORED ENTRY GOES WITH IT — round 90's stale-key case.
         //
         // ⚠️ THIS IS NOT THE AUTO-DELETE ROUND 90 REFUSED. That refusal protects
@@ -447,6 +480,148 @@ export async function POST(request: Request) {
           config = await savePipelineConfig({ ...cfg, seeded: true, pipelines: rest });
         }
         return NextResponse.json({ deleted: pipelineId, config });
+      }
+
+      /**
+       * 🔴 ITEM 3 — CREATE "Referral Attribution", MOVE THE TWO ATTRIBUTION
+       * FIELDS INTO IT, AND TICK IT ONTO EVERY CLIENT PIPELINE.
+       *
+       * Referral Detail (9OZdxXFfJsdNGR7qsQKQ) is mapped to the EVENTS pipeline
+       * only and holds two unrelated jobs: `Referring Partner` is attribution
+       * and belongs on every client record; Waiver Type, Authorized Units and
+       * Referral Decline Reason are ODP/OLTL waiver administration. One folder
+       * cannot be ticked for one job and not the other — which is why
+       * Referring Partner is invisible on every client record today.
+       *
+       * ⚠️ WATCHABLE, NOT BLIND — as asked. Every step is reported in order
+       * with what it did, so a partial run is readable rather than a mystery.
+       * Round 93 recorded `createFieldFolder` failing in a way that left an
+       * orphan, and the defence against that is not a try/catch, it is SAYING
+       * WHICH STEP GOT HOW FAR.
+       *
+       * 🔴 AND IT IS RESUMABLE. If the folder already exists it is reused
+       * rather than created again, and a field already in it is skipped — so
+       * running this twice does not make "Referral Attribution (1)" beside a
+       * half-moved first attempt.
+       */
+      case "attribution-folder": {
+        const steps: { step: string; ok: boolean; detail: string }[] = [];
+        const note = (step: string, ok: boolean, detail: string) => {
+          steps.push({ step, ok, detail });
+          return ok;
+        };
+        const FOLDER_NAME = "Referral Attribution";
+        // The two fields that move, BY NAME — ids differ per account and a
+        // hardcoded id is what section 9 forbids.
+        const MOVE = ["referring partner", "event source"];
+
+        const cfg = await getPipelineConfig();
+        const defs = await getEditableFieldDefs("opportunity");
+        const secs = sectionsFromDefs(defs, cfg.folderNames);
+
+        // ── 1 · the folder, created or reused ────────────────────────────
+        let folderId = "";
+        // 🔴 LOOK IN `folderNames` FIRST, NOT ONLY IN THE SECTIONS.
+        //
+        // `sectionsFromDefs` builds sections from folders that HAVE FIELDS, so
+        // a folder created a moment ago — or one whose fields have not been
+        // re-read yet — is invisible to it. The name we stored ourselves is the
+        // authoritative record that this folder exists, and it is the one that
+        // makes a second run reuse rather than create.
+        const namedId = Object.entries(cfg.folderNames || {}).find(
+          ([, n]) => (n || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
+        )?.[0];
+        const existing = namedId
+          ? { id: namedId }
+          : secs.find(
+              (x) => (x.label || "").trim().toLowerCase() === FOLDER_NAME.toLowerCase(),
+            );
+        if (existing) {
+          folderId = existing.id;
+          note("folder", true, `Reused the existing “${FOLDER_NAME}” (${folderId}).`);
+        } else {
+          try {
+            const made = await createFieldFolder({ name: FOLDER_NAME });
+            folderId = String(made.id || "");
+            if (!folderId)
+              return NextResponse.json(
+                {
+                  error: "GoHighLevel created the folder but returned no id.",
+                  detail:
+                    "Nothing was moved. Check GoHighLevel for a folder named " +
+                    `“${FOLDER_NAME}” before running this again — it may exist without this app knowing its id.`,
+                  status: 502,
+                  steps,
+                } as ApiError & { steps: typeof steps },
+                { status: 502 },
+              );
+            await rememberFolderName(folderId, FOLDER_NAME);
+            note("folder", true, `Created “${FOLDER_NAME}” (${folderId}) and recorded its name.`);
+          } catch (e) {
+            return NextResponse.json(
+              {
+                error: `Could not create “${FOLDER_NAME}”.`,
+                detail: await explainGhlError(e),
+                status: 502,
+                steps,
+              } as ApiError & { steps: typeof steps },
+              { status: 502 },
+            );
+          }
+        }
+
+        // ── 2 · the fields ───────────────────────────────────────────────
+        for (const want of MOVE) {
+          const def = defs.find((d) => (d.name || "").trim().toLowerCase() === want);
+          if (!def) {
+            // ⚠️ NOT AN ABORT. Event Source may not exist on an account that
+            // has never run an event; the other field must still move.
+            note("field", false, `No field named “${want}” on this account — skipped.`);
+            continue;
+          }
+          if (def.parentId === folderId) {
+            note("field", true, `“${def.name}” is already in ${FOLDER_NAME}.`);
+            continue;
+          }
+          try {
+            await moveFieldToFolder(def.id, folderId);
+            note("field", true, `Moved “${def.name}” into ${FOLDER_NAME}.`);
+          } catch (e) {
+            note("field", false, `“${def.name}” did not move: ${await explainGhlError(e)}`);
+          }
+        }
+
+        // ── 3 · tick it onto every CLIENT pipeline ───────────────────────
+        // 🔴 CLIENT ONLY. An applicant has no referring partner in this sense —
+        // item 6 is where the caregiver half is considered, and it is not this
+        // round.
+        const token = folderKeyById(folderId) || folderId;
+        // 🔴 RE-READ, DO NOT REUSE `cfg`. `rememberFolderName` above wrote the
+        // folder's name into the stored value; saving from the `cfg` captured
+        // BEFORE that write put the old folderNames back and ERASED the name —
+        // so a second run could not find the folder and made another one.
+        //
+        // ⚠️ FOUND BY RUNNING IT TWICE, which is the only way this shows up:
+        // every assertion about the first run passed. Same class as round
+        // 115b's "folderNames are merged, never replaced".
+        const fresh = await getPipelineConfig();
+        const pipelines = { ...fresh.pipelines };
+        const ticked: string[] = [];
+        for (const [pid, entry] of Object.entries(pipelines)) {
+          if (entry.scope !== "client") continue;
+          if (entry.folders.includes(token)) continue;
+          pipelines[pid] = { ...entry, folders: [...entry.folders, token] };
+          ticked.push(pid);
+        }
+        let config = fresh;
+        if (ticked.length) {
+          config = await savePipelineConfig({ ...fresh, seeded: true, pipelines });
+          note("tick", true, `Ticked onto ${ticked.length} client pipeline(s).`);
+        } else {
+          note("tick", true, "Every client pipeline already had it ticked.");
+        }
+
+        return NextResponse.json({ folderId, steps, config });
       }
 
       case "save-config": {

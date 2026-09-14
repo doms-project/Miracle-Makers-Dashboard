@@ -163,7 +163,18 @@ export async function explainGhlError(e: unknown): Promise<string> {
   ) {
     return "This client already has a case in the destination pipeline. GoHighLevel allows only ONE opportunity per contact per pipeline, so this record can't be moved there. Close or move the existing case first, then try again. (GoHighLevel's own message says \"create\" — it fires on updates too; nothing was duplicated.)";
   }
-  return e.detail ? `${e.message} — ${e.detail}` : e.message;
+  // 🔴 WRAP ONCE — round 94's item 8, and round 118's item 1 found it again.
+  //
+  // This returned `${e.message} — ${e.detail}`, and every route's `fail()` puts
+  // `e.message` in `error` AND this string in `detail`. So the card rendered:
+  //
+  //   GoHighLevel returned 400 deleting the pipeline.
+  //   GoHighLevel returned 400 deleting the pipeline. — Pipeline with id … is deleted
+  //
+  // ⚠️ THE CALLER ALREADY HAS THE MESSAGE. What it does not have is GHL's own
+  // words, which is the whole reason this function exists. Returning the detail
+  // alone is the fix; the message falls back only when there is no detail.
+  return e.detail || e.message;
 }
 
 function requireEnv(opts?: {
@@ -311,7 +322,15 @@ export function getRateLimitSnapshot(): RateLimitSnapshot | null {
 }
 
 function num(res: Response, name: string): number | null {
-  const v = Number(res.headers.get(name));
+  // 🔴 `Number(null)` IS 0, AND `Number.isFinite(0)` IS TRUE — round 118 found
+  // this in its own round-117 code. A response with NO rate-limit headers was
+  // recorded as "0 of 0 remaining", and `pauseIfNearLimit` then slept before
+  // every subsequent call. The proof's log made it obvious:
+  //   [ghl] 0 of 0 requests left in this 0ms window — pausing briefly.
+  // The header's ABSENCE has to be checked before the conversion, not after.
+  const h = res.headers.get(name);
+  if (h === null || h.trim() === "") return null;
+  const v = Number(h);
   return Number.isFinite(v) ? v : null;
 }
 
@@ -523,6 +542,103 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
 function retryableWrite(method: string, idempotent?: boolean): boolean {
   if (idempotent) return true;
   return method === "PUT" || method === "PATCH";
+}
+
+/**
+ * 🔴 DELETE, THROUGH THE SAME MACHINERY AS EVERYTHING ELSE — round 118, item 1,
+ * closing the gap round 117 named and did not fix.
+ *
+ * ⚠️ AND MY REASON FOR SKIPPING IT IN 117 WAS WRONG. I wrote that `ghlSend`
+ * takes PUT/POST/PATCH only "because a DELETE has no body". One of the three
+ * call sites — `removeFollowers` — sends `{followers: [...]}`. So the body is
+ * optional, not absent, and that is what this takes.
+ *
+ * 🔴 A DELETE IS IDEMPOTENT, so it is retried like a PUT: deleting a thing
+ * twice reaches the same place. That is the opposite of a POST, where a retry
+ * after a 429 that landed makes a second record.
+ *
+ * @param goneOk a pattern matching GoHighLevel's own words for "it is already
+ *        gone". When the body matches, the call SUCCEEDS — see deletePipeline.
+ */
+async function ghlDelete<T = unknown>(
+  path: string,
+  opts?: { body?: unknown; goneOk?: RegExp; what?: string },
+  attempt = 1,
+): Promise<T | null> {
+  const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
+  const what = opts?.what || "the record";
+  await pauseIfNearLimit();
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "DELETE",
+      headers:
+        opts?.body === undefined
+          ? headers()
+          : { ...headers(), "Content-Type": "application/json" },
+      ...(opts?.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new GhlError(
+      "Could not reach GoHighLevel.",
+      502,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+  readRateLimit(res);
+  // ⚠️ THE RESPONSE BODY IS RETURNED WHEN THERE IS ONE. Most deletes have
+  // nothing to say; `removeOpportunityFollowers` answers with the remaining
+  // follower list, and dropping it would have made this helper unusable there.
+  if (res.ok) {
+    const txt = await res.text().catch(() => "");
+    if (!txt.trim()) return null;
+    try {
+      return JSON.parse(txt) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  const raw = await res.text().catch(() => "");
+
+  if (res.status === 429) {
+    if (attempt < RL_ATTEMPTS) {
+      const wait = rateLimitWaitMs(res, attempt);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ghl] 429 on DELETE ${new URL(url).pathname} — attempt ${attempt} of ` +
+          `${RL_ATTEMPTS}, retrying in ${wait}ms.`,
+      );
+      await sleep(wait);
+      return ghlDelete<T>(path, opts, attempt + 1);
+    }
+    throw rateLimitError(`DELETE ${new URL(url).pathname}`, RL_ATTEMPTS);
+  }
+
+  // 🔴 ALREADY GONE IS NOT A FAILURE. The outcome is what was asked for.
+  //
+  // ⚠️ MEASURED, NOT THEORISED: deleting "test" returned
+  //   400 — "Pipeline with id u4ShHPNEC04jkdmqfWQ0 is deleted"
+  // GoHighLevel's own message says the thing is deleted, and the screen said
+  // the action failed. A double-fire — the first request deleted it, the second
+  // found it gone — is the likeliest cause, and it does not matter: a caller
+  // asking for a thing to not exist has had its request satisfied either way.
+  if (opts?.goneOk && (res.status === 404 || opts.goneOk.test(raw))) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[ghl] DELETE ${new URL(url).pathname} -> ${res.status}, but GoHighLevel ` +
+        `says it is already gone. Treating as success: ${ghlMessage(raw).slice(0, 120)}`,
+    );
+    return null;
+  }
+
+  throw new GhlError(
+    `GoHighLevel returned ${res.status} deleting ${what}.`,
+    res.status,
+    ghlMessage(raw),
+    ghlErrorMeta(raw),
+  );
 }
 
 async function ghlSend<T>(
@@ -2214,17 +2330,13 @@ export async function deleteMediaFolder(folderId: string): Promise<void> {
     altType: "location",
     altId: locationId,
   });
-  const url = `${BASE_URL}/medias/${encodeURIComponent(folderId)}?${params.toString()}`;
-  const res = await fetch(url, { method: "DELETE", headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    const raw = await res.text().catch(() => "");
-    throw new GhlError(
-      `GoHighLevel returned ${res.status} deleting the folder.`,
-      res.status,
-      ghlMessage(raw),
-      ghlErrorMeta(raw),
-    );
-  }
+  // ITEM 1 — through ghlDelete now, so a 429 here is retried like everywhere
+  // else. ⚠️ NO `goneOk`: a media folder that is already gone is not something
+  // this app has a reason to treat as success, and inventing one would hide a
+  // wrong-id bug.
+  await ghlDelete(`/medias/${encodeURIComponent(folderId)}?${params.toString()}`, {
+    what: "the folder",
+  });
 }
 
 // Files in ONE folder. listResources() keeps its single-folder env behaviour for
@@ -2882,24 +2994,28 @@ export async function deletePipeline(pipelineId: string): Promise<void> {
   const { locationId } = requireEnv();
   const id = String(pipelineId || "").trim();
   if (!id) throw new GhlError("No pipeline id.", 400);
-  // ⚠️ `ghlSend` TAKES PUT/POST/PATCH ONLY — it always sends a JSON body, and a
-  // DELETE has none. Same shape as deleteMediaFolder above.
-  const url = `${BASE_URL}/opportunities/pipelines/${encodeURIComponent(id)}?locationId=${encodeURIComponent(locationId)}`;
-  const res = await fetch(url, { method: "DELETE", headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    const raw = await res.text().catch(() => "");
-    throw new GhlError(
-      `GoHighLevel returned ${res.status} deleting the pipeline.`,
-      res.status,
-      ghlMessage(raw),
-      ghlErrorMeta(raw),
+  try {
+    await ghlDelete(
+      `/opportunities/pipelines/${encodeURIComponent(id)}?locationId=${encodeURIComponent(locationId)}`,
+      {
+        what: "the pipeline",
+        // 🔴 "is deleted" IS A SUCCESS — round 118, item 1. GoHighLevel answers
+        // a second delete of the same pipeline with 400 and the words "Pipeline
+        // with id … is deleted". Reading that as a failure told the admin the
+        // action had not worked about a pipeline that was gone.
+        goneOk: /\bis deleted\b|\bnot found\b|\bdoes ?n[o']?t exist\b/i,
+      },
     );
+  } finally {
+    // 🔴 IN A `finally`, NOT AFTER THE AWAIT. The route's reconciliation asks
+    // `listPipelines()` whether the pipeline is really gone when this throws —
+    // and that list is memoized, so leaving the bust on the success path would
+    // have answered "still there" from a cache written before the delete. The
+    // one read that has to be fresh is the one that runs after a failure.
+    cache.pipelines = undefined;
   }
-  // 🔴 SAME AS createPipeline. The pipeline list is memoized for the life of the
-  // lambda; without this the deleted pipeline keeps appearing on every screen
-  // that reads it until the instance recycles.
-  cache.pipelines = undefined;
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PIPELINE CONFIGURATION — the stored value, and the ONE-TIME SEED.
@@ -4387,40 +4503,14 @@ export async function removeOpportunityFollowers(
   userIds: string[],
 ): Promise<string[]> {
   if (!userIds.length) return [];
-  // DELETE with a JSON body — ghlSend only covers PUT/POST/PATCH.
-  const url = `${BASE_URL}/opportunities/${encodeURIComponent(oppId)}/followers`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "DELETE",
-      headers: { ...headers(), "Content-Type": "application/json" },
-      body: JSON.stringify({ followers: userIds }),
-      cache: "no-store",
-    });
-  } catch (e) {
-    throw new GhlError(
-      "Could not reach GoHighLevel.",
-      502,
-      e instanceof Error ? e.message : String(e),
-    );
-  }
-  if (!res.ok) {
-    let detail = "";
-    try {
-      detail = ghlMessage(await res.text());
-    } catch {
-      /* ignore */
-    }
-    throw new GhlError(
-      `GoHighLevel returned ${res.status} for DELETE /opportunities/{id}/followers.`,
-      res.status,
-      detail,
-    );
-  }
-  const j = (await res.json().catch(() => ({}))) as {
-    followers?: string[];
-    followersRemoved?: string[];
-  };
+  // ITEM 1 — through ghlDelete, which DOES take a body. Round 117's note here
+  // said ghlSend excludes DELETE "because a DELETE has none"; this call site is
+  // the counter-example that was sitting three lines below it.
+  const j =
+    (await ghlDelete<{ followers?: string[]; followersRemoved?: string[] }>(
+      `/opportunities/${encodeURIComponent(oppId)}/followers`,
+      { body: { followers: userIds }, what: "the followers" },
+    )) ?? {};
   return j.followers ?? j.followersRemoved ?? [];
 }
 
@@ -5029,32 +5119,13 @@ export async function deleteCaregiverRelation(
   relationId: string,
 ): Promise<void> {
   const { locationId } = requireEnv();
-  const url = `${BASE_URL}/associations/relations/${encodeURIComponent(
-    relationId,
-  )}?locationId=${encodeURIComponent(locationId)}`;
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "DELETE", headers: headers() });
-  } catch (e) {
-    throw new GhlError(
-      "Could not reach GoHighLevel.",
-      502,
-      e instanceof Error ? e.message : String(e),
-    );
-  }
-  if (!res.ok) {
-    let detail = "";
-    try {
-      detail = ghlMessage(await res.text());
-    } catch {
-      /* ignore */
-    }
-    throw new GhlError(
-      `GoHighLevel returned ${res.status} for DELETE /associations/relations.`,
-      res.status,
-      detail,
-    );
-  }
+  // ITEM 1 — through ghlDelete. ⚠️ `goneOk`: a relation that is already gone is
+  // the state the caller wants. This one runs during a transfer, where failing
+  // on an already-removed link would strand the record mid-move.
+  await ghlDelete(
+    `/associations/relations/${encodeURIComponent(relationId)}?locationId=${encodeURIComponent(locationId)}`,
+    { what: "the association", goneOk: /\bnot found\b|\bdoes ?n[o']?t exist\b|\bis deleted\b/i },
+  );
 }
 
 // ═════════════════════════════════════════════════════════════════════════
