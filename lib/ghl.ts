@@ -596,11 +596,25 @@ export function caregiverPipelineIds(): string[] {
   );
 }
 
-/** Which family of pipelines a read is about. */
-export type PipelineScope = "client" | "caregiver";
+/**
+ * Which family of pipelines a read is about.
+ *
+ * 🔴 THREE VALUES SINCE ROUND 116, AND THE THIRD HAS NO ENV LIST. "none" means
+ * "listed by no board picker" — see pipelineConfig.ts. It exists only in the
+ * STORED config, so there is nothing for `idsForScope` to fall back to and an
+ * empty array is the correct answer, not the client list.
+ */
+export type PipelineScope = "client" | "caregiver" | "none";
 
 export function idsForScope(scope: PipelineScope): string[] {
-  return scope === "caregiver" ? caregiverPipelineIds() : pipelineIds();
+  // 🔴 NOT A TERNARY ON "caregiver". Written as `scope === "caregiver" ? … :
+  // pipelineIds()`, "none" would fall to the CLIENT env list — so a pipeline an
+  // admin deliberately removed from both pickers would reappear on the Clients
+  // board the moment the stored config failed to read. The fallback must
+  // degrade toward FEWER pipelines, never more.
+  if (scope === "caregiver") return caregiverPipelineIds();
+  if (scope === "none") return [];
+  return pipelineIds();
 }
 
 // Loud config check (memoized) — surfaces the two silent failure modes:
@@ -663,6 +677,12 @@ export async function getSelectedPipelines(
     const p = byId.get(id);
     if (p) selected.push(p);
   }
+  // 🔴 "none" IS ALLOWED TO BE EMPTY — round 116, item K. The throw below is a
+  // CONFIGURATION ALARM: a board with no pipelines means somebody's whole
+  // section is blank and we want to say why. "Listed by no picker" is the
+  // opposite — an empty list is the normal state, and throwing would take down
+  // every caller that merely asks whether such a pipeline exists.
+  if (scope === "none" && !ids.length) return [];
   if (!selected.length) {
     throw new GhlError(
       "None of the configured pipelines matched this account's pipelines.",
@@ -2616,6 +2636,73 @@ export async function createPipeline(args: {
     name: String(p?.name ?? name),
     stages: (p?.stages || []).map((st) => ({ id: String(st.id), name: String(st.name) })),
   };
+}
+
+/**
+ * How many opportunities sit in one pipeline. ONE request.
+ *
+ * 🔴 THE POINT IS THE TOTAL, NOT THE RECORDS. `limit=1` — GoHighLevel returns
+ * the count in `meta.total` and we never page. `searchAll()` above would fetch
+ * all 596 in pages of 100 to answer a question one call answers.
+ *
+ * ⚠️ AND THE FALLBACK IS A REFUSAL, NOT A ZERO. If neither `meta.total` nor
+ * `total` comes back, this returns null — "I could not count" — and the caller
+ * must not delete. A count that silently degrades to 0 is how a pipeline with
+ * records gets deleted by a screen that promised to protect it.
+ */
+export async function countOpportunitiesInPipeline(
+  pipelineId: string,
+): Promise<number | null> {
+  if (!pipelineId) return null;
+  const { locationId } = requireEnv();
+  const params = new URLSearchParams({
+    location_id: locationId,
+    pipeline_id: pipelineId,
+    limit: "1",
+  });
+  const data = await ghlGet<SearchResponse>(
+    `/opportunities/search?${params.toString()}`,
+  );
+  const total = data.meta?.total ?? data.total;
+  if (typeof total === "number" && Number.isFinite(total)) return total;
+  // No total field at all, but a record came back — we know it is NOT empty,
+  // which is all the delete gate needs. Reporting that as "≥1" beats null.
+  if ((data.opportunities || []).length) return (data.opportunities || []).length;
+  return null;
+}
+
+/**
+ * Delete a pipeline in GoHighLevel — round 116, item L.
+ *
+ * ✅ VERIFIED BY THE OWNER AGAINST THE LIVE ACCOUNT:
+ *    DELETE /opportunities/pipelines/{id}?locationId=… -> {"success":true}
+ *
+ * 🔴 NO EMPTINESS CHECK HERE. This is the transport. The gate lives in the
+ * route, which counts first and refuses — see the delete-pipeline case. Putting
+ * the check in both places would mean two searches per delete and neither
+ * caller knowing which one actually protected them.
+ */
+export async function deletePipeline(pipelineId: string): Promise<void> {
+  const { locationId } = requireEnv();
+  const id = String(pipelineId || "").trim();
+  if (!id) throw new GhlError("No pipeline id.", 400);
+  // ⚠️ `ghlSend` TAKES PUT/POST/PATCH ONLY — it always sends a JSON body, and a
+  // DELETE has none. Same shape as deleteMediaFolder above.
+  const url = `${BASE_URL}/opportunities/pipelines/${encodeURIComponent(id)}?locationId=${encodeURIComponent(locationId)}`;
+  const res = await fetch(url, { method: "DELETE", headers: headers(), cache: "no-store" });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    throw new GhlError(
+      `GoHighLevel returned ${res.status} deleting the pipeline.`,
+      res.status,
+      ghlMessage(raw),
+      ghlErrorMeta(raw),
+    );
+  }
+  // 🔴 SAME AS createPipeline. The pipeline list is memoized for the life of the
+  // lambda; without this the deleted pipeline keeps appearing on every screen
+  // that reads it until the instance recycles.
+  cache.pipelines = undefined;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1524,3 +1524,77 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rfpanel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
   overflow:hidden}
 .rfpanel + .rffoot{margin-top:11px}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ROUND 116 — THE PIPELINE SCREEN'S MISSING CONTROLS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ITEM Q — per-field exclusions inside a ticked folder.
+
+   🔴 `flex:0 0 auto` IS LOAD-BEARING, and round 112's sweep rule 5 is why.
+   `.irow input{width:100%}` once stretched every control to its row and a
+   tickbox with it; the mirror mistake here is a flex child with no basis,
+   which lets the box shrink to nothing when a field name is long. A tickbox
+   has ONE correct size. */
+.pffbox{flex:0 0 auto;width:13px;height:13px;margin:0;accent-color:var(--accent);cursor:pointer;}
+.pffbox:disabled{cursor:not-allowed;opacity:.45;}
+/* ⚠️ STRUCK THROUGH, NOT JUST FADED. Opacity alone reads as "loading", and a
+   hidden field has to read as a DECISION somebody made. */
+.pffieldlist li.pffoff .pffname{text-decoration:line-through;color:var(--ink-3);}
+.pffieldlist li.pffoff .pfftype{opacity:.55;}
+.pffnote{margin:7px 0 0;font-size:10.5px;line-height:1.5;}
+
+/* ITEM L — the delete control and its refusal, in the same place so the
+   refusal is read where the button would have been. */
+.pfdelete{flex:1 1 100%;margin-top:6px;display:flex;align-items:center;gap:9px;}
+.pfdelete .ihint{margin:0;font-size:11px;}
+.pfdangerbtn{padding:4px 11px;border:1px solid #e5c3bd;background:var(--bg);color:#8c2f22;
+  border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;}
+.pfdangerbtn:hover:not(:disabled){background:#fdeeec;border-color:#c0392b;}
+.pfdangerbtn:disabled{opacity:.5;cursor:not-allowed;}
+
+/* ITEM L — the record count on the face of a row. `.pfcount` already takes
+   margin-left:auto, so this sits after it rather than fighting it. */
+.pfreccount{flex:0 0 auto;font-size:11px;color:var(--ink-3);white-space:nowrap;}
+
+/* ITEM O — contact sections, read-only, both names. */
+.pfcontacts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.pfcgroup{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg);}
+.pfchead{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:7px;}
+.pfcrow{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;padding:5px 0;
+  border-bottom:1px solid var(--line-soft);font-size:12px;}
+.pfcrow:last-child{border-bottom:0;}
+.pfcname{flex:1 1 auto;min-width:0;color:var(--ink);overflow-wrap:anywhere;}
+/* 🔴 THE GOHIGHLEVEL NAME IS THE SEARCHABLE ONE, so it is not styled as an
+   aside. An admin hunting for "Form | Form 6" needs to be able to find it on
+   this row at a glance. */
+.pfcghl{flex:0 0 auto;font-size:10.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:#7a5227;background:#fdf8f2;border:1px solid #f0dcc9;border-radius:5px;padding:0 5px;}
+.pfcsame{flex:0 0 auto;font-size:10.5px;color:var(--ink-3);}
+.pfcfields{flex:0 0 auto;font-size:10.5px;font-weight:600;color:var(--ink-3);}
+.pfcid{flex:1 1 100%;font-size:10px;color:var(--ink-3);overflow-wrap:anywhere;}
+
+/* 🔴 THE ROWS WERE NEVER ACTUALLY CLOSED — round 116, measured not assumed.
+
+   `<details open={false}>` renders collapsed because the UA hides its
+   non-summary children. `.pfseclist{display:grid}` (line 408) is an AUTHOR
+   rule on one of those children and it WINS, so the grid drew whether or not
+   the row was open: `pipeline rows: 4 · OPEN at load: 0 · chips VISIBLE: 8`.
+
+   ⚠️ SO THE CHEVRON DID NOTHING AND THE SCREEN WAS ONE LONG WALL — ten
+   pipelines, each with its own fourteen-chip grid, all on screen at once,
+   which is exactly what the brief described and what reading the JSX denied.
+   Scoped to `.pfrow` on purpose: `.sysinfo` and `.unfiled` collapse correctly
+   because nothing overrides display on their children, and a blanket rule
+   would be a fix aimed at a bug they do not have. */
+.pfrow:not([open]) > :not(summary){display:none;}
+
+/* 🔴 AND THE SWEEP FOUND TWO MORE OF THE SAME, IN THE RECORD PANEL.
+   `.sysinfo` ("Set automatically") and `.unfiled` ("not yet assigned") each
+   hold a direct `<div className="grid">`, and `.grid{display:grid}` beat the
+   collapse exactly as `.pfseclist` did on the Pipelines screen. Both carry a
+   chevron that rotates on [open], so both were built to collapse and neither
+   did — the rotation was the only thing the click changed. */
+.sysinfo:not([open]) > :not(summary){display:none;}
+.unfiled:not([open]) > :not(summary){display:none;}

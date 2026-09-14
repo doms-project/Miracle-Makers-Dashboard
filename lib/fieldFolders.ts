@@ -232,7 +232,24 @@ export function groupFieldsForPipeline(
    * ported from groupContactFields (:520) and applied to SECTIONS rather than
    * fields.
    */
-  opts?: { values?: Record<string, unknown>; folderNames?: Record<string, string> },
+  opts?: {
+    values?: Record<string, unknown>;
+    folderNames?: Record<string, string>;
+    /**
+     * 🔴 PER-FIELD EXCLUSIONS FOR THIS PIPELINE — round 116, item Q. Field ids
+     * to drop even though their folder is ticked.
+     *
+     * ⚠️ COST: one Set construction per call and one `has()` per field — the
+     * same order as the `allowedTokens` test one line above it, which has been
+     * in this loop since round 90. A pipeline with no exclusions builds an empty
+     * Set and every lookup misses. Nothing here is per-record or per-folder.
+     *
+     * ⚠️ AND IT IS APPLIED AT BUCKETING, NOT AT RENDER. A field excluded here
+     * never reaches a section, so a folder whose every field is excluded has no
+     * fields and is not drawn at all — rather than drawn as an empty heading.
+     */
+    exclude?: Iterable<string>;
+  },
 ): {
   sections: FieldGroup[];
   systemInfo: EditableFieldDef[];
@@ -337,6 +354,9 @@ export function groupFieldsForPipeline(
   const systemInfo: EditableFieldDef[] = [];
   const orphans: EditableFieldDef[] = [];
 
+  // 🔴 ITEM Q. Built once, read once per field.
+  const excluded = new Set(opts?.exclude ?? []);
+
   for (const def of defs) {
     // 🔴 BOTH NAME CHECKS RUN FIRST, AND THAT IS LOAD-BEARING. They win over
     // every folder rule below, so a system-written field stays read-only in
@@ -348,6 +368,16 @@ export function groupFieldsForPipeline(
       systemInfo.push(def);
       continue;
     }
+    // 🔴 ITEM Q — EXCLUDED FOR THIS PIPELINE. Dropped, never orphaned: an
+    // exclusion is a decision somebody made, and the orphan bucket exists for
+    // fields nobody has decided anything about (see the comment above
+    // `knownTokens`). Surfacing an excluded field under "Other" would put back
+    // on the card the exact thing the admin took off it.
+    //
+    // ⚠️ BELOW BOTH NAME CHECKS, DELIBERATELY. System-written fields stay in
+    // System info whatever else is configured — the same precedence round 90
+    // gave the folder rules.
+    if (excluded.has(def.id)) continue;
     // Same hybrid rule as the allow-list — see tokenOf above.
     const token = def.parentId ? tokenOf(def.parentId) : "";
     if (!token) {
@@ -636,7 +666,7 @@ export function groupContactFields(
  * value can be falsy: the NUMBER 0, and `false` on a checkbox, are both answers
  * a lead gave and must keep the field on screen.
  */
-function hasValue(v: unknown): boolean {
+export function hasValue(v: unknown): boolean {
   if (v == null) return false;
   if (Array.isArray(v)) return v.length > 0;
   if (typeof v === "string") return v.trim() !== "";

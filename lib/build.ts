@@ -25,11 +25,12 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "115c",
+  round: "116",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "referrals full width · a tick reports in its own row · attribute an " +
-    "existing lead without creating a duplicate",
+    "per-field exclusions inside a ticked folder · a warning before hiding a " +
+    "field that holds values · which picker lists a pipeline · delete an empty " +
+    "pipeline · contact sections shown with both names",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

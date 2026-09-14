@@ -177,8 +177,20 @@ interface Body {
  * tab says so rather than guessing which pipeline holds the events.
  */
 async function eventsPipeline() {
-  const client = await getSelectedPipelines("client");
-  return client.find((p) => /^events?$/i.test(p.name.trim()));
+  // 🔴 CLIENT **AND** "none" — round 116, item K, and this is the whole cost of
+  // that item. Events is scoped `client` today ONLY so that this lookup can find
+  // it; the moment an admin sets it to "listed by no picker" — which is exactly
+  // what item K exists to let them do — a client-only search returns undefined
+  // and the Events tab says "no events pipeline is configured". The screen that
+  // fixed one thing would have broken another silently.
+  //
+  // ⚠️ NO EXTRA REQUEST. Both calls read the same memoized pipeline list and the
+  // same cached config; the second is two array filters.
+  const [client, unlisted] = await Promise.all([
+    getSelectedPipelines("client"),
+    getSelectedPipelines("none"),
+  ]);
+  return [...client, ...unlisted].find((p) => /^events?$/i.test(p.name.trim()));
 }
 
 export async function GET(request: Request) {

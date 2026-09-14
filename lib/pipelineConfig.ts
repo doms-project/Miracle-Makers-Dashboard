@@ -32,7 +32,30 @@
 // production — not in the round that introduces it.
 // ---------------------------------------------------------------------------
 
-export type PipelineScope = "client" | "caregiver";
+/**
+ * 🔴 THREE VALUES, AND THE THIRD IS AN ABSENCE — round 116, item K.
+ *
+ * Scope is NOT "where records render". It is WHICH PICKER LISTS THIS PIPELINE.
+ * `getSelectedPipelines(scope)` is what every board reads; `listPipelines()` is
+ * what every admin surface reads. A pipeline stored as "none" simply matches
+ * neither board filter, so it disappears from both pickers and stays fully
+ * present in the import wizard, the access grid and this screen.
+ *
+ * ⚠️ "none" IS NOT "BOTH" INVERTED. fieldFolders.ts:541 — "the two lists being
+ * separate is what stops a caregiver pipeline reaching a client caller." This
+ * adds FEWER places a pipeline can appear, never more.
+ *
+ * ⚠️ NOTHING MIGRATES. Every stored entry already carries "client" or
+ * "caregiver" and keeps it; "none" can only ever arrive by an admin choosing it.
+ */
+export type PipelineScope = "client" | "caregiver" | "none";
+
+/**
+ * The two scopes that name a BOARD. Reads that mean "which pipelines does the
+ * Clients section show" take this, not PipelineScope — so "none" cannot be
+ * passed to a board read by accident.
+ */
+export type BoardScope = "client" | "caregiver";
 
 export interface StoredPipelineEntry {
   // 🔴 REQUIRED, not inferred. The caregiver/client split is structural — see
@@ -47,6 +70,29 @@ export interface StoredPipelineEntry {
   // ⚠️ HYBRID BY DESIGN. A folder created at runtime has no key in code, so its
   // raw id is stored instead. Both resolve through the same KEY_BY_ID lookup.
   folders: string[];
+  /**
+   * 🔴 EXCLUSIONS, NOT INCLUSIONS — round 116, item Q. Field IDS hidden from
+   * this pipeline's panel even though their folder is ticked.
+   *
+   * ⚠️ THE DIRECTION IS THE WHOLE POINT. fieldFolders.ts:8 — "Adding/moving a
+   * field in GoHighLevel changes the panel with no code change." A field
+   * created tomorrow is not in anybody's exclusion list, so it appears. An
+   * INCLUSION list would invert that: every new field invisible until someone
+   * ticked it, and nobody would know to.
+   *
+   * ⚠️ AND IT COSTS THE EXCEPTIONS ONLY. "Shared with Road Blocker and Case
+   * Manager off" is two ids, not the sixty-eight an inclusion list would need
+   * per pipeline.
+   *
+   * 🔴 FIELD IDS, NOT NAMES. A field renamed in GoHighLevel must stay excluded;
+   * a name match would silently un-hide it. Folders are stored by key because a
+   * key is legible in GHL's own custom-values screen and there are twelve of
+   * them — there are sixty-eight fields and no key for any of them.
+   *
+   * Optional and omitted when empty: an entry that excludes nothing must not
+   * carry `"exclude":[]` into a custom value with a length limit.
+   */
+  exclude?: string[];
 }
 
 export interface StoredPipelineConfig {
@@ -142,14 +188,32 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
   for (const [id, v] of Object.entries(pipes as Record<string, unknown>)) {
     if (!id || !v || typeof v !== "object" || Array.isArray(v)) continue;
     const e = v as Record<string, unknown>;
-    const scope = e.scope === "caregiver" ? "caregiver" : e.scope === "client" ? "client" : null;
+    const scope: PipelineScope | null =
+      e.scope === "caregiver"
+        ? "caregiver"
+        : e.scope === "client"
+          ? "client"
+          : e.scope === "none"
+            ? "none"
+            : null;
     // An entry with no valid scope is DROPPED, not defaulted. Defaulting it to
     // "client" is how an applicant pipeline reaches the client board.
+    //
+    // ⚠️ AND "none" IS A VALID SCOPE, NOT A MISSING ONE — round 116, item K.
+    // Reading it as invalid would DROP THE WHOLE ENTRY, taking its folder ticks
+    // and its exclusions with it, and the pipeline would silently fall back to
+    // Shared-only. An absence of boards is a decision; an absence of an entry is
+    // not.
     if (!scope) continue;
     const folders = Array.isArray(e.folders)
       ? e.folders.map((f) => String(f ?? "").trim()).filter(Boolean)
       : [];
-    pipelines[id] = { scope, folders };
+    const exclude = Array.isArray(e.exclude)
+      ? [...new Set(e.exclude.map((f) => String(f ?? "").trim()).filter(Boolean))]
+      : [];
+    // Omitted when empty — see the field comment. An `exclude: []` on every one
+    // of ten pipelines is 150 wasted bytes in a value with a size limit.
+    pipelines[id] = exclude.length ? { scope, folders, exclude } : { scope, folders };
   }
   const folderNames: Record<string, string> = {};
   const fn = rec.folderNames;
@@ -167,6 +231,14 @@ export function serialisePipelineConfig(c: StoredPipelineConfig): string {
     pipelines: c.pipelines,
     folderNames: c.folderNames || {},
   });
+}
+
+/** Field ids excluded for one pipeline, as a Set. Empty when there are none. */
+export function exclusionsFor(
+  c: StoredPipelineConfig | null,
+  pipelineId: string,
+): Set<string> {
+  return new Set(c?.pipelines?.[pipelineId]?.exclude ?? []);
 }
 
 /** The ids in one scope, in stored order. */

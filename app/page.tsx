@@ -29,7 +29,12 @@ import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import { BUILD, BUILD_LABEL } from "@/lib/build";
 import EmailComposer from "@/components/EmailComposer";
-import { groupFieldsForPipeline, groupContactFields, fieldLabel } from "@/lib/fieldFolders";
+import {
+  groupFieldsForPipeline,
+  groupContactFields,
+  fieldLabel,
+  hasValue,
+} from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
 import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
@@ -1391,6 +1396,17 @@ export default function Dashboard() {
     Record<string, string[]> | undefined
   >(undefined);
   const [folderNames, setFolderNames] = useState<Record<string, string>>({});
+  /**
+   * 🔴 ITEM Q — fields the admin hid on this pipeline, by field id.
+   *
+   * ⚠️ SAME THREE STATES AS pipelineFolders, and for the same reason:
+   * `undefined` is NOT LOADED. Defaulting it to `{}` would be harmless here
+   * (nothing excluded) — it is kept as one shape so the two always travel and
+   * are always read together.
+   */
+  const [pipelineExclusions, setPipelineExclusions] = useState<
+    Record<string, string[]> | undefined
+  >(undefined);
   // Sections the rep pulled in with "+ Add a section". Deliberately NOT
   // persisted — see the note in the control.
   const [shownSections, setShownSections] = useState<Set<string>>(new Set());
@@ -1680,6 +1696,10 @@ export default function Dashboard() {
       setData(body.records || []);
       if (body.fieldDefs) setFieldDefs(body.fieldDefs);
       if (body.pipelineFolders) setPipelineFolders(body.pipelineFolders);
+      // ⚠️ SET UNCONDITIONALLY, unlike the folders above. An admin who removes
+      // the LAST exclusion sends an empty map, and `if (body.pipelineExclusions)`
+      // would keep the old one — the field would stay hidden until a reload.
+      if (body.pipelineFolders) setPipelineExclusions(body.pipelineExclusions || {});
       setFolderNames(body.folderNames || {});
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
@@ -3700,6 +3720,9 @@ export default function Dashboard() {
         ? groupFieldsForPipeline(fieldDefs, selected.pipelineId, pipelineFolders, {
             values: selected.cf || {},
             folderNames,
+            // 🔴 ITEM Q. Undefined until the payload lands, so nothing is hidden
+            // on first paint that will still be hidden a frame later.
+            exclude: pipelineExclusions?.[selected.pipelineId],
           })
         : {
             sections: [],
@@ -3712,7 +3735,7 @@ export default function Dashboard() {
     // ⚠️ pipelineFolders BELONGS IN THESE DEPS. Without it the panel keeps
     // rendering the map it had at mount — an admin's change would not show
     // until the selected record changed.
-    [selected, fieldDefs, pipelineFolders, folderNames],
+    [selected, fieldDefs, pipelineFolders, folderNames, pipelineExclusions],
   );
 
   // 🔴 ON THE BLOB. Gated on `status === "ready"`, this sent NO CREDENTIAL in the
@@ -4613,6 +4636,58 @@ export default function Dashboard() {
     for (const r of cgData) m[r.pipelineId] = (m[r.pipelineId] || 0) + 1;
     return m;
   }, [data, cgData]);
+
+  /**
+   * 🔴 ITEM T — "HOW MANY RECORDS HOLD A VALUE IN THIS FIELD?"
+   *
+   * ⚠️ A CALLBACK, NOT A useMemo, AND THAT IS THE COST ANSWER. A memo would
+   * sweep every field of every record on every load to answer a question nobody
+   * asked yet. This runs ONLY when the admin screen calls it — when a section is
+   * expanded, or when an untick asks for a confirmation — and only over the
+   * records of the ONE pipeline being changed.
+   *
+   * 🔴 ZERO REQUESTS. `r.cf` is the raw field map that came with the payload the
+   * board is already rendering. The alternative — asking the admin route — is
+   * one opportunity search per pipeline against a 100-per-10-seconds budget, to
+   * count something the browser is holding.
+   *
+   * 🔴 AND IT RETURNS null RATHER THAN ZERO WHEN IT CANNOT SAY. The applicant
+   * payload loads lazily; before the Caregivers section has been opened, a
+   * caregiver pipeline's records are not in this tab. "0 records would be
+   * hidden" when the truth is "I did not look" is the one wrong answer here,
+   * because it is the one that makes an admin click through.
+   */
+  const countFieldValues = useCallback(
+    (pipelineId: string, fieldIds: string[]) => {
+      const known = recordCounts[pipelineId] != null;
+      // A caregiver pipeline with nothing loaded cannot be counted. A CLIENT
+      // pipeline always can — `data` is loaded before this screen is reachable.
+      if (!known && !cgLoaded) return null;
+      const pool: OpportunityRecord[] = [];
+      for (const r of data) if (r.pipelineId === pipelineId) pool.push(r);
+      for (const r of cgData) if (r.pipelineId === pipelineId) pool.push(r);
+      if (!pool.length && !cgLoaded && !known) return null;
+      const perField: Record<string, number> = {};
+      for (const id of fieldIds) perField[id] = 0;
+      let records = 0;
+      for (const r of pool) {
+        let any = false;
+        for (const id of fieldIds) {
+          if (hasValue(r.cf?.[id])) {
+            perField[id] += 1;
+            any = true;
+          }
+        }
+        if (any) records += 1;
+      }
+      // ⚠️ `records` IS DISTINCT RECORDS, NOT A SUM OF THE COLUMNS. A record
+      // answering three fields in Shared is one record, and "Shared holds values
+      // on 61 records" has to mean 61 people or it is not a sentence an admin
+      // can act on.
+      return { perField, records, scanned: pool.length };
+    },
+    [data, cgData, cgLoaded, recordCounts],
+  );
 
   /** Nothing loaded, and the last attempt failed → the full-screen card. */
   const loadFailed = error && data.length === 0 ? error : null;
@@ -5918,9 +5993,16 @@ export default function Dashboard() {
                 // trustworthy; before it, a zero means "not looked at".
                 recordCounts={recordCounts}
                 countsComplete={cgLoaded}
+                // 🔴 ITEM T — computed on demand, from these same payloads.
+                countFieldValues={countFieldValues}
                 // ITEM S — the record panel reads `pipelineFolders`; a tick in
                 // the admin screen now reaches it without a reload.
-                onConfigSaved={setPipelineFolders}
+                // ITEM S, now carrying item Q's exclusions too — a tick and an
+                // untick both have to reach the record panel without a reload.
+                onConfigSaved={(folders, exclusions) => {
+                  setPipelineFolders(folders);
+                  setPipelineExclusions(exclusions);
+                }}
               />
             </div>
           ) : (
