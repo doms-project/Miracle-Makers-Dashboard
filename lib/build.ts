@@ -25,12 +25,14 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "122",
+  round: "123",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "one attendee row per contact, and a second event is refused rather than " +
-    "overwriting the first · applicants counted separately from revenue · " +
-    "contact ids out of URLs · Escape, focus and keyboard reach",
+    "the Recruiting heading, count, tiles and placeholder follow the switcher · " +
+    "the caveat box tells its two scopes apart and Measure works on the division " +
+    "you are looking at · Last touch sorts by last touch · the drawer re-reads " +
+    "after a logged touch · Referrals no longer reloads on every visit · " +
+    "sixty contact ids out of a URL",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

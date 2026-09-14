@@ -126,7 +126,23 @@ ok("and the three choices are there",
    /"caregiver", "Caregivers"/.test(sw) && /"staff", "Staff"/.test(sw) && /"all", "All"/.test(sw), "choices missing");
 ok("⚠️ while the board's own group-by select is untouched",
    /<select[^>]*cgGroupKey|cgGroupKey/.test(page), "the group-by disappeared");
-ok("the subtitle changes with the choice", /Staff hires across your division/.test(page), "no subtitle");
+// ⚠️ THE PROPERTY, NOT THE SENTENCE. This quoted "Staff hires across your
+// division" verbatim, so round 123 correcting the wording — they are staff
+// APPLICANTS until somebody hires them — failed a check about whether the
+// subtitle moves at all. What matters is that the three choices produce three
+// different sentences.
+const cgCase = page.slice(page.indexOf('case "caregivers":'), page.indexOf('case "referrals":'));
+const cgSubs = [...cgCase.matchAll(/"([^"]*across your division)"/g)].map((m) => m[1]);
+ok("the subtitle changes with the choice — three distinct sentences",
+   new Set(cgSubs).size === 3, cgSubs);
+// ⚠️ THE SENTENCES, NOT THE BLOCK. Testing the whole case body tripped on the
+// COMMENT recording that "Staff hires" was wrong — a check quoting my own note
+// back at me, which is the fourth time that has happened and the reason this
+// reads only the extracted strings.
+ok("⚠️ and it no longer calls a staff APPLICANT a hire",
+   !cgSubs.some((x) => /hire/i.test(x)), cgSubs.filter((x) => /hire/i.test(x)));
+ok("🔴 and the TITLE moves with it too — round 123, the half that did not",
+   /title: `Recruiting · \$\{cgNoun\.group\}`/.test(cgCase), "the title is still a constant");
 ok("the rail says Recruiting", /<span>Recruiting<\/span>/.test(page), "rail not renamed");
 const admin = readFileSync("components/PipelineAdmin.tsx", "utf8");
 ok("⚠️ and the group is only offered on a CAREGIVER pipeline",

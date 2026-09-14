@@ -66,7 +66,11 @@ ok("🔴 omitting the second list yields zero, not a crash",
 console.log("\n1 · 🔴 ONE ROW PER CONTACT, AND NO SILENT OVERWRITE");
 const rs = readFileSync("components/ReferralsSection.tsx", "utf8");
 const route = readFileSync("app/api/referrals/route.ts", "utf8");
-ok("the flat panel dedupes by contact id", /dedupeByContact\(data\.attendees\)/.test(rs), "not deduped");
+// ⚠️ THE CALL MOVED IN ROUND 123 (hoisted so the badge and the KPIs read the
+// same list), and this assertion named the old argument. A check pinned to the
+// exact expression I last wrote fails on any honest refactor and proves nothing
+// about behaviour — round123-proof asserts the DRAWN row count instead.
+ok("the flat panel dedupes by contact id", /dedupeByContact\(/.test(rs), "not deduped");
 ok("⚠️ first wins, so triage does not reorder the list",
    /seen\.has\(r\.id\)\) continue;/.test(rs), "no stable dedupe");
 // 🔴 THE HALF THAT IS ACTUAL DATA LOSS. `Event Attended` is a single contact
@@ -81,9 +85,26 @@ ok("and it names what to do instead", /Log this meeting as a touch/.test(route),
 
 // ═══ 15 · NO ID IN A URL ══════════════════════════════════════════════════
 console.log("\n15 · 🔴 THE CONTACT ID IS OUT OF THE URL");
-const urlIds = [...rs.matchAll(/["`]\/api\/[^"`]*\$\{encodeURIComponent\([^)]*\)\}[^"`]*["`]/g)]
+// 🔴 THIS CHECK WAS BROKEN WHEN IT PASSED, AND ROUND 123 FOUND IT. It required
+// `${encodeURIComponent(<anything with no closing bracket>)}`, so
+// `encodeURIComponent(ids.join(","))` — sixty contact ids in
+// `?only=touch&touchFor=…` — could never match it. Exactly the shape of
+// `ghlSend<[^>]*>` never matching `ghlSend<Record<string, unknown>>`: a regex
+// that cannot match the thing it polices reports clean forever.
+//
+// ⚠️ IT NOW MATCHES **ANY** INTERPOLATION INTO A QUERY STRING, whatever the
+// wrapper. A check that only recognises the one form I happened to write is not
+// a check, it is a description of my last edit.
+//
+// ⚠️ AND THE EXCEPTION IS NAMED RATHER THAN SHAPED. A typed search term is not
+// an identifier and belongs in a query string; every other interpolated
+// parameter is treated as an id until someone adds it to this list on purpose.
+// That is the difference between an allowlist and a regex that happens to miss.
+const NOT_AN_ID = ["q"];
+const urlIds = [...rs.matchAll(/["`]\/api\/[^"`]*\?[^"`]*\$\{[^"`]*\}[^"`]*["`]/g)]
   .map((m) => m[0])
-  .filter((u) => /\?/.test(u));
+  .filter((u) => [...u.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=\$\{/g)]
+    .some((m) => !NOT_AN_ID.includes(m[1])));
 console.log(`  /api/ URLs with an id in the QUERY STRING: ${urlIds.length ? urlIds.join(", ") : "(none)"}`);
 ok("🔴 none left in a query string", urlIds.length === 0, urlIds);
 ok("the read is a POST now", /action: "contact-opps"/.test(rs), "still a GET");

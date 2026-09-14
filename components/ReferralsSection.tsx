@@ -54,7 +54,12 @@ interface PipelineChoice {
   stageId: string;
 }
 
-interface Payload {
+/**
+ * ⚠️ EXPORTED FOR THE PAGE'S CACHE ONLY — analysis 104 · 13. The page holds one
+ * of these between visits and hands it straight back; it never reads a field of
+ * it, so this stays the section's shape rather than becoming a shared contract.
+ */
+export interface Payload {
   partners: RawPartner[];
   referrals: RawReferral[];
   /** ITEM 2 — applicant opportunities attributed to a partner. NEVER summed
@@ -173,6 +178,8 @@ export default function ReferralsSection({
   onBusy,
   onOpenRecord,
   canOpenRecord,
+  cache,
+  onCache,
 }: {
   /**
    * 🔴 ITEM 3 — OPEN AN ATTRIBUTED CASE'S RECORD. 118 deferred this believing
@@ -182,6 +189,40 @@ export default function ReferralsSection({
   onOpenRecord?: (id: string) => void;
   /** ⚠️ Whether THAT id is in the caller's loaded payload — see AttributedRow. */
   canOpenRecord?: (id: string) => boolean;
+  /**
+   * 🔴 ANALYSIS 104 · 13 — THE LAST PAYLOAD, HELD ABOVE THE SECTION SWITCH.
+   *
+   * This component is rendered conditionally, so leaving Referrals UNMOUNTS it
+   * and coming back remounts it empty. `touch=auto` then re-measures from
+   * scratch: Clients -> Referrals -> Clients -> Referrals was two full loads
+   * and up to 120 contact-note reads, which is also the fastest way to trip the
+   * rate limit. Caregivers solved this at the page level with `cgLoaded`;
+   * Referrals had nothing.
+   *
+   * ⚠️ HELD BY THE PAGE, NOT FETCHED BY IT. The page never calls the route —
+   * so someone who never opens Referrals still pays nothing, which is the
+   * property the conditional render was for. Only a section that HAS loaded
+   * leaves anything behind.
+   *
+   * ⚠️ THE PAYLOAD ONLY. Division, tab and sort deliberately reset: they are
+   * where you were looking, not what was loaded, and restoring a filter
+   * somebody set four screens ago is its own kind of surprise.
+   */
+  cache: Payload | null;
+  /**
+   * Called with the payload whenever it changes, so the page's copy is never
+   * older than the screen.
+   *
+   * 🔴 EVERY CHANGE, NOT EVERY LOAD. Half the writes on this screen update
+   * `data` optimistically and never refetch — a logged touch, an attendee
+   * outcome. Mirroring only the successful loads would have made leaving and
+   * returning UNDO them on screen while they stood in GoHighLevel, which is a
+   * worse failure than the reload this replaces.
+   *
+   * ⚠️ MUST BE STABLE. It is a dependency of the mirror effect; an inline
+   * arrow would re-run it on every render of the page.
+   */
+  onCache: (p: Payload) => void;
   ssoBlob: string | null;
   /**
    * 🔴 THE HANDSHAKE HAS SETTLED — a blob to send, or none ever coming.
@@ -193,8 +234,10 @@ export default function ReferralsSection({
   reloadToken: number;
   onBusy: (busy: boolean) => void;
 }) {
-  const [data, setData] = useState<Payload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<Payload | null>(cache);
+  // ⚠️ NOT `true` WHEN SEEDED. A remount with a payload in hand is not loading,
+  // and saying it is puts the toolbar's Refresh into a spin nothing will end.
+  const [loading, setLoading] = useState(!cache);
   const [err, setErr] = useState<unknown>(null);
 
   const [division, setDivision] = useState<Division>("All");
@@ -216,10 +259,23 @@ export default function ReferralsSection({
   const [cat, setCat] = useState<string>("all");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<keyof EnrichedPartner>("priority");
+  /**
+   * 🔴 ANALYSIS 104 · 6 — "lastTouch", NOT "priority". The header reading
+   * *Last touch* sorted by `priority` — days overdue WEIGHTED BY TIER — so an
+   * A-tier partner touched 8 days ago outranked a C-tier touched 60, under a
+   * column that named neither tier nor weighting.
+   *
+   * ⚠️ AND THE DEFAULT HAD TO MOVE WITH IT. Leaving it on `priority` would
+   * have left the table arriving in an order no column claims and no caret
+   * marks — the same fault one layer down. The Touch queue is the
+   * priority-ordered view and says so; this table is the register.
+   */
+  const [sortKey, setSortKey] = useState<keyof EnrichedPartner>("lastTouch");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
 
   const [openId, setOpenId] = useState<string | null>(null);
+  /** Analysis 104 · 5 — bumped after a logged touch so the open drawer re-reads. */
+  const [notesToken, setNotesToken] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
   const [logFor, setLogFor] = useState<EnrichedPartner | null>(null);
   /** Either a partner, an event, or both — see LogReferralDialog. */
@@ -287,10 +343,36 @@ export default function ReferralsSection({
   // ⚠️ AND IT WAITS. Firing before the handshake settles sent a null blob, got
   // a 401, drew the full-page error card, then reloaded when the blob arrived —
   // an error state on every single entry, plus a wasted round trip.
+  //
+  // 🔴 ANALYSIS 104 · 13 — AND IT DOES NOT RE-READ WHAT WE ARRIVED HOLDING.
+  //
+  // ⚠️ A KEY, NOT A ONE-SHOT SKIP FLAG, AND THE FIRST VERSION WAS THE FLAG.
+  // A `seeded` ref that clears itself on first use is consumed by StrictMode's
+  // discarded first effect pass in dev, so the real pass loaded anyway — the
+  // proof caught it (`before=2 after=3`). Recording WHAT WE HAVE ALREADY
+  // LOADED FOR is idempotent: run the effect any number of times and it fetches
+  // once.
+  //
+  // ⚠️ THE BLOB IS IN THE KEY DELIBERATELY. A re-issued session must still
+  // re-read — that is report 111's stale-401 fix, and a cache is not a reason
+  // to keep answering from an expired one. `reloadToken` is there for the
+  // toolbar's Refresh, which must always be a real read.
+  const loadedKey = useRef(cache ? `${reloadToken}|${ssoBlob ?? ""}` : null);
   useEffect(() => {
     if (!ssoReady) return;
+    const key = `${reloadToken}|${ssoBlob ?? ""}`;
+    if (loadedKey.current === key) return;
+    loadedKey.current = key;
     void load();
-  }, [reloadToken, load, ssoReady]);
+  }, [reloadToken, load, ssoReady, ssoBlob]);
+
+  // 🔴 ANALYSIS 104 · 13 — THE MIRROR. One effect on `data` rather than a call
+  // beside each of the setData sites: the optimistic ones are exactly the
+  // writes somebody would forget to add, and a cache that is right for loads
+  // and wrong for edits is worse than none.
+  useEffect(() => {
+    if (data) onCache(data);
+  }, [data, onCache]);
 
   // Close the division listbox on Escape or a click outside it.
   useEffect(() => {
@@ -310,40 +392,6 @@ export default function ReferralsSection({
     };
   }, [divOpen]);
 
-  /** Measure the next batch of partners whose last touch is still unknown. */
-  const measureMore = useCallback(async () => {
-    if (!data) return;
-    setMoreBusy(true);
-    setMoreNote("");
-    try {
-      const ids = data.partners.filter((p) => p.lastTouch == null).map((p) => p.id);
-      const j = await apiFetch<{
-        touch: Record<string, number>;
-        meta: { touchResolved: number; touchFailed: number; touchCapped: number };
-      }>(`/api/referrals?only=touch&touchFor=${encodeURIComponent(ids.join(","))}`, {
-        ssoBlob,
-      });
-      setData((d) =>
-        d
-          ? {
-              ...d,
-              partners: d.partners.map((p) =>
-                j.touch[p.id] !== undefined ? { ...p, lastTouch: j.touch[p.id] } : p,
-              ),
-            }
-          : d,
-      );
-      setMoreNote(
-        `Measured ${j.meta.touchResolved}.` +
-          (j.meta.touchFailed ? ` ${j.meta.touchFailed} could not be read.` : "") +
-          (j.meta.touchCapped ? ` ${j.meta.touchCapped} still to go.` : ""),
-      );
-    } catch (e) {
-      setMoreNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      setMoreBusy(false);
-    }
-  }, [data, ssoBlob]);
 
   /**
    * Set one attendee's outcome. One PATCH, and it reverts itself if it fails.
@@ -440,14 +488,109 @@ export default function ReferralsSection({
 
   const kpis = useMemo(() => partnerKpis(all), [all]);
 
+  /** Measure the next batch of partners whose last touch is still unknown. */
+  const measureMore = useCallback(async () => {
+    if (!data) return;
+    setMoreBusy(true);
+    setMoreNote("");
+    try {
+      // 🔴 ROUND 123 · ITEM 20, THE HALF THAT IS A BUG RATHER THAN A LABEL.
+      // This read `data.partners` — every division — while the button beside it
+      // says `Measure the next ${kpis.unknown}`, which counts the SELECTED
+      // division. In ODP with 12 unmeasured there and 200 account-wide, it
+      // offered "Measure the next 12", measured 60 partners that could all be
+      // PP, and the ODP figure did not move. Press it again and it still says
+      // 12. A button that reports progress against a number it is not working
+      // on is worse than no button.
+      //
+      // ⚠️ `all` IS THE DIVISION CUT, and `unknownTouch` is `lastTouch == null`
+      // — the same test, not a similar one (lib/referrals.ts:369). Under "All
+      // divisions" `all` is every partner, so this is exactly the old
+      // behaviour there, which is the correct behaviour there.
+      const ids = all.filter((p) => p.unknownTouch).map((p) => p.id);
+      const j = await apiFetch<{
+        touch: Record<string, number>;
+        meta: { touchResolved: number; touchFailed: number; touchCapped: number };
+      }>("/api/referrals", {
+        // 🔴 ROUND 123 — A POST, AND NOT FOR TIDINESS. This was
+        // `?only=touch&touchFor=c1,c2,…`: up to sixty contact ids in one query
+        // string, in the access log, the browser history and any Referer. It is
+        // the largest id exposure this screen had, and round 122 reported it
+        // gone because the check that cleared it could not match this shape.
+        method: "POST",
+        ssoBlob,
+        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, action: "touch", touchFor: ids }),
+      });
+      setData((d) =>
+        d
+          ? {
+              ...d,
+              partners: d.partners.map((p) =>
+                j.touch[p.id] !== undefined ? { ...p, lastTouch: j.touch[p.id] } : p,
+              ),
+            }
+          : d,
+      );
+      setMoreNote(
+        `Measured ${j.meta.touchResolved}.` +
+          (j.meta.touchFailed ? ` ${j.meta.touchFailed} could not be read.` : "") +
+          (j.meta.touchCapped ? ` ${j.meta.touchCapped} still to go.` : ""),
+      );
+    } catch (e) {
+      setMoreNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMoreBusy(false);
+    }
+  }, [all, data, ssoBlob]);
+
   const events = useMemo(
     () => (data ? data.events.filter((e) => inDivision(e.division, division)) : []),
     [data, division],
   );
-  const evKpis = useMemo(
-    () => eventKpis(events, data?.attendees || []),
-    [events, data],
+  /**
+   * 🔴 ANALYSIS 104 · 3 — THE DIVISION SWITCH NOW REACHES THE ATTENDEES.
+   *
+   * `eventKpis(events, data.attendees)` took a division-filtered event list and
+   * an ACCOUNT-WIDE attendee list, so viewing ODP showed ODP's events beside a
+   * `Legit leads` and `Awaiting review` count drawn from every attendee on the
+   * account. Two of the four Events KPIs ignored the control directly above
+   * them — the heading's whole promise is that everything below changes with
+   * it.
+   *
+   * ⚠️ AN ATTENDEE HAS NO DIVISION OF ITS OWN. It has an event, and the event
+   * has one — so the filter is derived rather than invented: keep the attendees
+   * whose `eventId` is in this division's event set.
+   *
+   * ⚠️ AND THE ONES WITH NO EVENT ARE STATED, NOT QUIETLY DROPPED. `Event
+   * Attended` can be blank, and a blank cannot be placed in any division. Under
+   * "All" they are counted, as they always were; under a division they cannot
+   * be, and the caveat box says how many and why — the same rule the undated
+   * referrals follow.
+   */
+  const divAttendees = useMemo(() => {
+    const list = data?.attendees || [];
+    if (division === "All") return list;
+    const ids = new Set(events.map((e) => e.id));
+    return list.filter((a) => a.eventId && ids.has(a.eventId));
+  }, [data, events, division]);
+  /** Met, but their record does not say at which event. Unplaceable by division. */
+  const unplacedAttendees = useMemo(
+    () => (data?.attendees || []).filter((a) => !a.eventId).length,
+    [data],
   );
+
+  /**
+   * ⚠️ ONE ROW PER PERSON — round 122's dedupe, hoisted so the BADGE and the
+   * KPIs read it too. The list was deduped and the two counts beside it were
+   * not, so a person met at two events made "13 people met" sit over a list of
+   * 12. `a.id` is the contact id; two rows were always two views of one record,
+   * and `Legit leads` counted that record twice.
+   */
+  const shownAttendees = useMemo(() => dedupeByContact(divAttendees), [divAttendees]);
+  // 🔴 THE DEDUPED LIST, because the tile says "people met" and a person is a
+  // person once. Every figure eventKpis returns about attendees is a count of
+  // PEOPLE, not of rows.
+  const evKpis = useMemo(() => eventKpis(events, shownAttendees), [events, shownAttendees]);
 
   const rows = useMemo(() => {
     let list = all;
@@ -463,6 +606,20 @@ export default function ReferralsSection({
           p.owner.toLowerCase().includes(q),
       );
     return [...list].sort((a, b) => {
+      // 🔴 ANALYSIS 104 · 6 — UNKNOWN IS NOT A VALUE, AND THE GENERIC
+      // COMPARATOR BELOW WOULD MAKE IT ONE. `Number(null ?? 0)` is 0, which
+      // reads as "contacted today" and floats every unmeasured partner to the
+      // top of an ascending sort — the same `Number(null) === 0` trap that made
+      // every request sleep in round 118. Unmeasured sorts LAST in both
+      // directions, because "we have not looked" is not a recency.
+      //
+      // ⚠️ `NEVER` IS Number.MAX_SAFE_INTEGER and is left alone: never
+      // contacted genuinely IS the longest ago, and sorting it there is right.
+      if (sortKey === "lastTouch") {
+        if (a.unknownTouch !== b.unknownTouch) return a.unknownTouch ? 1 : -1;
+        if (a.unknownTouch) return 0;
+        return ((a.lastTouch as number) - (b.lastTouch as number)) * sortDir;
+      }
       const x = a[sortKey];
       const y = b[sortKey];
       if (typeof x === "string" && typeof y === "string")
@@ -572,7 +729,27 @@ export default function ReferralsSection({
     sortKey === k ? <span className="rfar">{sortDir === 1 ? "▲" : "▼"}</span> : null;
 
   // ── what this screen does not know ───────────────────────────────────────
+  //
+  // 🔴 ROUND 123 · ITEM 20 — TWO SCOPES IN ONE BOX, AND IT IS A CORRECTNESS
+  // PROBLEM, NOT A WORDING ONE. The box is headed "what THESE numbers do not
+  // include", and every number on this screen is division-scoped. Three of its
+  // lines were not: with ODP selected it could say "8 contacts' fields could
+  // not be read" when seven of the eight are PP, sending somebody to look for
+  // eight missing rows in a view that never had them.
+  //
+  // ⚠️ AND THE ANSWER IS NOT "FILTER THEM BY DIVISION". I checked what each
+  // one would have to read to do that, and in three cases the division IS the
+  // missing thing:
+  //   dangling      the partner is deleted, so its division went with it
+  //   unreadable    division is a custom field, and the field read is what failed
+  //   truncated     the page boundary is hit before any division exists
+  //   failedPipes   the pipeline was never read at all
+  // A division-filtered count of those would be an invented number, which is
+  // worse than an account-wide one. So they stay account-wide and SAY SO —
+  // under their own heading, once, rather than five hedges in five sentences.
   const caveats: string[] = [];
+  /** The same, for facts that cannot be cut by division. Kept apart, not tagged. */
+  const wideCaveats: string[] = [];
   if (data) {
     if (kpis.unknown)
       caveats.push(
@@ -582,20 +759,28 @@ export default function ReferralsSection({
       caveats.push(
         `${kpis.undatedRefs} referral${kpis.undatedRefs === 1 ? " has" : "s have"} no creation date in GoHighLevel, so ${kpis.undatedRefs === 1 ? "it is" : "they are"} counted in lifetime referrals but not in any 90-day figure.`,
       );
-    if (dangling)
+    // ⚠️ ANALYSIS 104 · 3 — THE STATED BUCKET. Under "All" these are counted,
+    // so there is nothing to say; under a division they cannot be placed and
+    // dropping them silently is what the undated-referral line exists to
+    // prevent.
+    if (division !== "All" && unplacedAttendees)
       caveats.push(
+        `${unplacedAttendees} ${unplacedAttendees === 1 ? "person" : "people"} met at an event ${unplacedAttendees === 1 ? "is" : "are"} not counted in ${division}'s event figures, because their record does not say which event they were at.`,
+      );
+    if (dangling)
+      wideCaveats.push(
         `${dangling} referral${dangling === 1 ? " points" : "s point"} at a partner that no longer exists, so ${dangling === 1 ? "its" : "their"} revenue is attributed to nobody.`,
       );
     if (data.meta.partnersTruncated)
-      caveats.push(
+      wideCaveats.push(
         "GoHighLevel returned more partners than one request can carry — this is the first page only.",
       );
     if (data.meta.unreadable)
-      caveats.push(
+      wideCaveats.push(
         `${data.meta.unreadable} contact${data.meta.unreadable === 1 ? "'s" : "s'"} fields could not be read, so ${data.meta.unreadable === 1 ? "it is" : "they are"} missing from this screen entirely.`,
       );
     if (data.meta.failedPipelines.length)
-      caveats.push(
+      wideCaveats.push(
         `${data.meta.failedPipelines.map((p) => p.name).join(", ")} could not be read, so any referral in ${data.meta.failedPipelines.length === 1 ? "it is" : "them is"} missing from every count here.`,
       );
   }
@@ -734,14 +919,44 @@ export default function ReferralsSection({
           ))}
         </div>
 
-        {caveats.length ? (
+        {caveats.length || wideCaveats.length ? (
           <div className="rfcaveat">
-            <b>What these numbers do not include</b>
-            <ul>
-              {caveats.map((c, i) => (
-                <li key={i}>{c}</li>
-              ))}
-            </ul>
+            {/* 🔴 ROUND 123 · ITEM 20. Under "All divisions" there is no
+                narrower scope for the second heading to contrast with, so the
+                two lists are one list and the heading stays as it was. A
+                sub-heading reading "across every division, not just All
+                divisions" would be noise dressed as precision. */}
+            {division === "All" || !caveats.length || !wideCaveats.length ? (
+              <>
+                <b>
+                  {division === "All" || !wideCaveats.length
+                    ? "What these numbers do not include"
+                    : "What this screen does not include, across every division"}
+                </b>
+                <ul>
+                  {[...caveats, ...wideCaveats].map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <>
+                <b>What these {division} numbers do not include</b>
+                <ul>
+                  {caveats.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+                <b className="rfcavsub">
+                  And across every division, not just {division}
+                </b>
+                <ul>
+                  {wideCaveats.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </>
+            )}
             {kpis.unknown ? (
               <div className="rfcavacts">
                 <button
@@ -955,20 +1170,20 @@ export default function ReferralsSection({
                         tabIndex={0}
                         role="columnheader"
                         aria-sort={
-                          sortKey === "priority"
+                          sortKey === "lastTouch"
                             ? sortDir === 1
                               ? "ascending"
                               : "descending"
                             : "none"
                         }
-                        onClick={() => sortBy("priority")}
+                        onClick={() => sortBy("lastTouch")}
                         onKeyDown={(e) => {
                           if (e.key !== "Enter" && e.key !== " ") return;
                           e.preventDefault();
-                          sortBy("priority");
+                          sortBy("lastTouch");
                         }}
                       >
-                        Last touch{caret("priority")}
+                        Last touch{caret("lastTouch")}
                       </th>
                       <th className="num"
                         // 🔴 ANALYSIS 104 · 19 — A <th onClick> IS MOUSE-ONLY.
@@ -1354,7 +1569,7 @@ export default function ReferralsSection({
               <Kpi
                 label="Legit leads"
                 value={evKpis.legitLeads}
-                desc={`of ${evKpis.attendees} people met`}
+                desc={`of ${evKpis.attendees} ${evKpis.attendees === 1 ? "person" : "people"} met`}
               />
               <Kpi
                 label="Awaiting review"
@@ -1586,11 +1801,15 @@ export default function ReferralsSection({
             )}
 
             {/* Attendees ARE listable — they just cannot be placed at an event. */}
-            {data?.attendees.length ? (
+            {/* 🔴 ANALYSIS 104 · 3 — DIVISION-SCOPED, like the KPIs above it.
+                Leaving this panel account-wide while the numbers moved would
+                have created the contradiction it was being fixed for: "12
+                people met" over a list of 300. */}
+            {divAttendees.length ? (
               <>
                 <h3 className="rfh3">
                   Everyone met at an event
-                  <span className="rfn">{data.attendees.length}</span>
+                  <span className="rfn">{shownAttendees.length}</span>
                 </h3>
                 <div className="rfpanel">
                   <div className="rftw">
@@ -1615,7 +1834,7 @@ export default function ReferralsSection({
                             row carried no information the first did not. And
                             React was being handed the same `key` twice, which
                             is its own quiet fault. */}
-                        {dedupeByContact(data.attendees).map((a) => (
+                        {shownAttendees.map((a) => (
                           <tr key={a.id}>
                             <td>{a.name}</td>
                             <td className="rfsub2">{a.profile || "—"}</td>
@@ -1644,7 +1863,7 @@ export default function ReferralsSection({
                   Outcomes are set on the contact in GoHighLevel. Cost per legit
                   lead divides event cost by legitimate leads only, which is why
                   it needs the event link above to mean anything per event.
-                  {data.meta.attendeesTruncated
+                  {data?.meta.attendeesTruncated
                     ? " More attendees exist than one request can carry — this is the first page."
                     : ""}
                 </p>
@@ -1782,6 +2001,7 @@ export default function ReferralsSection({
           onChanged={() => void load()}
           onOpenRecord={onOpenRecord}
           canOpenRecord={canOpenRecord}
+          notesToken={notesToken}
         />
       ) : null}
 
@@ -1837,6 +2057,8 @@ export default function ReferralsSection({
           partner={logFor}
           onClose={() => setLogFor(null)}
           onLogged={(days) => {
+            // 🔴 ANALYSIS 104 · 5 — AND THE DRAWER'S NOTE LIST RE-READS.
+            setNotesToken((t) => t + 1);
             setData((d) =>
               d
                 ? {
@@ -2128,6 +2350,7 @@ function PartnerDrawer({
   onChanged,
   onOpenRecord,
   canOpenRecord,
+  notesToken,
 }: {
   onOpenRecord?: (id: string) => void;
   canOpenRecord?: (id: string) => boolean;
@@ -2144,6 +2367,20 @@ function PartnerDrawer({
   onAddEvent: () => void;
   /** A row edited its case — re-read so every figure above it agrees. */
   onChanged: () => void;
+  /**
+   * 🔴 ANALYSIS 104 · 5 — BUMPED WHEN A TOUCH IS LOGGED FROM IN HERE.
+   *
+   * The notes are fetched once, keyed on `p.id`. Logging a touch updated
+   * `partners[].lastTouch` and nothing else, so **Cadence moved and Touch
+   * history did not**: the note you had just written was missing from the list
+   * directly under the button that wrote it, until a full reload.
+   *
+   * ⚠️ A TOKEN, NOT A LOCAL PREPEND. Inserting the new note optimistically
+   * would show my idea of what was written rather than what GoHighLevel
+   * actually stored — and the note list is the one place on this screen that
+   * has to be the record, not a reconstruction of it.
+   */
+  notesToken: number;
 }) {
   /**
    * 🔴 FOCUS IN, AND BACK OUT AGAIN — analysis 104 · 17 and 19.
@@ -2202,7 +2439,10 @@ function PartnerDrawer({
     return () => {
       live = false;
     };
-  }, [p.id, ssoBlob]);
+    // ⚠️ `notesToken` IS A DEPENDENCY, NOT A TRIGGER SIDE-DOOR. It changes
+    // only when a touch has been logged for this partner, so the refetch is
+    // one request per write rather than a poll.
+  }, [p.id, ssoBlob, notesToken]);
 
   const mine = referrals
     .filter((o) => o.partnerId === p.id)
