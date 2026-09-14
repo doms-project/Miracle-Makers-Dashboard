@@ -24,7 +24,7 @@ import type {
   RelationCounts,
   EditableFieldDef,
 } from "@/lib/types";
-import { useGhlSession, ssoResolved } from "@/lib/useGhlSession";
+import { useGhlSession, ssoResolved, ssoWaiting } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import EmailComposer from "@/components/EmailComposer";
@@ -4474,7 +4474,11 @@ export default function Dashboard() {
                 {sso.session.role ? ` · ${sso.session.role}` : ""}
               </span>
             ) : (
-              <span title={sso.reason}>No SSO session</span>
+              /* ⚠️ "No SSO session" is a verdict. Silence from a parent that is
+                 still being listened to is not one. */
+              <span title={sso.reason}>
+                {sso.answered || !sso.embedded ? "No SSO session" : "Awaiting sign-in"}
+              </span>
             )}
           </div>
           {/* ITEM 3 — Add Lead. Beside the tabs, but deliberately NOT one of
@@ -5784,6 +5788,27 @@ export default function Dashboard() {
           )
         ) : view === "resources" ? (
           resourcesPane
+        ) : ssoWaiting(sso) ? (
+          /* 🔴 WAITING ON GOHIGHLEVEL — AND SAYING SO, INSTEAD OF ASKING FOR
+             DATA WITHOUT A CREDENTIAL AND RELAYING THE SERVER'S 401.
+             That 401 reads "Open this dashboard inside GoHighLevel", which is
+             the right sentence for the case the SERVER was written for and a
+             FALSE one here: the dashboard is open inside GoHighLevel, and
+             GoHighLevel has not answered yet. Nothing is asked for until there
+             is a blob to ask with — and the listener stays live, so a late
+             reply clears this on its own. */
+          <div className="statewrap">
+            <div className="statecard">
+              <div className="spinner" />
+              <h3>Waiting for GoHighLevel…</h3>
+              <p>{sso.status === "none" ? sso.reason : "Asking for your session."}</p>
+              {sso.status === "none" ? (
+                <button type="button" className="ibtn" onClick={sso.retry}>
+                  Ask again
+                </button>
+              ) : null}
+            </div>
+          </div>
         ) : loading ? (
           <div className="statewrap">
             <div className="statecard">
