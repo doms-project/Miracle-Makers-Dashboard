@@ -1458,6 +1458,22 @@ export default function Dashboard() {
   const [refReload, setRefReload] = useState(0);
   const [refBusy, setRefBusy] = useState(false);
   const [selId, setSelId] = useState<string | null>(null);
+  /**
+   * 🔴 THE CLIENT TILES ARE A FILTER NOW — round 114, item 2.
+   *
+   * They were display-only: "151 Bill" was a number nobody could act on, on a
+   * screen that is a WORKLIST. Same shape as `cgFocus` and `masterFocus`, which
+   * is deliberate — three sections behaving three ways is how the caregiver
+   * board ended up honouring its tile in one view and not the other.
+   *
+   * ⚠️ "By source" is NOT here. It already had a real filter (`srcF`) with its
+   * own reset and its own place in the chain, working on both views. Giving it
+   * a second mechanism would mean two controls fighting over one column.
+   */
+  const [clientFocus, setClientFocus] = useState<{
+    kind: "office" | "rep" | "blocked" | "checked";
+    value?: string;
+  } | null>(null);
   const [masterFocus, setMasterFocus] = useState<{
     kind: "pipeline" | "owner" | "source" | "status" | "blocked" | "shared" | "stalled";
     value?: string;
@@ -2570,11 +2586,51 @@ export default function Dashboard() {
   );
 
   // Filtered + sorted list.
+  /**
+   * ONE predicate, applied to BOTH views.
+   *
+   * 🔴 THIS IS THE ROUND-113 LESSON, WRITTEN AS CODE. `cgFocused` was correct
+   * and four consumers stopped one link short of it, so the tile lit, the banner
+   * appeared, and 184 cards stayed on screen. A shared predicate cannot be
+   * honoured by one view and missed by the other: there is nothing to miss.
+   */
+  const matchesClientFocus = useCallback(
+    (r: OpportunityRecord) => {
+      if (!clientFocus) return true;
+      switch (clientFocus.kind) {
+        case "office":
+          return r.office === clientFocus.value;
+        // An empty value means "unassigned" — the same convention cgFocus uses
+        // for its recruiter tile, so the two sections read identically.
+        case "rep":
+          return clientFocus.value === "" ? !r.ownerId : r.rep === clientFocus.value;
+        case "blocked":
+          return r.block !== "None";
+        case "checked":
+          return r.checked;
+        default:
+          return true;
+      }
+    },
+    [clientFocus],
+  );
+
+  const clientF = (kind: string, value?: string) =>
+    !!clientFocus && clientFocus.kind === kind && clientFocus.value === value;
+  const setClientF = (kind: string, value?: string) =>
+    setClientFocus((f) =>
+      f && f.kind === kind && f.value === value ? null : ({ kind, value } as typeof f),
+    );
+
   const visible = useMemo(() => {
-    if (!sortKey) return filtered;
+    // 🔴 THE SAME PREDICATE THE BOARD USES. Applied here rather than inside
+    // `filtered` so the stat tiles keep counting the UNFOCUSED set — round 97's
+    // rule: clicking a tile must never rewrite the number you just clicked.
+    const base = filtered.filter(matchesClientFocus);
+    if (!sortKey) return base;
     const dir = sortDir === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => dir * cmpBy(a, b, sortKey));
-  }, [filtered, sortKey, sortDir, cmpBy]);
+    return [...base].sort((a, b) => dir * cmpBy(a, b, sortKey));
+  }, [filtered, matchesClientFocus, sortKey, sortDir, cmpBy]);
 
   // ═══════════════════════════════════════════════════════════════════════
   // WHICH CONTACTS ARE ACTUALLY ON SCREEN.
@@ -2909,35 +2965,66 @@ export default function Dashboard() {
   // The BOARD shows HOME pipelines only — foreign stages don't belong in your
   // columns, and a shared record's pipeline must never enter the selector. The
   // list still shows everything (with division badges).
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔴 ONE SET, NOT TWO — round 114, item 1.
+  //
+  // This used to filter `data` from scratch, re-deriving by hand what the list
+  // chain already computes. Two independent implementations of "what is in
+  // view" drifted, exactly as two copies always do:
+  //
+  //   search    the list matched name, office, stage, harmony, cm, cg, rep and
+  //             src; this matched THE NAME ONLY. Typing a rep's name filtered
+  //             the list and did nothing to the kanban.
+  //   division  the list honoured the scope switcher; this never saw it, so
+  //             choosing a division narrowed one view and not the other.
+  //   the count the count line reads the LIST's number, so on the kanban it
+  //             described a set that was not on screen.
+  //
+  // It now derives from `preStage` — office, division, pipeline, source, the
+  // WIDE search and the reassign rule, all of them once — and adds only the two
+  // narrowings that are genuinely about a KANBAN rather than about filtering:
+  //
+  //   1. your own pipelines. A rep's board is their queue; the list is
+  //      everything they may see, which includes records they own elsewhere.
+  //   2. shared-in records, which have no column of their own here.
+  //
+  // ⚠️ AND (2) NOW YIELDS TO AN EXPLICIT CHOICE. It was unconditional, so
+  // selecting "Shared" would have emptied the board while the list filled.
+  // With the division switcher reaching the board, "Shared" has to mean the
+  // same thing on both.
+  //
+  // 🔴 THESE TWO ARE THE ONLY SURVIVING DIFFERENCE, and they are stated rather
+  // than buried. If the board should stop narrowing by home pipeline, that is
+  // one line — but it is a decision about what a kanban IS, not a filter bug,
+  // so it is not made here.
+  // ═══════════════════════════════════════════════════════════════════════
   const boardVisible = useMemo(() => {
-    const needle = q.trim().toLowerCase();
     const home = new Set(homePipelineIds);
-    return data.filter(
+    return preStage.filter(
       (r) =>
-        // ITEM 5a — same rule as preStage: a REASSIGN record has no column on
-        // the ordinary kanban, so it must not count toward boardVisible either,
-        // or the "nothing in your own pipelines" hint miscounts.
-        !isReassignRec(r) &&
-        !r.shared &&
         (home.size === 0 || home.has(r.pipelineId)) &&
-        (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
-        // 🔴 OFFICE WAS MISSING HERE. The Office select renders above the
-        // kanban and did nothing to it: 209 cards before, 209 after, while the
-        // stat tiles above them dropped to 18. A control that visibly changes
-        // the numbers and not the records is worse than one that does nothing.
-        //
-        // Office belongs on the board in a way STAGE does not: the columns
-        // already ARE the stages, but nothing on the board expresses which
-        // office a record belongs to.
-        (office === "all" || r.office === office) &&
-        // The "By source" tile is rendered above the KANBAN as well as the
-        // list, so a source picked there has to narrow the columns too —
-        // otherwise the control looks dead on half the screens it appears on.
-        (srcF === "all" || srcKey(r.src) === srcF) &&
-        (needle === "" ||
-          `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle)),
+        (scope !== "all" || !r.shared),
     );
-  }, [data, q, homePipelineIds, adminPipeline, office, srcF]);
+  }, [preStage, homePipelineIds, scope]);
+
+  /** The board, after the tile. What the kanban actually draws. */
+  const boardFocused = useMemo(
+    () => boardVisible.filter(matchesClientFocus),
+    [boardVisible, matchesClientFocus],
+  );
+
+  // A tile pinned to an office or a rep can stop existing when the pipeline or
+  // division changes. Clear it rather than showing an empty screen with a lit
+  // tile — the same rule the stage chip already follows.
+  useEffect(() => {
+    if (!clientFocus) return;
+    if (clientFocus.kind === "office" && clientFocus.value &&
+        !preSrc.some((r) => r.office === clientFocus.value))
+      setClientFocus(null);
+    if (clientFocus.kind === "rep" && clientFocus.value &&
+        !preSrc.some((r) => r.rep === clientFocus.value))
+      setClientFocus(null);
+  }, [preSrc, clientFocus]);
 
   // ---- ITEM 4: MASTER VIEW ----
   //
@@ -4894,9 +4981,19 @@ export default function Dashboard() {
             <div className="mini" style={{ marginTop: 9 }}>
               {stats.officeStats.length ? (
                 stats.officeStats.map((x) => (
-                  <span key={x.k}>
+                  <button
+                    type="button"
+                    key={x.k}
+                    className={`srcpick${clientF("office", x.k) ? " on" : ""}`}
+                    onClick={() => setClientF("office", x.k)}
+                    title={
+                      clientF("office", x.k)
+                        ? `Showing ${x.k} only — click to clear`
+                        : `Show ${x.k} only (${x.n})`
+                    }
+                  >
                     <b>{x.n}</b> {x.k.split(" ")[0]}
-                  </span>
+                  </button>
                 ))
               ) : (
                 <span className="muted">—</span>
@@ -4946,26 +5043,86 @@ export default function Dashboard() {
             <div className="mini" style={{ marginTop: 9 }}>
               {stats.repStats.length ? (
                 stats.repStats.map((x) => (
-                  <span key={x.k}>
+                  <button
+                    type="button"
+                    key={x.k}
+                    className={`srcpick${clientF("rep", x.k) ? " on" : ""}`}
+                    onClick={() => setClientF("rep", x.k)}
+                    title={
+                      clientF("rep", x.k)
+                        ? `Showing ${x.k} only — click to clear`
+                        : `Show ${x.k} only (${x.n})`
+                    }
+                  >
                     <b>{x.n}</b> {x.k.split(" ")[0]}
-                  </span>
+                  </button>
                 ))
               ) : (
                 <span className="muted">none assigned</span>
               )}
             </div>
           </div>
-          <div className="stat blk">
+          {/* 🔴 THE WHOLE TILE IS THE CONTROL here, because the number IS the
+              set — there is nothing to pick within it. Rendered as a <button>
+              rather than a clickable <div> so it is reachable by keyboard and
+              announced as a control; `statbtn` only removes the button chrome,
+              the tile keeps its own look. Disabled at zero: a filter that can
+              only ever produce an empty screen should not invite a click. */}
+          <button
+            type="button"
+            className={`stat blk statbtn${clientF("blocked") ? " on" : ""}`}
+            onClick={() => setClientF("blocked")}
+            disabled={stats.blocked === 0}
+            title={
+              clientF("blocked")
+                ? "Showing road-blocked only — click to clear"
+                : `Show the ${stats.blocked} road-blocked only`
+            }
+          >
             <div className="k">Road-blocked</div>
             <div className="v">{stats.blocked}</div>
             <div className="sub">need attention</div>
-          </div>
-          <div className="stat ok">
+          </button>
+          <button
+            type="button"
+            className={`stat ok statbtn${clientF("checked") ? " on" : ""}`}
+            onClick={() => setClientF("checked")}
+            disabled={stats.checked === 0}
+            title={
+              clientF("checked")
+                ? "Showing checked-this-week only — click to clear"
+                : `Show the ${stats.checked} checked this week only`
+            }
+          >
             <div className="k">Checked this week</div>
             <div className="v">{stats.checked}</div>
             <div className="sub">{stats.auth} at authorization</div>
-          </div>
+          </button>
         </div>
+
+        {/* 🔴 THE BANNER, AND THE ESCAPE. Same pattern and same wording shape as
+            the caregiver board and Master: what is being shown, and one control
+            that puts everything back. Round 113 proved the banner is the half
+            people believe — it said a filter was on while 184 cards stayed
+            drawn — so it exists only where the cards actually narrow. */}
+        {clientFocus ? (
+          <div className="mfocus">
+            Showing{" "}
+            <b>
+              {clientFocus.kind === "blocked"
+                ? "road-blocked records"
+                : clientFocus.kind === "checked"
+                  ? "records checked this week"
+                  : clientFocus.kind === "rep" && clientFocus.value === ""
+                    ? "unassigned records"
+                    : `${clientFocus.kind}: ${clientFocus.value}`}
+            </b>{" "}
+            —{" "}
+            <button type="button" onClick={() => setClientFocus(null)}>
+              show every record
+            </button>
+          </div>
+        ) : null}
 
         <div className={`scope ${isAdminViewer ? "admin" : "rep"}`}>
           {sso.status === "loading" ? (
@@ -5138,8 +5295,18 @@ export default function Dashboard() {
           <span className="count">
             {/* "in pipeline" used to count the WHOLE payload even with a
                 pipeline selected — the same contradiction as the filters.
-                It now names what it is counting. */}
-            {visible.length} shown · {scopedTotal} in {headerLabel}
+                It now names what it is counting.
+
+                🔴 AND IT COUNTS THE VIEW YOU ARE LOOKING AT — round 114.
+                It read `visible` on both, so on the kanban it described the
+                LIST's set: a number that could disagree with the cards beside
+                it by construction. The board and the list now each report
+                their own, in the same sentence shape the caregiver board uses:
+                "2 shown · 12 before this filter". */}
+            {view === "board" ? boardFocused.length : visible.length} shown ·{" "}
+            {clientFocus
+              ? `${view === "board" ? boardVisible.length : filtered.length} before this filter`
+              : `${scopedTotal} in ${headerLabel}`}
           </span>
         </div>
 
@@ -6135,7 +6302,7 @@ export default function Dashboard() {
 
                 So the hint now counts what it names, and only claims sharing
                 when something IS shared. An empty pipeline says it is empty. */}
-            {boardVisible.length === 0 && data.length > 0
+            {boardFocused.length === 0 && data.length > 0
               ? (() => {
                   const sharedCount = data.filter((r) => r.shared).length;
                   const pickedOne = adminPipeline !== "all";
@@ -6174,7 +6341,9 @@ export default function Dashboard() {
               : null}
             <div className="board">
               {boardStages.map((st) => {
-                const inCol = boardVisible.filter((r) => r.stage === st);
+                // 🔴 boardFocused — the tile reaches the cards. Round 113's
+                // caregiver bug was exactly this line reading one link short.
+                const inCol = boardFocused.filter((r) => r.stage === st);
                 return (
                   <BoardColumn key={st} stage={st} count={inCol.length}>
                     {inCol.length ? (
