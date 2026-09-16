@@ -320,6 +320,20 @@ export default function ReferralsSection({
     return live.length ? [...live, ALL_DIVISIONS] : [...DIVISIONS];
   }, [data]);
   /**
+   * 🔴 ROUND 130 — THE FALLBACK IS FIRING, AND SILENTLY IS THE PROBLEM.
+   *
+   * `divisionOptions` is `Partner Division`'s options, matched BY NAME. If the
+   * field is named anything else on this account — or is not a picklist — the
+   * list arrives empty, the hardcoded four are shown, and the screen looks
+   * exactly as it did before round 128. That is the same shape as `firstStage`
+   * in round 126: a fallback that reproduces the bug hides its own failure.
+   *
+   * ⚠️ SO IT SAYS SO. Whichever cause it is — a renamed field, a plain-text
+   * field, or a field that genuinely holds all four values — the person looking
+   * at the switcher can tell which list they are being offered.
+   */
+  const divisionsAreLive = !!data && data.divisionOptions.length > 0;
+  /**
    * 🔴 THE EVENT DIALOG GETS `Event Division`'s OWN OPTIONS. It was handed
    * `Partner Division`'s — a CONTACT field's picklist offered for an
    * OPPORTUNITY field's value. They hold similar values today; the moment they
@@ -1087,6 +1101,18 @@ export default function ReferralsSection({
                   </button>
                 </li>
               ))}
+              {/* 🔴 ROUND 130 — WHICH LIST THIS IS. Round 128 made the switcher
+                  read `Partner Division`'s own options; when that read comes
+                  back empty the hardcoded four are shown instead, and until now
+                  nothing said which you were looking at. */}
+              {!divisionsAreLive ? (
+                <li className="rfdivnote">
+                  ⚠️ These are this app&apos;s built-in divisions. No{" "}
+                  <b>Partner Division</b> options could be read from this
+                  account — check the field exists, is named exactly{" "}
+                  <b>Partner Division</b>, and is a dropdown.
+                </li>
+              ) : null}
             </ul>
           ) : null}
           <p className="rfsub">

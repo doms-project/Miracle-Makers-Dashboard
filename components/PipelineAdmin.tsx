@@ -76,6 +76,8 @@ interface Payload {
   inertSections?: Unconfigured[];
   /** ITEM O — the contact-side table, read-only, with BOTH names. */
   contactSections?: {
+    /** The id in use on THIS account — "" when the section resolves to nothing. */
+    resolvedId?: string;
     id: string;
     ghlName: string;
     label: string;
@@ -85,6 +87,8 @@ interface Payload {
   }[];
   /** ITEM O — contact folders GoHighLevel has that this app has never heard of. */
   unknownContactFolders?: { id: string; fields: { id: string; name: string }[] }[];
+  /** 🔴 ROUND 130 — this code's folder ids describe a different account. */
+  builtInFoldersForeign?: boolean;
 }
 
 /** What `countFieldValues` gives back. null means "I could not count". */
@@ -1770,6 +1774,26 @@ export default function PipelineAdmin({
       </div>
 
       {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}
+      {/* 🔴 ROUND 130 — SAY IT BEFORE LISTING TEN EMPTY SECTIONS. On a
+          deployment whose folders this code has never seen, every section
+          resolves to nothing — and a list of ten sections at "0 fields" reads
+          as "configured and empty" rather than "pointed at another account".
+          `builtInFoldersAreForeign()` was written in 129 and left unwired until
+          the no-op was proven; this is the screen it was for. */}
+      {data.builtInFoldersForeign ? (
+        <div className="pfstale" style={{ marginTop: 16 }}>
+          <b>This dashboard&apos;s built-in folder map is for a different account</b>
+          <div className="ihint">
+            Not one of its folder ids exists here, so every section below starts
+            empty. That is not a fault on this account — it is this app carrying
+            another location&apos;s ids. <b>Point each folder at a section</b> in
+            the list underneath and the panels start drawing. Nothing is written
+            to GoHighLevel: the mapping is this dashboard&apos;s own stored
+            configuration.
+          </div>
+        </div>
+      ) : null}
+
       {data.contactSections?.length ? (
         <>
           {/* 🔴 ROUND 121 · ITEM 5 — COLLAPSED, WITH THE COUNT IN THE HEADER.
@@ -1859,11 +1883,19 @@ export default function PipelineAdmin({
               <b>
                 Contact folders in GoHighLevel this dashboard does not know about
               </b>
+              {/* 🔴 ROUND 130 — "ADDING ONE NEEDS A CODE CHANGE TODAY" IS NO
+                  LONGER TRUE, AND THAT SENTENCE WAS THE BLOCKER. Naming one of
+                  these to match a section is what wires it up: the record panel
+                  resolves a section to the folder on THIS account whose stored
+                  name matches. So the control is a LIST OF THE SECTIONS, not a
+                  free-text box — a typo in free text would do nothing at all,
+                  silently, which is the failure this whole week has been
+                  about. */}
               <div className="ihint">
                 Their fields are dropped from contact panels — not shown under
-                &quot;Other&quot;, because a location&apos;s contact fields include
-                every unrelated form on the account. Adding one needs a code
-                change today; this is here so you can see they exist.
+                &quot;Other&quot;, because a location&apos;s contact fields
+                include every unrelated form on the account.{" "}
+                <b>Point one at a section below and its fields start drawing.</b>
               </div>
               {data.unknownContactFolders.map((u) => (
                 <div className="pfstalerow" key={u.id}>
@@ -1876,6 +1908,38 @@ export default function PipelineAdmin({
                       .join(", ")}
                     {u.fields.length > 3 ? "…" : ""}
                   </span>
+                  <div className="pfunkname">
+                    <label htmlFor={`pfcunk-${u.id}`}>This folder is</label>
+                    <select
+                      id={`pfcunk-${u.id}`}
+                      value={unkName[u.id] ?? ""}
+                      disabled={busy}
+                      onChange={(e) =>
+                        setUnkName((m) => ({ ...m, [u.id]: e.target.value }))
+                      }
+                    >
+                      <option value="">Not one of these…</option>
+                      {(data.contactSections || [])
+                        // ⚠️ ONLY SECTIONS THAT RESOLVE TO NOTHING. Offering one
+                        // that already has a folder would let an admin point two
+                        // folders at the same section, and the resolver takes
+                        // the first it finds — a coin toss nobody could see.
+                        .filter((sec) => !sec.resolvedId)
+                        .map((sec) => (
+                          <option key={sec.id} value={sec.ghlName}>
+                            {sec.label}
+                            {sec.renamed ? ` (${sec.ghlName} in GoHighLevel)` : ""}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={busy || !(unkName[u.id] || "").trim()}
+                      onClick={() => nameFolder(u.id)}
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
