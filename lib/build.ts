@@ -25,13 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "129",
+  round: "130",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the built-in folder map is recognised as belonging to one account: the " +
-    "seed and the name backfill no longer write another account's folder ids, " +
-    "and contact sections resolve against the folders the account actually " +
-    "has · proven a no-op on the main account, section by section",
+    "contact sections are configurable: point a folder at a section on the " +
+    "Pipelines screen and its fields draw · the screen says when the built-in " +
+    "folder map belongs to another account · and the division switcher says " +
+    "when it is showing its built-in list rather than the field's",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

@@ -18,6 +18,9 @@ import {
   FOLDERS,
   FOLDER_LABELS,
   CONTACT_FOLDERS,
+  folderIdsPresent,
+  builtInFoldersAreForeign,
+  resolveFolderId,
   folderKeyById,
   fieldIsAlwaysIntercepted,
 } from "@/lib/fieldFolders";
@@ -199,6 +202,11 @@ export async function GET(request: Request) {
       // /api/opportunities on the same instance.
       getEditableFieldDefs("contact").catch(() => [] as EditableFieldDef[]),
     ]);
+
+    // 🔴 ROUND 130 — THE FOLDER IDS THAT ACTUALLY EXIST ON THIS ACCOUNT, from
+    // both models. Every "is this folder ours" question on this screen is
+    // answered from this one set rather than from the built-in table.
+    const folderIdsHere = folderIdsPresent([...defs, ...contactDefs]);
     const sections = sectionsFromDefs(defs, config.folderNames);
     const live = new Set(pipelines.map((p) => p.id));
     // ⚠️ RECONCILE, DO NOT AUTO-DELETE. A stored key with no live pipeline is
@@ -254,15 +262,27 @@ export async function GET(request: Request) {
          * Showing what is there and what it costs is the half that can be true
          * today; see the report.
          */
+        // 🔴 ROUND 130 — RESOLVED AGAINST THIS ACCOUNT, exactly the way the
+        // record panel resolves it. The old version matched the built-in id or
+        // a `parentName` GoHighLevel never sends, so on a second deployment it
+        // listed ten sections at "0 fields" while the account's real folders
+        // sat underneath as unknown. A screen that reports a different answer
+        // from the panel it describes is worse than no screen.
         contactSections: CONTACT_FOLDERS.map((f) => {
+          const resolvedId =
+            resolveFolderId(f.id, [f.name, f.label], folderIdsHere, config.folderNames) || "";
           const fields = contactDefs.filter(
             (d) =>
-              (d.parentId && d.parentId === f.id) ||
+              (!!resolvedId && d.parentId === resolvedId) ||
               (!!(d.parentName || "").trim() &&
                 (d.parentName || "").trim().toLowerCase() === f.name.toLowerCase()),
           );
           return {
             id: f.id,
+            // ⚠️ THE ID ACTUALLY IN USE HERE, which is the built-in one on the
+            // main account and the admin-named one anywhere else. "" means the
+            // section has nothing to resolve to yet.
+            resolvedId,
             ghlName: f.name,
             label: f.label,
             appliesTo: f.appliesTo,
@@ -270,6 +290,10 @@ export async function GET(request: Request) {
             fields: fields.map((d) => ({ id: d.id, name: d.name, dataType: d.dataType })),
           };
         }),
+        // 🔴 ROUND 130 — TRUE WHEN THIS CODE'S FOLDER IDS DESCRIBE A DIFFERENT
+        // ACCOUNT. Written and exported in 129, deliberately unwired until the
+        // no-op was proven; this is the screen it was for.
+        builtInFoldersForeign: builtInFoldersAreForeign([...contactDefs, ...defs]),
         /**
          * ⚠️ A CONTACT FOLDER GOHIGHLEVEL HAS AND THIS APP DOES NOT — item O's
          * second half. Its fields fall to the contact-side orphan bucket with no
@@ -283,7 +307,22 @@ export async function GET(request: Request) {
          * known incident.
          */
         unknownContactFolders: (() => {
-          const known = new Set(CONTACT_FOLDERS.map((f) => f.id));
+          // 🔴 ROUND 130 — THE IDS ACTUALLY IN USE, NOT THE BUILT-IN ONES.
+          //
+          // ⚠️ THIS WAS THE BUILT-IN SET AND IT PRODUCED THE SAME FAULT ONE
+          // LAYER DOWN: an admin points a folder at a section, the section
+          // starts drawing — and the folder is STILL listed as one this
+          // dashboard does not know about, because "known" was answering from
+          // the code table while the panel answered from the account. Two
+          // answers to one fact, again. Caught by the proof driving the whole
+          // loop rather than the naming call alone.
+          const known = new Set(
+            CONTACT_FOLDERS.map(
+              (f) =>
+                resolveFolderId(f.id, [f.name, f.label], folderIdsHere, config.folderNames) ||
+                f.id,
+            ),
+          );
           const standard = new Set([
             "O0m1HH8Mou9C9ImAPhJT", // "Contact"
             "4ywdaP7iC0k6zaEkXTTl", // "Additional Info"
