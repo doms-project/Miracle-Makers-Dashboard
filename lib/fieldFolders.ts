@@ -594,6 +594,77 @@ export const CONTACT_FOLDERS: ContactFolder[] = [
  * location's contact fields include every unrelated form field on the account,
  * and an orphan bucket there would be a wall of noise.
  */
+/**
+ * 🔴 ROUND 129 — WHICH OF THIS CODE'S FOLDER IDS ACTUALLY EXIST ON THIS ACCOUNT.
+ *
+ * ⚠️ THE EVIDENCE THAT FORCED THIS: on the second (ODP) deployment every
+ * contact section rendered **0 fields**, and the account's six real folders sat
+ * in "folders this dashboard does not know about" — the two lists exactly
+ * backwards. `CONTACT_FOLDERS` and `FOLDERS` carry Miracle Makers' folder ids;
+ * on another account those ids name nothing at all.
+ *
+ * 🔴 AND THE TEST IS DATA WE ALREADY HAVE. A folder id is real here if any
+ * field on this account carries it as `parentId`. No extra request, no guess,
+ * and it answers per-account rather than per-deployment-flag.
+ */
+export function folderIdsPresent(defs: { parentId?: string }[]): Set<string> {
+  const out = new Set<string>();
+  for (const d of defs) {
+    const pid = (d.parentId || "").trim();
+    if (pid) out.add(pid);
+  }
+  return out;
+}
+
+/**
+ * 🔴 THE BUILT-IN MAP IS ABOUT A DIFFERENT ACCOUNT.
+ *
+ * True when NOT ONE of this code's folder ids appears on the account. That is
+ * not a near-miss to paper over — it means every section built from the map
+ * will be empty, which is exactly the screen that started this round.
+ *
+ * ⚠️ ALL-OR-NOTHING ON PURPOSE. A partial match is a folder that was deleted
+ * and recreated, which is a different problem with a different answer (name the
+ * folder on the Pipelines screen). "None of them" can only mean another
+ * account.
+ */
+export function builtInFoldersAreForeign(defs: { parentId?: string }[]): boolean {
+  const here = folderIdsPresent(defs);
+  if (!here.size) return false; // nothing read yet — say nothing
+  const mine = [...Object.values(FOLDERS), ...CONTACT_FOLDERS.map((f) => f.id)];
+  return !mine.some((id) => here.has(id));
+}
+
+/**
+ * This account's id for a folder the code knows by name.
+ *
+ * 1  the built-in id, when it exists here          ← Miracle Makers: always
+ * 2  an id the admin has NAMED to match, and which exists here
+ * 3  "" — unresolved, and the caller must say so rather than draw an empty
+ *    section that looks like "no data"
+ *
+ * ⚠️ NAME MATCHING IS STEP TWO, NEVER STEP ONE. "FB Private Pay Form" exists
+ * twice on the main account — once as a contact folder and once as an
+ * opportunity folder — so a name-first match could pick the wrong one. And a
+ * name match cannot be relied on across accounts anyway: the second account's
+ * "Lost ReasonS" is plural, and the singular name is held by a phantom folder
+ * GoHighLevel reports and then rejects.
+ */
+export function resolveFolderId(
+  builtInId: string,
+  names: readonly string[],
+  here: Set<string>,
+  folderNames?: Record<string, string>,
+): string {
+  if (builtInId && here.has(builtInId)) return builtInId;
+  if (folderNames)
+    for (const [id, nm] of Object.entries(folderNames)) {
+      if (!here.has(id)) continue;
+      if (names.some((n) => norm(n) === norm(nm))) return id;
+    }
+  return "";
+}
+
 export function groupContactFields(
   defs: EditableFieldDef[],
   kind: "caregiver" | "client",
@@ -602,13 +673,31 @@ export function groupContactFields(
    * CLIENT record — see the branch below.
    */
   values?: Record<string, unknown>,
+  /**
+   * 🔴 ROUND 129 — THE ACCOUNT'S OWN FOLDER NAMES, so a folder can be resolved
+   * on a deployment this code's ids know nothing about. Optional: omitted, the
+   * behaviour is exactly what it was, which is what makes the main account a
+   * no-op.
+   */
+  folderNames?: Record<string, string>,
 ): FieldGroup[] {
   // ⚠️ `"both"` MATCHES EITHER KIND — round 118, item 2. Written as a strict
   // equality this filter would silently drop every "both" folder, which is the
   // exact failure the round is fixing.
-  const folders = CONTACT_FOLDERS.filter(
+  const base = CONTACT_FOLDERS.filter(
     (f) => f.appliesTo === kind || f.appliesTo === "both",
   );
+  // 🔴 ROUND 129 — EACH FOLDER'S ID, ON THIS ACCOUNT.
+  //
+  // ⚠️ A NO-OP ON THE ACCOUNT THE MAP DESCRIBES: `resolveFolderId` returns the
+  // built-in id whenever that id is present, so every field buckets exactly as
+  // it did. It only does anything on an account where the built-in id resolves
+  // to nothing — which is where every section was rendering empty.
+  const here = folderIdsPresent(defs);
+  const folders = base.map((f) => ({
+    ...f,
+    id: resolveFolderId(f.id, [f.name, f.label], here, folderNames) || f.id,
+  }));
   const byFolder = new Map<string, EditableFieldDef[]>();
   for (const def of defs) {
     if (HIDDEN_SET.has(norm(def.name))) continue;

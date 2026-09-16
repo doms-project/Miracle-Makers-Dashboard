@@ -4,7 +4,12 @@ import type {
   ResourceFile,
 } from "./types";
 import { isFieldEditable } from "./editable";
-import { PIPELINE_FOLDERS, FOLDERS, folderKeyById } from "./fieldFolders";
+import {
+  PIPELINE_FOLDERS,
+  FOLDERS,
+  folderKeyById,
+  folderIdsPresent,
+} from "./fieldFolders";
 import { divisionLabel } from "./division";
 import { emailKey, phoneKey } from "./phone";
 import { mapLimit, type Settled } from "./concurrency";
@@ -3430,12 +3435,29 @@ let folderNameBackfillDone = false;
  * that true: a key already present is left exactly as it is, whatever it says.
  * If an unname action is ever added, this must go — the comment is the contract.
  */
-function backfillFolderNames(cfg: StoredPipelineConfig): {
+function backfillFolderNames(
+  cfg: StoredPipelineConfig,
+  /**
+   * 🔴 ROUND 129 — THE FOLDER IDS THAT ACTUALLY EXIST ON THIS ACCOUNT.
+   *
+   * ⚠️ WITHOUT THIS, EVERY READ CONTAMINATED EVERY ACCOUNT. `SEED_FOLDER_NAMES`
+   * is Miracle Makers' folder ids, and this ran on every config read on every
+   * deployment — so the second account's stored config was steadily filling up
+   * with names for folders it does not have. That is worse than leaving it
+   * empty: a config full of ids that resolve to nothing LOOKS configured, and
+   * the screen then reports "0 fields" beside a list of the account's real
+   * folders it claims not to know.
+   *
+   * ⚠️ Undefined means "we have not read the fields", and then nothing is
+   * backfilled at all — a name written on a guess is the thing being removed.
+   */
+  present?: Set<string>,
+): {
   cfg: StoredPipelineConfig;
   added: string[];
 } {
   const added = Object.keys(SEED_FOLDER_NAMES).filter(
-    (id) => !(cfg.folderNames || {})[id],
+    (id) => !(cfg.folderNames || {})[id] && !!present?.has(id),
   );
   if (!added.length) return { cfg, added };
   const folderNames = { ...cfg.folderNames };
@@ -3448,7 +3470,22 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
   const found = await findPipelineConfigValue();
   const parsed = found ? parsePipelineConfig(found.value) : null;
   if (parsed?.seeded) {
-    const { cfg, added } = backfillFolderNames(parsed);
+    // ⚠️ THE FIELD DEFS ARE ALREADY CACHED on every path that reaches here —
+    // this read is a map lookup in the warm case, not a request.
+    let present: Set<string> | undefined;
+    try {
+      const [oppDefs, contactDefs] = await Promise.all([
+        getEditableFieldDefs("opportunity"),
+        getEditableFieldDefs("contact"),
+      ]);
+      present = folderIdsPresent([...oppDefs, ...contactDefs]);
+    } catch {
+      // 🔴 UNKNOWN IS NOT EMPTY. If the field read fails we do not know which
+      // folders exist, so nothing is backfilled — rather than backfilling
+      // everything, which is what produced the cross-account config.
+      present = undefined;
+    }
+    const { cfg, added } = backfillFolderNames(parsed, present);
     if (!added.length) return parsed; // the normal path: no merge, no write
     // 🔴 THE MERGED VALUE IS RETURNED EITHER WAY. The persist below is an
     // optimisation so this stops recurring and so the names are legible in
@@ -3485,19 +3522,54 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
  */
 export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   const next = emptyPipelineConfig();
-  // 🔴 THE NAMED FOLDERS GO IN, AND THE INTENT FORM IS TICKED ON EVERY CLIENT
-  // PIPELINE. Its four fields are orphaned on live records right now; a fix
-  // that only helps pipelines created from today leaves them orphaned.
-  next.folderNames = { ...SEED_FOLDER_NAMES };
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔴 ROUND 129 — THE SEED MUST NOT CROSS ACCOUNTS.
+  //
+  // Every id below — the folder names, the ticked folders, the per-pipeline
+  // folder lists — is Miracle Makers'. Seeding them into a different account's
+  // config is worse than leaving it empty, because it LOOKS configured and
+  // resolves nothing: the second deployment's Contact sections listed eleven
+  // sections at "0 fields" while its six real folders sat under "folders this
+  // dashboard does not know about".
+  //
+  // ⚠️ SO THE SEED IS FILTERED BY WHAT IS ACTUALLY HERE. A folder id survives
+  // only if some field on this account carries it as `parentId`.
+  //   Miracle Makers — every id is present, so the seed is byte-identical.
+  //   Anywhere else  — the folder half seeds EMPTY, and the pipelines' scopes
+  //                    still seed, so the boards work and the sections say
+  //                    they are unconfigured rather than lying.
+  //
+  // ⚠️ AND A FAILED FIELD READ SEEDS NO FOLDERS AT ALL. "We could not check"
+  // must not resolve to "assume they are ours" — that is the behaviour being
+  // removed.
+  // ═══════════════════════════════════════════════════════════════════════
+  let present = new Set<string>();
+  try {
+    const [oppDefs, contactDefs] = await Promise.all([
+      getEditableFieldDefs("opportunity"),
+      getEditableFieldDefs("contact"),
+    ]);
+    present = folderIdsPresent([...oppDefs, ...contactDefs]);
+  } catch {
+    present = new Set<string>();
+  }
+  const mine = (fid: string) => present.has(fid);
+  next.folderNames = Object.fromEntries(
+    Object.entries(SEED_FOLDER_NAMES).filter(([id]) => mine(id)),
+  );
   // ⚠️ NOT Object.keys(SEED_FOLDER_NAMES) — see SEED_TICKED_ON_CLIENT. Naming a
   // folder and putting it on every client record are different decisions.
-  const seededFolderIds = [...SEED_TICKED_ON_CLIENT];
+  const seededFolderIds = [...SEED_TICKED_ON_CLIENT].filter(mine);
   const add = (ids: string[], scope: StoredScope) => {
     for (const id of ids) {
       const mapped = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, id)
         ? PIPELINE_FOLDERS[id]
         : [FOLDERS.shared]; // never the all-twelve fall-through, even in the seed
-      const folders = mapped.map((fid) => folderKeyById(fid) || fid);
+      // 🔴 FILTERED BEFORE THE KEY CONVERSION, not after. A key like "shared"
+      // is legible and account-neutral to LOOK at, which is exactly why it is
+      // dangerous here: stored as a key it resolves through FOLDERS to Miracle
+      // Makers' id on whatever account reads it.
+      const folders = mapped.filter(mine).map((fid) => folderKeyById(fid) || fid);
       if (scope === "client") for (const fid of seededFolderIds) folders.push(fid);
       next.pipelines[id] = { scope, folders };
     }
