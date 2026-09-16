@@ -25,13 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "126",
+  round: "128",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "a new enquiry is filed by what a stage MEANS, not by where it sits — so " +
-    "TRANSFERRED IN is never chosen whether or not GoHighLevel sends " +
-    "`position` · the applicant intake was still on stages[0] and is the sixth " +
-    "stage site, not the fifth · a guessed stage says so on screen",
+    "the division switcher lists the divisions the account's own field has, " +
+    "so an ODP-only deployment stops offering two that cannot exist there · " +
+    "the event dialog reads Event Division's options, not Partner Division's · " +
+    "a choice that is no longer offered clamps back to All",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

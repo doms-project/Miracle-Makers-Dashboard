@@ -696,6 +696,19 @@ export async function GET(request: Request) {
           categoryOptions: optionsOf(contactDefs, PARTNER_FIELDS.category.name),
           tierOptions: optionsOf(contactDefs, PARTNER_FIELDS.tier.name),
           divisionOptions: optionsOf(contactDefs, PARTNER_FIELDS.division.name),
+          // 🔴 ROUND 128 — THE EVENT'S OWN FIELD, WHICH IS A DIFFERENT FIELD.
+          //
+          // "Add an event" writes `Event Division` — an OPPORTUNITY field — and
+          // was being offered the options of `Partner Division`, a CONTACT
+          // field. They are two picklists that happen to hold similar values
+          // today; the moment they diverge the dialog offers a value the event
+          // field cannot store, and GoHighLevel drops it with a 200.
+          //
+          // ⚠️ EMPTY WHEN `Event Division` IS NOT A PICKLIST. On this account it
+          // may well be plain text, in which case there are no options to read
+          // and the dialog says so rather than pretending the partner field's
+          // list applies to it.
+          eventDivisionOptions: optionsOf(oppDefs, EVENT_FIELDS.division.name),
           outcomeOptions: optionsOf(contactDefs, ATTENDEE_FIELDS.outcome.name),
           // Where "Log a referral" may file a case. 🔴 The Events pipeline is
           // EXCLUDED: an event is not a client, and offering it would let a

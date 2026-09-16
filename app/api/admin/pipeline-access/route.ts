@@ -5,8 +5,7 @@ import {
   fetchAccessGrantsV2,
   saveAccessGrantsV2,
   listMediaFolders,
-  pipelineIds,
-  caregiverPipelineIds,
+  getPipelineConfig,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
@@ -87,11 +86,50 @@ export async function GET(request: Request) {
         return [];
       }),
     ]);
-    // ITEM 13 — a caregiver pipeline is "loaded" too. Without this the grid
-    // would flag both of them "not loaded", which is the warning that means
-    // "ticking this has no effect" — untrue, and it would stop anyone granting
-    // recruiting staff the access they need.
-    const loaded = new Set([...pipelineIds(), ...caregiverPipelineIds()]);
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🔴 ROUND 127 · ITEM 1 — DERIVED FROM THE STORED CONFIG, NOT FROM AN ENV
+    // VAR. This read `pipelineIds()` and `caregiverPipelineIds()`, both of
+    // which are ENVIRONMENT LISTS whose defaults hold the two original
+    // caregiver ids. So the three staff pipelines — created by script, given
+    // scope and a recruiting group on the Pipelines screen, drawn by the
+    // board, listed by the picker, shown by the Recruiting switcher — were
+    // reported "not loaded" HERE and nowhere else.
+    //
+    // 🔴 TWO MECHANISMS ANSWERING ONE QUESTION, one silently winning. Same
+    // shape as /api/clients rule 2 (two owners) and the stage bug (five call
+    // sites in one file while a sixth lived elsewhere). The stored config
+    // already knows, an admin already sets it, and a pipeline added next month
+    // needs a dropdown rather than an environment variable and a deploy.
+    //
+    // ⚠️ "LOADED" MEANS "SOMETHING ACTUALLY FETCHES IT", which is narrower than
+    // "it has an entry", and the difference matters because this badge is a
+    // promise that ticking the box does something:
+    //
+    //   client    fetched by the client board                       ✓
+    //   caregiver fetched by the recruiting board                   ✓
+    //   none      fetched by NOTHING unless it carries the events
+    //             role, in which case the Referrals tab reads it    ✓/✗
+    //
+    // A pipeline with no stored entry at all is fetched by nothing, which is
+    // exactly what the original badge was for.
+    //
+    // ⚠️ AND THE ENV VARS STAY — for the two jobs they still do, neither of
+    // which is this one. See the report: the one-time seed of a fresh account,
+    // and the fallback inside getSelectedPipelines() when the stored config
+    // cannot be read, so a GoHighLevel blip does not empty every board.
+    const cfg = await getPipelineConfig();
+    const entryOf = (id: string) => cfg.pipelines[id];
+    const loadedReason = (id: string): string => {
+      const e = entryOf(id);
+      if (!e)
+        return "It has no entry on the Pipelines screen, so nothing fetches it and a grant here has no effect.";
+      if (e.scope === "none" && e.role !== "events")
+        return "Its scope is “listed by no board picker” and it carries no role, so nothing fetches its records.";
+      return "";
+    };
+    const loaded = new Set(
+      pipelines.filter((p) => !loadedReason(p.id)).map((p) => p.id),
+    );
 
     return NextResponse.json(
       {
@@ -102,6 +140,10 @@ export async function GET(request: Request) {
           // false => the dashboard doesn't fetch this pipeline yet; add it to
           // PIPELINE_IDS for grants here to have any effect.
           inDashboard: loaded.has(p.id),
+          // ⚠️ WHY, NOT JUST WHETHER. "not loaded" sent an admin looking for an
+          // environment variable they cannot change; the fix is one dropdown on
+          // the Pipelines screen, and the badge now says so.
+          notLoadedWhy: loadedReason(p.id) || undefined,
         })),
         // Folders read LIVE from GHL — a folder created in GHL appears here
         // with no code change, same as users and pipelines.

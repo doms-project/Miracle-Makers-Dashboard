@@ -994,10 +994,28 @@ const DEFAULT_PIPELINE_IDS = [
 // pipelineIds() and therefore cannot see them, without a single one of them
 // having to remember a filter.
 //
-// ⚠️ A THIRD IS COMING. The caregiver form routes to four departments and
-// OLTL_CHC — the routing DEFAULT, and where family caregivers go — has no
-// pipeline yet. Adding it is one id in CAREGIVER_PIPELINE_IDS, no code change:
-// the whole caregiver path is driven by this list.
+// 🔴 ROUND 127 — THIS LIST NO LONGER "DRIVES THE CAREGIVER PATH", AND SAYING
+// SO WAS THE BUG. The Pipelines screen replaced it: scope lives in the stored
+// config, an admin sets it, and every board, picker and switcher reads from
+// there. This env list kept ONE more caller — the Access tab — which is why
+// three staff pipelines an admin had already configured were reported "not
+// loaded" on that screen and nowhere else.
+//
+// ⚠️ IT IS KEPT, FOR THE TWO JOBS IT STILL DOES AND NOTHING ELSE:
+//
+//   1  THE ONE-TIME SEED. A fresh account has no stored config, and
+//      getPipelineConfig() writes the first one from these ids. Without them
+//      the first admin to open the dashboard sees no pipelines anywhere and no
+//      way to add one, because the screen that adds them lists the pipelines
+//      the config already knows.
+//   2  THE OUTAGE FALLBACK inside getSelectedPipelines(). If the config read
+//      fails, the boards fall back to this list rather than emptying — "a GHL
+//      blip must not empty every board".
+//
+// 🔴 NEITHER IS "ANSWER WHICH PIPELINES ARE CAREGIVER ONES". That is a live
+// question with a live answer, and a second source for it is how one screen
+// disagrees with four others. Adding a pipeline is a dropdown on the Pipelines
+// screen, not an id here and a deploy.
 //
 // ⚠️ NO REASSIGN STAGE on these, and none is added. The reassign flow resolves
 // REASSIGN by name and REFUSES when a pipeline hasn't got one (see
