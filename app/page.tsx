@@ -3770,9 +3770,14 @@ export default function Dashboard() {
             // every field — see the comment on that branch, and do not
             // reconcile the two.
             cFields.values,
+            // 🔴 ROUND 129 — the account's own folder names, so a deployment
+            // whose folder ids this code has never seen can still resolve its
+            // sections. Empty on the main account's normal path, where the
+            // built-in ids match and nothing changes.
+            folderNames,
           )
         : [],
-    [cFields, cgData, selId],
+    [cFields, cgData, selId, folderNames],
   );
 
   // Client contact fields a rep has chosen to reveal from "+ Add a field",

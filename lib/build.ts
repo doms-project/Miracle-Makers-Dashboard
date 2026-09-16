@@ -25,13 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "128",
+  round: "129",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the division switcher lists the divisions the account's own field has, " +
-    "so an ODP-only deployment stops offering two that cannot exist there · " +
-    "the event dialog reads Event Division's options, not Partner Division's · " +
-    "a choice that is no longer offered clamps back to All",
+    "the built-in folder map is recognised as belonging to one account: the " +
+    "seed and the name backfill no longer write another account's folder ids, " +
+    "and contact sections resolve against the folders the account actually " +
+    "has · proven a no-op on the main account, section by section",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;
