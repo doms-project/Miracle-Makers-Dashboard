@@ -201,15 +201,44 @@ export const PARTNER_CATEGORIES = [
   "Former client family",
 ] as const;
 
+/**
+ * 🔴 ROUND 128 — THE SWITCHER'S DIVISIONS COME FROM THE FIELD, NOT FROM HERE.
+ *
+ * This was the live list, and on an ODP-only deployment it offered two
+ * divisions that cannot exist there: a user picked OLTL and got an empty screen
+ * with no explanation — the screen was right and the list was lying to it.
+ *
+ * ⚠️ IT IS THE SAME ARGUMENT THAT SETTLED Partner Category IN ROUND 103: read
+ * the options live and the reconciliation problem disappears permanently, while
+ * an admin adding a division in GoHighLevel gets it here for free.
+ *
+ * 🔴 KEPT AS A FALLBACK ONLY — the same standing the pipeline env lists were
+ * reduced to in round 127. It answers "what do we show when the field's own
+ * options cannot be read", which is a default; it no longer answers "which
+ * divisions exist", which is a fact with a live source.
+ */
 export const DIVISIONS = ["Private Pay", "OLTL", "ODP", "All"] as const;
-export type Division = (typeof DIVISIONS)[number];
+
+/**
+ * 🔴 NOW A STRING, because the set is whatever the account's field says.
+ *
+ * ⚠️ THE TYPE WAS DOING REAL WORK AND THIS GIVES SOME OF IT UP. A union caught
+ * a typo at compile time; a string cannot. What replaces it is narrower and
+ * better placed: the switcher can only ever be SET to a value it just listed,
+ * and a stored choice that is no longer offered is clamped back to All rather
+ * than left pointing at a division that does not exist.
+ */
+export type Division = string;
+
+/** The switcher's own value. Not an option on the field, and never expected in the data. */
+export const ALL_DIVISIONS = "All";
 
 /**
  * ⚠️ A PARTNER MARKED "All" APPEARS UNDER EVERY DIVISION, not only under "All".
  * Same for an event. "All" is a property of the partner, not a filter value.
  */
 export function inDivision(recordDivision: string, viewing: Division): boolean {
-  if (viewing === "All") return true;
+  if (viewing === ALL_DIVISIONS) return true;
   const d = (recordDivision || "").trim();
   return !d || d === "All" || d === viewing;
 }

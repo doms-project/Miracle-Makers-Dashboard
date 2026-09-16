@@ -5,7 +5,13 @@ import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 
 type User = { id: string; name: string; email: string; role: string };
-type Pipeline = { id: string; name: string; inDashboard: boolean };
+type Pipeline = {
+  id: string;
+  name: string;
+  inDashboard: boolean;
+  /** 🔴 ROUND 127 — WHY it is not loaded, so the badge names a fixable cause. */
+  notLoadedWhy?: string;
+};
 type Folder = { id: string; name: string };
 type Grants = Record<string, string[]>;
 
@@ -276,12 +282,22 @@ export default function PipelineAccessTab({
               {pipelines.map((p) => (
                 <th key={p.id} title={p.id}>
                   {p.name}
-                  {/* Not in PIPELINE_IDS: the dashboard doesn't load it, so a
-                      tick here has no effect until it's added. */}
+                  {/* 🔴 ROUND 127 — THE BADGE NAMED THE WRONG FIX. It said to
+                      add the pipeline to PIPELINE_IDS, an environment variable
+                      nobody using this screen can change — and it was reading
+                      that env list rather than the stored config, so three
+                      pipelines an admin had already configured were flagged as
+                      absent. The cause is now derived from the same place the
+                      Pipelines screen writes, and the tooltip says which
+                      dropdown fixes it. */}
                   {!p.inDashboard ? (
                     <span
                       className="panotloaded"
-                      title="The dashboard doesn't load this pipeline yet — add it to PIPELINE_IDS for grants to take effect."
+                      title={
+                        p.notLoadedWhy
+                          ? `${p.notLoadedWhy} Set it on the Pipelines screen.`
+                          : "Nothing fetches this pipeline, so a grant here has no effect. Set its scope on the Pipelines screen."
+                      }
                     >
                       not loaded
                     </span>

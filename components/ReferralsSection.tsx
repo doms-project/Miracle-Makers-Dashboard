@@ -8,6 +8,7 @@ import {
   CADENCE,
   DUE_SOON_DAYS,
   DIVISIONS,
+  ALL_DIVISIONS,
   TIERS,
   OUTCOMES,
   PARTNER_CATEGORIES,
@@ -86,6 +87,8 @@ export interface Payload {
   categoryOptions: string[];
   tierOptions: string[];
   divisionOptions: string[];
+  /** ROUND 128 — `Event Division`'s OWN options. Empty when it is not a picklist. */
+  eventDivisionOptions?: string[];
   outcomeOptions: string[];
   clientPipelines: PipelineChoice[];
   meta: {
@@ -253,7 +256,7 @@ export default function ReferralsSection({
   const [loading, setLoading] = useState(!cache);
   const [err, setErr] = useState<unknown>(null);
 
-  const [division, setDivision] = useState<Division>("All");
+  const [division, setDivision] = useState<Division>(ALL_DIVISIONS);
   const [divOpen, setDivOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("sources");
   /**
@@ -289,6 +292,64 @@ export default function ReferralsSection({
   const [openId, setOpenId] = useState<string | null>(null);
   /** Analysis 104 · 5 — bumped after a logged touch so the open drawer re-reads. */
   const [notesToken, setNotesToken] = useState(0);
+  /**
+   * 🔴 ROUND 128 — THE DIVISIONS COME FROM THE FIELD.
+   *
+   * The switcher was `DIVISIONS`, a four-value list in code. On an ODP-only
+   * deployment it offered Private Pay and OLTL, which cannot exist there: pick
+   * one and the screen empties with nothing to explain it. The screen was right
+   * and the list was lying to it.
+   *
+   * ⚠️ `divisionOptions` HAS BEEN IN THE PAYLOAD SINCE ROUND 103 — read live
+   * from `Partner Division` — and both dialogs already used it. The switcher
+   * was the one consumer still reading the hardcoded copy.
+   *
+   * ⚠️ "All" IS APPENDED, NOT EXPECTED IN THE DATA. It is the switcher's own
+   * value and it is not an option on the field; a record marked "All" means
+   * something different (it appears under every division) and that is the
+   * field's business, not the menu's.
+   */
+  const partnerDivisions = useMemo(
+    () => (data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]),
+    [data],
+  );
+  const divisionChoices = useMemo(() => {
+    const live = (data?.divisionOptions || []).filter((d) => d !== ALL_DIVISIONS);
+    // ⚠️ THE FALLBACK IS THE OLD LIST, and it already ends in "All" — so it is
+    // used whole rather than having All appended twice.
+    return live.length ? [...live, ALL_DIVISIONS] : [...DIVISIONS];
+  }, [data]);
+  /**
+   * 🔴 THE EVENT DIALOG GETS `Event Division`'s OWN OPTIONS. It was handed
+   * `Partner Division`'s — a CONTACT field's picklist offered for an
+   * OPPORTUNITY field's value. They hold similar values today; the moment they
+   * diverge the dialog offers something the event field cannot store, and
+   * GoHighLevel drops it with a 200.
+   *
+   * ⚠️ FALLS BACK TO THE PARTNER LIST when `Event Division` is not a picklist
+   * at all, because that is better than an empty dropdown — and the dialog says
+   * which it is showing rather than leaving it ambiguous.
+   */
+  const eventDivisions = useMemo(
+    () =>
+      data?.eventDivisionOptions?.length
+        ? data.eventDivisionOptions
+        : partnerDivisions,
+    [data, partnerDivisions],
+  );
+  const eventDivisionsAreItsOwn = !!data?.eventDivisionOptions?.length;
+  /**
+   * ⚠️ A CHOICE THAT IS NO LONGER OFFERED IS CLAMPED BACK TO ALL. The list is
+   * live now, so it can change under a session — an admin removing a division,
+   * or a payload arriving from a different account. Leaving `division` pointing
+   * at a value nobody lists is the empty-screen-with-no-explanation this round
+   * is about, arrived at from the other direction.
+   */
+  useEffect(() => {
+    if (division !== ALL_DIVISIONS && !divisionChoices.includes(division))
+      setDivision(ALL_DIVISIONS);
+  }, [divisionChoices, division]);
+
   /** Round 124 · item 4 — the event awaiting a confirmed delete. */
   const [delEvent, setDelEvent] = useState<RawEvent | null>(null);
   /** Round 124 — the attendee awaiting removal FROM AN EVENT (never a contact delete). */
@@ -1004,7 +1065,7 @@ export default function ReferralsSection({
               id="rf-division-menu"
               aria-label="Division"
             >
-              {DIVISIONS.map((d) => (
+              {divisionChoices.map((d) => (
                 // ⚠️ `role` GOES ON THE FOCUSABLE ELEMENT, NOT ITS WRAPPER.
                 // `role="option"` sat on the <li> while the <button> inside it
                 // was the thing you could reach — so the element a keyboard
@@ -2213,7 +2274,8 @@ export default function ReferralsSection({
         <AddEventDialog
           ssoBlob={ssoBlob}
           partner={eventForPartner}
-          divisions={data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]}
+          divisions={eventDivisions}
+          divisionsAreEventsOwn={eventDivisionsAreItsOwn}
           hostFieldPresent={!!data?.meta.eventHostField}
           onClose={() => setEventForPartner(null)}
           onAdded={() => void load()}
@@ -2249,7 +2311,7 @@ export default function ReferralsSection({
           owners={data?.owners || []}
           categories={data?.categoryOptions.length ? data.categoryOptions : [...PARTNER_CATEGORIES]}
           tiers={data?.tierOptions.length ? data.tierOptions : [...TIERS]}
-          divisions={data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]}
+          divisions={partnerDivisions}
           onClose={() => setAddOpen(false)}
           onAdded={() => void load()}
         />
@@ -4418,6 +4480,7 @@ function AddEventDialog({
   ssoBlob,
   partner,
   divisions,
+  divisionsAreEventsOwn,
   hostFieldPresent,
   onClose,
   onAdded,
@@ -4425,6 +4488,16 @@ function AddEventDialog({
   ssoBlob: string | null;
   partner: EnrichedPartner;
   divisions: string[];
+  /**
+   * 🔴 ROUND 128 — true when these are `Event Division`'s OWN options.
+   *
+   * False means that field is not a picklist on this account, so the list shown
+   * is `Partner Division`'s — a reasonable stand-in and NOT the same field. The
+   * dialog says which, because "these values may not be the ones this field
+   * accepts" is exactly the kind of thing that is invisible until a value
+   * silently fails to save.
+   */
+  divisionsAreEventsOwn?: boolean;
   /** False → the event is created but nothing records who ran it. Said, not hidden. */
   hostFieldPresent: boolean;
   onClose: () => void;
@@ -4553,6 +4626,14 @@ function AddEventDialog({
                 </select>
               </div>
             </div>
+            {divisionsAreEventsOwn === false ? (
+              <div className="rfdhint">
+                ⚠️ <b>Event Division</b> is not a dropdown on this account, so
+                these are <b>Partner Division</b>&apos;s values. They are the
+                right shape, but they are a different field&apos;s list — if one
+                of them does not stick, that is why.
+              </div>
+            ) : null}
             <div className="rfdhint">
               ⚠️ Event cost is a <b>one-off</b> — a booth is paid once — so it is
               never shown as a monthly figure, unlike referral value.
