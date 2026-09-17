@@ -5537,6 +5537,16 @@ export interface ContactFieldsRead {
    * error to notice. Read `dateUpdated` FIRST and keep it that way.
    */
   version: string;
+  /**
+   * 🔴 ROUND 131 — THE PERSON'S OWN NAME, read back so a rename can be CHECKED.
+   *
+   * ⚠️ NATIVE, NOT A CUSTOM FIELD. It is not in `values` and never will be:
+   * `values` is keyed by custom-field id, and these two have no id. Anything
+   * that tries to save them through the custom-field path is writing to a field
+   * that does not exist — a 200 and nothing stored.
+   */
+  firstName: string;
+  lastName: string;
 }
 
 /**
@@ -5566,14 +5576,24 @@ export async function getContactCustomFields(
       values[id] = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
     }
   }
+  // ⚠️ SPLIT `name` ONLY WHEN THERE IS NOTHING ELSE. A contact created from a
+  // single "name" column has no firstName/lastName, and an editor seeded from
+  // two empty boxes would blank the person on save. Splitting on the FIRST
+  // space matches `normalizeOpportunity`, so the panel and the board agree.
+  const rc = c as Record<string, unknown>;
+  let firstName = String(rc.firstName ?? "").trim();
+  let lastName = String(rc.lastName ?? "").trim();
+  if (!firstName && !lastName) {
+    const parts = String(rc.name ?? "").trim().split(/\s+/).filter(Boolean);
+    firstName = parts.shift() || "";
+    lastName = parts.join(" ");
+  }
   return {
     contactId,
     values,
-    version: String(
-      (c as Record<string, unknown>).dateUpdated ??
-        (c as Record<string, unknown>).updatedAt ??
-        "",
-    ),
+    version: String(rc.dateUpdated ?? rc.updatedAt ?? ""),
+    firstName,
+    lastName,
   };
 }
 
@@ -5622,4 +5642,40 @@ export async function updateContactCustomFields(
     // else set in between.
     { customFields: entries.map((e) => ({ id: e.id, value: e.value })) },
   );
+}
+
+/**
+ * 🔴 ROUND 131 — RENAME THE PERSON. NATIVE FIELDS, SO THE CUSTOM-FIELD PATH
+ * DOES NOT APPLY AND MUST NOT BE REUSED.
+ *
+ * ⚠️ THIS IS THE `monetaryValue` LESSON IN ITS OTHER FORM. There, a native
+ * field was missing from a parameter list and a spread hid it from TypeScript,
+ * so the write compiled and dropped the value. Here the hazard is the same one
+ * from the API's side: GoHighLevel answers 200 to a PUT carrying keys it does
+ * not recognise. A typo'd key, a `customFields` wrapper, the wrong casing —
+ * every one of them looks like a successful save and stores nothing.
+ *
+ * 🔴 SO THE CALLER MUST READ BACK AND COMPARE. This function writes; the route
+ * re-reads the contact and refuses to report success unless the stored name is
+ * the one that was sent.
+ *
+ * ⚠️ `name` IS SENT TOO, DELIBERATELY. GoHighLevel keeps a composed `name`
+ * alongside the two parts, and several of its own surfaces (and our own
+ * `contactDisplay`) prefer it. Writing only firstName/lastName would leave the
+ * old spelling sitting in `name` — a rename that looks done here and is still
+ * wrong everywhere else.
+ */
+export async function updateContactName(
+  contactId: string,
+  n: { firstName: string; lastName: string },
+): Promise<void> {
+  const firstName = n.firstName.trim();
+  const lastName = n.lastName.trim();
+  if (!firstName && !lastName)
+    throw new GhlError("A person needs a name.", 400);
+  await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, {
+    firstName,
+    lastName,
+    name: [firstName, lastName].filter(Boolean).join(" "),
+  });
 }

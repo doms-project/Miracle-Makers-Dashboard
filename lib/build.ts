@@ -25,13 +25,12 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "130",
+  round: "131",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "contact sections are configurable: point a folder at a section on the " +
-    "Pipelines screen and its fields draw · the screen says when the built-in " +
-    "folder map belongs to another account · and the division switcher says " +
-    "when it is showing its built-in list rather than the field's",
+    "both names are editable in the record panel — the case's own name and the " +
+    "person's, each saying which of the two it changes · and the header no " +
+    "longer calls a record “new” because it has no Harmony ID yet",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

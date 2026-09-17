@@ -205,6 +205,35 @@ tbody tr:last-child td{border-bottom:0;}
 .phead{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px;background:linear-gradient(135deg,var(--plum-soft),#faf6fe);}
 .phead h2{margin:0 0 3px;font-size:17px;color:var(--plum-deep);font-weight:800;letter-spacing:-.02em;}
 .phead .sub{font-size:11.5px;color:var(--plum);}
+/* ── ROUND 131 · rename in place ─────────────────────────────────────────────
+   🔴 THE BUTTON MUST NOT LOOK LIKE A BUTTON AT REST. The heading is the panel's
+   title first and a control second; a boxed button there would read as an
+   action to take rather than as the name of the thing being looked at. So the
+   affordance is the pencil and the hover tint, and `inherit` on font/colour
+   keeps the heading a heading. */
+.inmhead{margin:0 0 3px;}
+.inmline{margin:3px 0 0;display:flex;align-items:baseline;gap:6px;}
+.inmwhat{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--plum);opacity:.7;flex:none;}
+.inmbtn{display:inline-flex;align-items:baseline;gap:6px;max-width:100%;padding:1px 5px;margin-left:-5px;border-radius:6px;background:transparent;font:inherit;color:inherit;text-align:left;transition:background .12s;}
+.phead h2.inmhead .inmbtn{font-size:17px;color:var(--plum-deep);font-weight:800;letter-spacing:-.02em;}
+.inmline .inmbtn{font-size:12.5px;color:var(--plum-deep);font-weight:600;}
+.inmbtn:hover:not(:disabled),.inmbtn:focus-visible{background:rgba(255,255,255,.75);}
+.inmbtn:disabled{cursor:default;margin-left:0;padding-left:0;}
+.inmval{overflow-wrap:anywhere;}
+.inmpen{font-size:11px;opacity:0;flex:none;transition:opacity .12s;}
+.inmbtn:hover .inmpen,.inmbtn:focus-visible .inmpen{opacity:.65;}
+.inmedit{margin:0 0 4px;}
+/* 🔴 THE SCOPE SENTENCE IS THE POINT OF THE CONTROL, so it is above the boxes
+   and not a hint beneath them: a rep who has already typed has already decided
+   which name they were changing. */
+.inmscope{font-size:11px;line-height:1.45;color:var(--plum);background:rgba(255,255,255,.72);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-bottom:6px;}
+.inmboxes{display:flex;flex-wrap:wrap;gap:6px;}
+.inminput{flex:1 1 130px;min-width:0;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);}
+.inmacts{display:flex;gap:6px;margin-top:6px;}
+.inmsave,.inmcancel{font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;border:1px solid var(--line);}
+.inmsave{background:var(--plum-deep);color:#fff;border-color:var(--plum-deep);}
+.inmcancel{background:#fff;color:var(--plum);}
+.inmsave:disabled,.inmcancel:disabled{opacity:.6;cursor:default;}
 .x{width:32px;height:32px;border-radius:8px;color:var(--plum);font-size:19px;line-height:1;flex:none;background:rgba(255,255,255,.6);transition:background .12s;}
 .x:hover{background:#fff;}
 /* min-height:0 — same family as .movebody/.rfdbd/.rfhits. The record panel
