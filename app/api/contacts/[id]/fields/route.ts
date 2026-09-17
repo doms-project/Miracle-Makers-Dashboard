@@ -3,6 +3,7 @@ import {
   getContactCustomFields,
   countContactOpportunities,
   updateContactCustomFields,
+  updateContactName,
   getEditableFieldDefs,
   getOpportunityById,
   GhlError,
@@ -93,14 +94,35 @@ export async function PATCH(
       ssoKey?: string;
       expectedVersion?: string;
       fields?: { id: string; value: unknown }[];
+      // 🔴 ROUND 131 — the person's NATIVE name. A separate key, never an entry
+      // in `fields`: `fields` is validated against the custom-field definitions
+      // and a native name has no definition to validate against.
+      name?: { firstName?: string; lastName?: string };
     };
     const g = await gate(id, body.ssoKey || null, "write");
     if (g instanceof NextResponse) return g;
 
     const entries = Array.isArray(body.fields) ? body.fields : [];
-    if (!entries.length)
+    const wantsName = !!body.name;
+    const newFirst = String(body.name?.firstName ?? "").trim();
+    const newLast = String(body.name?.lastName ?? "").trim();
+    if (!entries.length && !wantsName)
       return NextResponse.json(
         { error: "Nothing to save." } as ApiError,
+        { status: 400 },
+      );
+    // ⚠️ REFUSED BEFORE ANY READ. A blank name is not a clearable field like the
+    // rest of them — it is the only thing that identifies the person on every
+    // list, every board and every record they hold.
+    if (wantsName && !newFirst && !newLast)
+      return NextResponse.json(
+        {
+          error: "A person needs a name.",
+          detail:
+            "Type at least a first or last name. Nothing has been changed.",
+          refusal: true,
+          status: 400,
+        } as ApiError,
         { status: 400 },
       );
 
@@ -167,8 +189,38 @@ export async function PATCH(
     );
     if (conflict) return conflict;
 
-    await updateContactCustomFields(g.contactId, entries);
+    if (entries.length) await updateContactCustomFields(g.contactId, entries);
+    if (wantsName)
+      await updateContactName(g.contactId, {
+        firstName: newFirst,
+        lastName: newLast,
+      });
+
     const after = await getContactCustomFields(g.contactId);
+
+    // ═══ 🔴 THE READ-BACK. THE NATIVE PATH'S ONLY HONEST PROOF ═══════════════
+    //
+    // GoHighLevel answers 200 to a PUT carrying keys it does not recognise, so
+    // "the write succeeded" says nothing about whether anything was STORED.
+    // Custom fields are checked against their definitions before the write and
+    // there is no equivalent for a native one — the check has to happen after.
+    //
+    // ⚠️ AND IT MUST FAIL THE REQUEST, not log a warning. The panel reverts on a
+    // non-ok response; a 200 with the old name in it would leave the new
+    // spelling on screen over the old one in GoHighLevel, which is worse than
+    // not offering the rename at all.
+    if (wantsName && (after.firstName !== newFirst || after.lastName !== newLast))
+      return NextResponse.json(
+        {
+          error: "GoHighLevel accepted the rename but did not store it.",
+          detail: `Sent “${[newFirst, newLast].filter(Boolean).join(" ")}”, read back “${
+            [after.firstName, after.lastName].filter(Boolean).join(" ") || "(nothing)"
+          }”. The name has been left as it was on screen; change it in GoHighLevel.`,
+          status: 502,
+        } as ApiError,
+        { status: 502 },
+      );
+
     return NextResponse.json(after, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return errorOut(e, "Could not save the contact's fields.");

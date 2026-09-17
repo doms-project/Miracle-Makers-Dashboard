@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "@/components/ErrorMessage";
+import InlineName from "@/components/InlineName";
 import { apiFetch, apiError } from "@/lib/apiFetch";
 import type { ReactNode } from "react";
 import {
@@ -80,10 +81,30 @@ const clientName = (r: OpportunityRecord) => `${r.first} ${r.last}`.trim();
 // The panel header. The OPPORTUNITY's own name leads — one contact can hold
 // several opportunities, and heading them all with the contact name made two
 // different records look identical.
+//
+// 🔴 ROUND 131 — "— new" WAS THIS LINE, NOT GOHIGHLEVEL.
+//
+// The brief reported every record reading "{name} — new" and placed the fault
+// in the opportunity's stored name, because no such string could be found in
+// the code. It was here all along, as a template literal: the suffix is the
+// HARMONY ID, and `"new"` was the placeholder printed when a record has none.
+//
+// ⚠️ IT IS NOT A NAMING FAULT AND THERE IS NOTHING TO CORRECT AT SOURCE. It is
+// this header calling a record at WAITING FOR DOCS "new" because a number from
+// a different system has not been issued yet — two unrelated facts, one of them
+// reported as the other.
+//
+// 🔴 SO THE WORD GOES, RATHER THAN BEING STRIPPED BACK OFF LATER. A display
+// filter over a string this file builds would be a second wrong answer stacked
+// on the first.
+//
+// ⚠️ AND THE HARMONY ID GOES WITH IT, to the sub-line. It is the half of the
+// suffix that was doing real work — it tells two records of one person apart —
+// but this label is now the resting state of an EDITOR, and it has to read as
+// exactly what the input will hold. The Harmony ID column already says "—" when
+// there is none, muted, in the one place a reader looks for it.
 const enrollLabel = (r: OpportunityRecord) =>
-  `${r.oppName || r.last || r.first || "Record"} — ${
-    r.harmony ? r.harmony.replace("HRM-", "#") : "new"
-  }`;
+  r.oppName || r.last || r.first || "Record";
 
 // Sortable columns (client-requested: sort by name, stage, office, …).
 type SortKey =
@@ -372,6 +393,10 @@ const BlockPill = ({ b }: { b: string }) => (
 type SaveState =
   | { status: "saving" | "error"; err?: unknown }
   | undefined;
+
+// ROUND 131 — the contact-save map is keyed by custom-field id; the person's
+// NATIVE name has none, so it takes a key no field id can collide with.
+const NAME_KEY = "__contactName";
 
 // Multi-select / long-text fields get a full-width row.
 const isWideField = (dt: string): boolean =>
@@ -1421,6 +1446,9 @@ export default function Dashboard() {
     values: Record<string, unknown>;
     version: string;
     opportunityCount: number;
+    // ROUND 131 — native, read from the contact rather than from `values`.
+    firstName: string;
+    lastName: string;
   } | null>(null);
   const [cLoading, setCLoading] = useState(false);
   const [cErr, setCErr] = useState<unknown>(null);
@@ -1952,9 +1980,25 @@ export default function Dashboard() {
   }, [view, cgLoaded, sso.status, sso.blob, loadCaregivers]);
 
   // Escape closes the record panel.
+  //
+  // 🔴 ROUND 131 — UNLESS SOMETHING INSIDE IT HANDLES ESCAPE ITSELF. The rename
+  // editors use Escape to mean "cancel this rename", and this listener is on
+  // `document`: pressing it threw away the edit AND shut the record, so the rep
+  // lost their place as the price of changing their mind about a spelling.
+  //
+  // ⚠️ A DATA ATTRIBUTE, NOT A CLASS NAME. The rule is "this subtree owns
+  // Escape", which is not a fact about how the subtree is styled — and a
+  // stylesheet rename must not silently restore the bug.
+  //
+  // ⚠️ FOUND BY THE PROOF DRIVING THE REAL SCREEN, not by reading this file:
+  // the editor's own handler is correct in isolation, and nothing about it
+  // suggests a second listener two thousand lines away.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelId(null);
+      if (e.key !== "Escape") return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("[data-esc-local]")) return;
+      setSelId(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -3856,6 +3900,8 @@ export default function Dashboard() {
             values: j.values || {},
             version: j.version || "",
             opportunityCount: j.opportunityCount || 0,
+            firstName: j.firstName || "",
+            lastName: j.lastName || "",
           });
         })
         .catch((e) => {
@@ -3907,6 +3953,62 @@ export default function Dashboard() {
         setCSave((p) => ({ ...p, [def.id]: undefined }));
       } catch (e) {
         setCSave((p) => ({ ...p, [def.id]: { status: "error", err: e } }));
+      }
+    },
+    [selected, sso, cFields?.version],
+  );
+
+  // ═══ 🔴 ROUND 131 — RENAME THE PERSON ═════════════════════════════════════
+  //
+  // ⚠️ IT UPDATES EVERY RECORD THEY HOLD, IN BOTH LISTS, AND THAT IS THE POINT.
+  // The panel says "Changes here show on all N of their records"; a rename that
+  // only redrew the open one would contradict the sentence sitting above it.
+  // The match is on `contactId`, not on `id` — the opposite of `saveField`,
+  // which matches one record precisely because an opportunity name is one case.
+  //
+  // 🔴 NO OPTIMISTIC UPDATE HERE. The server read-back is what decides whether
+  // this stored, and painting the new name first would show a rename that the
+  // 502 path exists to say did not happen. It is one field and one round trip;
+  // the row shows "Saving…" and then the truth.
+  const saveContactName = useCallback(
+    async (firstName: string, lastName: string) => {
+      if (!selected?.contactId) return false;
+      const contactId = selected.contactId;
+      setCSave((p) => ({ ...p, [NAME_KEY]: { status: "saving" } }));
+      try {
+        const res = await fetch(
+          `/api/contacts/${encodeURIComponent(selected.id)}/fields`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ssoKey: sso.blob ?? undefined,
+              expectedVersion: cFields?.version,
+              name: { firstName, lastName },
+            }),
+          },
+        );
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setCSave((p) => ({ ...p, [NAME_KEY]: { status: "error", err: j } }));
+          return false;
+        }
+        const first = j.firstName ?? firstName;
+        const last = j.lastName ?? lastName;
+        setCFields((prev) =>
+          prev ? { ...prev, firstName: first, lastName: last, version: j.version || prev.version } : prev,
+        );
+        const rename = (r: OpportunityRecord) =>
+          r.contactId === contactId
+            ? { ...r, first, last, contactName: `${first} ${last}`.trim() }
+            : r;
+        setData((prev) => prev.map(rename));
+        setCgData((prev) => prev.map(rename));
+        setCSave((p) => ({ ...p, [NAME_KEY]: undefined }));
+        return true;
+      } catch (e) {
+        setCSave((p) => ({ ...p, [NAME_KEY]: { status: "error", err: e } }));
+        return false;
       }
     },
     [selected, sso, cFields?.version],
@@ -4126,6 +4228,12 @@ export default function Dashboard() {
     if ("assignedTo" in patch) return (was.ownerId || "") === (now.ownerId || "");
     if ("monetaryValue" in patch)
       return (was.monetaryValue || 0) === (now.monetaryValue || 0);
+    // ROUND 131 — the record holds the opportunity's name as `oppName`; the
+    // PATCH sends it as `name`, the spelling GoHighLevel uses. Without this
+    // branch a rename would fall through to `return false` and every spurious
+    // 409 — the search-index lag this retry exists for — would surface as a
+    // conflict the rep has to resolve by hand.
+    if ("name" in patch) return (was.oppName || "") === (now.oppName || "");
     if (Array.isArray(patch.customFields))
       return (patch.customFields as { id: string }[]).every(
         (cf) => stableCf(was.cf[cf.id]) === stableCf(now.cf[cf.id]),
@@ -4202,6 +4310,11 @@ export default function Dashboard() {
         // this also keeps the held version fresh for the next edit.
         applyBoth(() => j.record!);
         setSaveState((p) => ({ ...p, [skey(rec.id, fk)]: undefined }));
+        // ROUND 131 — the outcome, for callers that have their own UI to close.
+        // Every existing caller ignores it; the rename editor must not close
+        // over a failed save, which is the one case where "it saved" and "the
+        // box went away" have to mean the same thing.
+        return true;
       } catch (e) {
         // Revert to the pre-edit record; never show a false "saved".
         applyBoth(() => rec);
@@ -4212,6 +4325,7 @@ export default function Dashboard() {
             err: e,
           },
         }));
+        return false;
       }
     },
     [sso],
@@ -7317,21 +7431,71 @@ export default function Dashboard() {
           <>
             <div className="phead">
               <div style={{ flex: 1 }}>
-                <h2>{enrollLabel(selected)}</h2>
+                {/* 🔴 ROUND 131 — BOTH NAMES ARE EDITABLE, AND THE SCREEN SAYS
+                    WHICH IS WHICH.
+
+                    ⚠️ THE CONTACT NAME IS NOW ALWAYS SHOWN, where it used to
+                    appear in the sub-line only when it DIFFERED from the
+                    opportunity's. That was right for a label and wrong for a
+                    control: on the common record the two names are identical,
+                    so the person's name would have been hidden exactly when
+                    somebody wanted to correct its spelling. */}
+                <InlineName
+                  heading
+                  display={enrollLabel(selected)}
+                  parts={[{ key: "name", label: "Case name", value: selected.oppName }]}
+                  editLabel="Rename this case"
+                  disabled={!canEdit(selected)}
+                  busy={saveState[skey(selected.id, "oppName")]?.status === "saving"}
+                  err={saveState[skey(selected.id, "oppName")]?.err}
+                  scope={
+                    <>
+                      <b>This case only.</b> The person&apos;s name is on the line
+                      below and is a different thing.
+                    </>
+                  }
+                  onSave={(v) =>
+                    saveField(selected, "oppName", { name: v.name }, (r) => ({
+                      ...r,
+                      oppName: v.name,
+                    }))
+                  }
+                />
                 <div className="sub">
-                  {/* Contact is secondary here; shown only when it isn't
-                      already the header, so the two are never confused. */}
-                  {clientName(selected) &&
-                  clientName(selected) !== selected.oppName
-                    ? `${clientName(selected)} · `
-                    : ""}
                   {selected.office || "—"} · {selected.stage || "—"}
+                  {/* 🔴 THE HARMONY ID MOVED HERE OUT OF THE HEADING, because
+                      the heading is now an editor: a button reading "Malone —
+                      #4821" that opens a box holding "Malone" is a control
+                      arguing with itself. It is the identifier that tells two
+                      records of one person apart, so it stays on screen — in
+                      the line that already carries the record's other facts. */}
+                  {selected.harmony ? ` · ${selected.harmony.replace("HRM-", "#")}` : ""}
                   {selected.pipelineName ? (
                     <span className="divbadge" title={selected.pipelineName}>
                       {selected.pipelineName}
                     </span>
                   ) : null}
                 </div>
+                <InlineName
+                  display={clientName(selected) || selected.contactName}
+                  parts={[
+                    { key: "firstName", label: "First name", value: cFields?.firstName ?? selected.first },
+                    { key: "lastName", label: "Last name", value: cFields?.lastName ?? selected.last },
+                  ]}
+                  editLabel="Rename this person"
+                  disabled={!canEdit(selected) || !selected.contactId || cLoading}
+                  busy={cSave[NAME_KEY]?.status === "saving"}
+                  err={cSave[NAME_KEY]?.err}
+                  scope={
+                    <>
+                      <b>About this person, not this case.</b>{" "}
+                      {cFields && cFields.opportunityCount > 1
+                        ? `This name shows on all ${cFields.opportunityCount} of their records.`
+                        : "This name follows them onto every record they hold."}
+                    </>
+                  }
+                  onSave={(v) => saveContactName(v.firstName, v.lastName)}
+                />
                 {selected.shared ? (
                   <div className="provenance">
                     {selected.ownerId === viewerId

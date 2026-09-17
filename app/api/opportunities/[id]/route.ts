@@ -25,6 +25,11 @@ export const runtime = "nodejs";
 interface PatchBody {
   ssoKey?: string;
   key?: string;
+  /**
+   * 🔴 ROUND 131 — THE CASE'S OWN NAME. Native, like `monetaryValue` and
+   * `status`; it is NOT a custom field and does not go through `customFields`.
+   */
+  name?: string;
   stageId?: string;
   assignedTo?: string | null;
   status?: string;
@@ -132,6 +137,25 @@ async function patchHandler(
     const defById = new Map(defs.map((d) => [d.id, d]));
 
     const put: Record<string, unknown> = {};
+    // 🔴 ROUND 131 — RENAME THE CASE.
+    //
+    // ⚠️ REFUSED EMPTY, BEFORE ANY WRITE. GoHighLevel will take a blank name and
+    // the record then shows as an empty row on every board — recoverable only by
+    // finding it by contact. "Nothing to update" would be the wrong answer here
+    // too: the rep typed something and deleted it, and silence reads as saved.
+    const renamedTo =
+      typeof body.name === "string" ? body.name.trim().slice(0, 200) : null;
+    if (renamedTo !== null && !renamedTo)
+      return NextResponse.json(
+        {
+          error: "A case needs a name.",
+          detail: "Type a name for this record. Nothing has been changed.",
+          refusal: true,
+          status: 400,
+        } as ApiError,
+        { status: 400 },
+      );
+    if (renamedTo) put.name = renamedTo;
     if (typeof body.stageId === "string" && body.stageId)
       put.pipelineStageId = body.stageId;
     if ("assignedTo" in body)
@@ -170,6 +194,27 @@ async function patchHandler(
 
     // ---- write + return the fresh record ----
     const record = await updateOpportunity(id, put);
+
+    // ═══ 🔴 THE READ-BACK, FOR THE NATIVE FIELD ONLY ════════════════════════
+    //
+    // ⚠️ THE CUSTOM-FIELD PATH ALREADY HAS ITS GUARD and it runs BEFORE the
+    // write: every id is checked against `defById` and an unknown one is
+    // rejected. A native key has no definition to check, so GoHighLevel takes
+    // the PUT, answers 200, and — if the key is wrong — stores nothing.
+    //
+    // `updateOpportunity` already re-reads uncached, so the check costs no
+    // extra call. It must FAIL the request: the panel reverts on a non-ok
+    // response, and a 200 carrying the old name would leave the new spelling on
+    // screen over the old one in GoHighLevel.
+    if (renamedTo && record && (record.oppName || "") !== renamedTo)
+      return NextResponse.json(
+        {
+          error: "GoHighLevel accepted the rename but did not store it.",
+          detail: `Sent “${renamedTo}”, read back “${record.oppName || "(nothing)"}”. The name has been left as it was on screen; change it in GoHighLevel.`,
+          status: 502,
+        } as ApiError,
+        { status: 502 },
+      );
 
     // ---- ITEM 5c: THE CLAIM -------------------------------------------------
     // A record LEAVES the reassign queue the moment it has an owner and a real
@@ -243,6 +288,16 @@ async function patchHandler(
         },
       );
     }
+    if (renamedTo && renamedTo !== (target.oppName || ""))
+      await emit(
+        "field.changed",
+        {
+          actor: { userId: session?.userId || "" },
+          opportunityId: id,
+          contactId: target.contactId,
+        },
+        { field: "Name", from: target.oppName, to: renamedTo },
+      );
     if (typeof body.stageId === "string" && body.stageId && body.stageId !== target.stageId)
       await emit(
         "field.changed",
