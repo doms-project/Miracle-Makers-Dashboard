@@ -14,6 +14,7 @@ import {
   hasMasterView,
 } from "@/lib/pipelineAccess";
 import { withGrants } from "@/lib/withGrants";
+import { peerConfigured, peerLabel } from "@/lib/peer";
 import type { OpportunitiesResponse, ApiError } from "@/lib/types";
 
 // Always dynamic; the GHL token and SSO secret are only ever read server-side.
@@ -108,6 +109,15 @@ async function buildResponse(
     folderNames,
     pipelines,
     stagesByPipeline,
+    // 🔴 ROUND 132 — IS THERE ANOTHER COMPANY TO TRANSFER TO, AND WHAT IS IT
+    // CALLED? A Transfer button that is always shown and always answers "this
+    // deployment has no link" is a button that teaches people to ignore
+    // buttons. The label ships with it so every sentence on the screen can name
+    // the other company rather than saying "the peer".
+    //
+    // ⚠️ THE FLAG ONLY. `PEER_PIT` is server-side and never leaves the server —
+    // this says whether a token is configured, never what it is.
+    peer: { configured: peerConfigured(), label: peerLabel() },
   };
 
   // SSO is enforced only once a Shared Secret is configured. Before that

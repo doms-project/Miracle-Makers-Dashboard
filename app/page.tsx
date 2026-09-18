@@ -37,6 +37,7 @@ import {
   hasValue,
 } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import TransferDialog from "@/components/TransferDialog";
 import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
@@ -1520,6 +1521,10 @@ export default function Dashboard() {
    * — so the caller bails and nothing happens, silently.
    */
   const [delRec, setDelRec] = useState<OpportunityRecord | null>(null);
+  // ROUND 132 — the record whose cross-account transfer dialog is open, and
+  // whether this deployment has another company to transfer to at all.
+  const [transferRec, setTransferRec] = useState<OpportunityRecord | null>(null);
+  const [peerInfo, setPeerInfo] = useState<{ configured: boolean; label: string } | null>(null);
   const [delBusy, setDelBusy] = useState(false);
   const [delErr, setDelErr] = useState<unknown>(null);
   /**
@@ -1808,6 +1813,7 @@ export default function Dashboard() {
       setFolderNames(body.folderNames || {});
       if (body.stages) setPipelineStages(body.stages);
       if (body.users) setUsers(body.users);
+      if (body.peer) setPeerInfo(body.peer);
       if (body.pipelines) setPipelines(body.pipelines);
       if (body.stagesByPipeline) setStagesByPipeline(body.stagesByPipeline);
       if (body.viewer?.homePipelineIds)
@@ -7307,6 +7313,27 @@ export default function Dashboard() {
         />
       ) : null}
 
+      {/* 🔴 ROUND 132 — CROSS-ACCOUNT TRANSFER.
+          ⚠️ THE DIALOG CLOSES ON "Close", NOT ON SUCCESS. The answer a transfer
+          returns — what carried, what was skipped and named, and above all
+          `steps` on a partial — is the most important thing this app ever puts
+          on screen, and a dialog that dismisses itself on a 200 throws it away
+          before it is read. So the record is removed from the list here and the
+          report stays up until it is dismissed. */}
+      {transferRec ? (
+        <TransferDialog
+          record={transferRec}
+          ssoBlob={sso.blob}
+          peerLabel={peerInfo?.label || "the other account"}
+          onTransferred={() => {
+            setData((d) => d.filter((r) => r.id !== transferRec.id));
+            setCgData((d) => d.filter((r) => r.id !== transferRec.id));
+            setSelId(null);
+          }}
+          onClose={() => setTransferRec(null)}
+        />
+      ) : null}
+
       {addCgOpen ? (
         <AddCaregiverDialog
           ssoBlob={sso.blob}
@@ -8474,6 +8501,22 @@ export default function Dashboard() {
                     lead with a reason tells you why leads fail.
                   </span>
                 )}
+                {/* 🔴 ROUND 132 — SEND THIS CASE TO THE OTHER COMPANY.
+                    ⚠️ ABSENT, NOT DISABLED, WHEN THERE IS NO PEER. A button
+                    that is always there and always answers "this deployment has
+                    no link to the other account" teaches people to ignore
+                    buttons. `peer.configured` is a flag off the payload — the
+                    token itself never leaves the server. */}
+                {peerInfo?.configured ? (
+                  <button
+                    type="button"
+                    className="pfdangerbtn"
+                    onClick={() => setTransferRec(selected)}
+                    title={`Recreates this person and case on ${peerInfo.label}, then closes this one. Nothing is deleted.`}
+                  >
+                    Transfer to {peerInfo.label}
+                  </button>
+                ) : null}
                 <span className="hint">
                   Full record, comms &amp; files live in GoHighLevel
                 </span>

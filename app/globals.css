@@ -1830,6 +1830,34 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rfmodal .previewhead{padding:14px 22px;}
 .rfmodal .moveacts{padding:14px 22px;}
 
+/* ── ROUND 132 · cross-account transfer ─────────────────────────────────────
+   ⚠️ THE SHELL IS BORROWED AND THE CONTENT IS NOT. `.previewmodal`,
+   `.movebox`, `.previewhead`, `.movebody`, `.moveacts`, `.ighost` and
+   `.cgsave` are the six dialogs' existing furniture — the first draft of this
+   file invented `.moveback` and `.movego`, which is round 120's and round
+   130's fault exactly, and they were caught by grepping the stylesheet before
+   shipping rather than by the sweep. */
+.tfnote{font-size:12px;line-height:1.55;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:9px 12px;margin-bottom:12px;}
+.tfroute{border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:12px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--ink);}
+.tflabel{display:inline-block;min-width:96px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);}
+/* 🔴 A REFUSAL IS NOT A FAULT. Same rule as ApiError.refusal: this is the app
+   declining on purpose and saying what to do, so it must not be dressed as a
+   crash the way round 119 found "choose a scope" dressed. */
+.tfrefuse{font-size:12.5px;line-height:1.55;color:var(--ink);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:10px 12px;margin-bottom:12px;}
+.tfrefuse b{display:block;margin-bottom:4px;}
+.tfcount{font-size:12.5px;color:var(--ink-2);margin-bottom:8px;}
+.tfskip{font-size:12px;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:12px;background:#fff;}
+.tfskip summary{cursor:pointer;font-weight:700;color:var(--plum);}
+.tfskip ul{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
+.tfskip li{line-height:1.5;color:var(--ink);overflow-wrap:anywhere;}
+.tfwhy{color:var(--ink-3);}
+.tfcannot{font-size:12px;line-height:1.55;color:var(--ink-2);border-top:1px solid var(--line);padding-top:10px;}
+.tfcannot ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px;}
+.tfok{font-size:12.5px;font-weight:700;color:var(--ok);background:var(--ok-soft);border:1px solid #bfe3cd;border-radius:9px;padding:9px 12px;margin-bottom:10px;}
+.tfbad{font-size:12.5px;font-weight:700;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c9;border-radius:9px;padding:9px 12px;margin-bottom:10px;}
+.tfsteps{margin:0 0 12px;padding-left:20px;font-size:12px;line-height:1.6;color:var(--ink);display:flex;flex-direction:column;gap:4px;}
+.tfsteps li{overflow-wrap:anywhere;}
+
 /* Label, control and hint on ONE left edge, with the panel's own numbers. */
 .rfmodal .movebody .irow{display:block;}
 .rfmodal .movebody .irow label,

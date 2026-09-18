@@ -25,12 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "131",
+  round: "132",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "both names are editable in the record panel — the case's own name and the " +
-    "person's, each saying which of the two it changes · and the header no " +
-    "longer calls a record “new” because it has no Harmony ID yet",
+    "a case can be transferred to the other company's sub-account: fields are " +
+    "translated by name and by option value, it lands at TRANSFERRED IN, this " +
+    "side closes into Transferred Out and is never deleted — and every skipped " +
+    "field is named on the screen before anything is sent",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

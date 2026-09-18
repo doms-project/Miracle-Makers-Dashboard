@@ -196,6 +196,14 @@ export interface OpportunitiesResponse {
   // Multi-pipeline (v2).
   pipelines?: { id: string; name: string }[]; // the selected pipelines, in order
   stagesByPipeline?: Record<string, { id: string; name: string }[]>; // pipelineId -> its stages
+  /**
+   * 🔴 ROUND 132 — the other company's sub-account, if this deployment has one.
+   *
+   * ⚠️ `configured` IS A FLAG, NOT A CREDENTIAL. `PEER_PIT` never leaves the
+   * server; this only says whether one is set, so the Transfer control can be
+   * absent rather than present-and-always-failing.
+   */
+  peer?: { configured: boolean; label: string };
 }
 
 export interface ApiError {
