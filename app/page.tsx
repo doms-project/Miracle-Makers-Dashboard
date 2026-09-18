@@ -398,6 +398,27 @@ type SaveState =
 // ROUND 131 — the contact-save map is keyed by custom-field id; the person's
 // NATIVE name has none, so it takes a key no field id can collide with.
 const NAME_KEY = "__contactName";
+// ROUND 134 — the same trick for the other two native contact fields.
+const PHONE_KEY = "__contactPhone";
+const EMAIL_KEY = "__contactEmail";
+
+/**
+ * 🔴 ONE SENTENCE, USED TWICE, SO IT CANNOT DRIFT APART.
+ *
+ * The phone and the email are exactly as person-scoped as the name, and the
+ * panel already has the wording for that. Writing it out at each control would
+ * be two more places for it to be edited into disagreeing with the third.
+ */
+function ReachScope({ count }: { count?: number }) {
+  return (
+    <>
+      <b>About this person, not this case.</b>{" "}
+      {count && count > 1
+        ? `This shows on all ${count} of their records.`
+        : "This follows them onto every record they hold."}
+    </>
+  );
+}
 
 // Multi-select / long-text fields get a full-width row.
 const isWideField = (dt: string): boolean =>
@@ -1450,6 +1471,10 @@ export default function Dashboard() {
     // ROUND 131 — native, read from the contact rather than from `values`.
     firstName: string;
     lastName: string;
+    // ROUND 134 — likewise, and the contact read is authoritative over the
+    // opportunity's embedded copy (round 133: the search index lags).
+    email: string;
+    phone: string;
   } | null>(null);
   const [cLoading, setCLoading] = useState(false);
   const [cErr, setCErr] = useState<unknown>(null);
@@ -3908,6 +3933,8 @@ export default function Dashboard() {
             opportunityCount: j.opportunityCount || 0,
             firstName: j.firstName || "",
             lastName: j.lastName || "",
+            email: j.email || "",
+            phone: j.phone || "",
           });
         })
         .catch((e) => {
@@ -3959,6 +3986,65 @@ export default function Dashboard() {
         setCSave((p) => ({ ...p, [def.id]: undefined }));
       } catch (e) {
         setCSave((p) => ({ ...p, [def.id]: { status: "error", err: e } }));
+      }
+    },
+    [selected, sso, cFields?.version],
+  );
+
+  // ═══ 🔴 ROUND 134 — HOW TO REACH THEM ═════════════════════════════════════
+  //
+  // ⚠️ ONE FIELD PER CALL, AND THAT IS THE WHOLE DESIGN. The route reads an
+  // absent key as "leave alone" and an empty string as "clear"; sending both
+  // boxes on every save would wipe the email whenever somebody corrected a
+  // phone number. So a phone save sends `phone` and nothing else.
+  //
+  // 🔴 NO OPTIMISTIC PAINT, for the same reason as the name: these are NATIVE
+  // fields and the server's read-back is what decides whether they stored.
+  // ⚠️ AND THE SERVER MAY GIVE BACK SOMETHING DIFFERENT FROM WHAT WAS TYPED —
+  // GoHighLevel normalises "610-555-0101" to "+16105550101". The panel takes
+  // the value the READ-BACK returned, so what is on screen is what is stored
+  // rather than what was typed at it.
+  const saveContactReach = useCallback(
+    async (which: "phone" | "email", value: string) => {
+      if (!selected?.contactId) return false;
+      const contactId = selected.contactId;
+      const key = which === "phone" ? PHONE_KEY : EMAIL_KEY;
+      setCSave((p) => ({ ...p, [key]: { status: "saving" } }));
+      try {
+        const res = await fetch(
+          `/api/contacts/${encodeURIComponent(selected.id)}/fields`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ssoKey: sso.blob ?? undefined,
+              expectedVersion: cFields?.version,
+              [which]: value,
+            }),
+          },
+        );
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setCSave((p) => ({ ...p, [key]: { status: "error", err: j } }));
+          return false;
+        }
+        const stored = (which === "phone" ? j.phone : j.email) ?? value;
+        setCFields((prev) =>
+          prev ? { ...prev, [which]: stored, version: j.version || prev.version } : prev,
+        );
+        // Every record this person holds, in both lists — the same rule the
+        // rename follows, and the reason the scope sentence says so.
+        const touch = (r: OpportunityRecord) =>
+          r.contactId === contactId
+            ? { ...r, ...(which === "phone" ? { contactPhone: stored } : { contactEmail: stored }) }
+            : r;
+        setData((prev) => prev.map(touch));
+        setCgData((prev) => prev.map(touch));
+        setCSave((p) => ({ ...p, [key]: undefined }));
+        return true;
+      } catch (e) {
+        setCSave((p) => ({ ...p, [key]: { status: "error", err: e } }));
+        return false;
       }
     },
     [selected, sso, cFields?.version],
@@ -7504,6 +7590,7 @@ export default function Dashboard() {
                   ) : null}
                 </div>
                 <InlineName
+                  what="Person"
                   display={clientName(selected) || selected.contactName}
                   parts={[
                     { key: "firstName", label: "First name", value: cFields?.firstName ?? selected.first },
@@ -7582,31 +7669,61 @@ export default function Dashboard() {
                   Client First/Last Name CUSTOM fields can disagree with it —
                   see the report; the contact is authoritative for reaching
                   someone, which is what this block is for. */}
-              {(selected.contactName ||
-                selected.contactPhone ||
-                selected.contactEmail) ? (
+              {/* 🔴 ROUND 134 — AND BOTH OF THESE ARE EDITABLE NOW.
+                  Round 133 shipped a transfer refusal reading "Add a phone
+                  number or an email on this record, then transfer" — and there
+                  was no way to. Both rendered here and neither opened; the only
+                  route was GoHighLevel, which is the thing that sentence
+                  implies you need not do.
+
+                  🔴 THE GATE CHANGED TOO, AND IT HAD TO. This block used to
+                  render only when the contact had a name, a phone or an email.
+                  As a LABEL that was right — nothing to show, show nothing. As
+                  an EDITOR it is exactly backwards: the contact with none of
+                  the three is the one person who needs the control, and they
+                  were the one person who could not see it. */}
+              {selected.contactId ? (
                 <div className="contactbar">
                   <div className="cbname">
                     {selected.contactName || "No name on the contact"}
                   </div>
                   <div className="cbrow">
-                    {selected.contactPhone ? (
-                      <a
-                        className="cbitem"
-                        href={`tel:${selected.contactPhone.replace(/[^\d+]/g, "")}`}
-                      >
-                        {selected.contactPhone}
-                      </a>
-                    ) : (
-                      <span className="cbitem none">No phone</span>
-                    )}
-                    {selected.contactEmail ? (
-                      <a className="cbitem" href={`mailto:${selected.contactEmail}`}>
-                        {selected.contactEmail}
-                      </a>
-                    ) : (
-                      <span className="cbitem none">No email</span>
-                    )}
+                    <InlineName
+                      what="Phone"
+                      display={cFields?.phone ?? selected.contactPhone}
+                      empty="No phone"
+                      link={
+                        (cFields?.phone ?? selected.contactPhone)
+                          ? `tel:${(cFields?.phone ?? selected.contactPhone).replace(/[^\d+]/g, "")}`
+                          : undefined
+                      }
+                      parts={[{ key: "phone", label: "Phone number",
+                        value: cFields?.phone ?? selected.contactPhone }]}
+                      editLabel="Edit this person's phone number"
+                      disabled={!canEdit(selected) || cLoading}
+                      busy={cSave[PHONE_KEY]?.status === "saving"}
+                      err={cSave[PHONE_KEY]?.err}
+                      scope={<ReachScope count={cFields?.opportunityCount} />}
+                      onSave={(v) => saveContactReach("phone", v.phone)}
+                    />
+                    <InlineName
+                      what="Email"
+                      display={cFields?.email ?? selected.contactEmail}
+                      empty="No email"
+                      link={
+                        (cFields?.email ?? selected.contactEmail)
+                          ? `mailto:${cFields?.email ?? selected.contactEmail}`
+                          : undefined
+                      }
+                      parts={[{ key: "email", label: "Email address",
+                        value: cFields?.email ?? selected.contactEmail }]}
+                      editLabel="Edit this person's email address"
+                      disabled={!canEdit(selected) || cLoading}
+                      busy={cSave[EMAIL_KEY]?.status === "saving"}
+                      err={cSave[EMAIL_KEY]?.err}
+                      scope={<ReachScope count={cFields?.opportunityCount} />}
+                      onSave={(v) => saveContactReach("email", v.email)}
+                    />
                   </div>
                 </div>
               ) : null}

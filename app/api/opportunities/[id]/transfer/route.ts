@@ -206,7 +206,7 @@ async function preflight(oppId: string): Promise<
     refusals.push({
       error: `${[contact.firstName, contact.lastName].filter(Boolean).join(" ") || "This contact"} has no phone number and no email address, so they cannot be created on ${peerLabel()}.`,
       detail:
-        "GoHighLevel needs one of them to identify a person — it will not create a contact without either. Add a phone number or an email on this record, then transfer.",
+        "GoHighLevel needs one of them to identify a person — it will not create a contact without either. Close this and add one on the record panel behind it — the phone and the email are editable there — then transfer.",
     });
 
   const arrival = arrivalIn(record.pipelineName || "", peerPipes);

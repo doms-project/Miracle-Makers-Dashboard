@@ -11,7 +11,7 @@ import {
   folderIdsPresent,
 } from "./fieldFolders";
 import { divisionLabel } from "./division";
-import { emailKey, phoneKey } from "./phone";
+import { e164, emailKey, phoneKey } from "./phone";
 import { mapLimit, type Settled } from "./concurrency";
 
 // Account-specific — MUST come from env (re-derive per account with
@@ -5682,17 +5682,35 @@ export async function updateContactCustomFields(
  * old spelling sitting in `name` — a rename that looks done here and is still
  * wrong everywhere else.
  */
-export async function updateContactName(
+export async function updateContactNative(
   contactId: string,
-  n: { firstName: string; lastName: string },
+  n: { firstName?: string; lastName?: string; email?: string; phone?: string },
 ): Promise<void> {
-  const firstName = n.firstName.trim();
-  const lastName = n.lastName.trim();
-  if (!firstName && !lastName)
-    throw new GhlError("A person needs a name.", 400);
-  await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, {
-    firstName,
-    lastName,
-    name: [firstName, lastName].filter(Boolean).join(" "),
-  });
+  const body: Record<string, unknown> = {};
+
+  // ── THE NAME PAIR ────────────────────────────────────────────────────────
+  // Sent together or not at all: `name` is composed from both, so writing one
+  // half from a patch that only carries the other would compose a name out of
+  // a value this call was never given.
+  if (n.firstName !== undefined || n.lastName !== undefined) {
+    const firstName = (n.firstName ?? "").trim();
+    const lastName = (n.lastName ?? "").trim();
+    if (!firstName && !lastName) throw new GhlError("A person needs a name.", 400);
+    body.firstName = firstName;
+    body.lastName = lastName;
+    body.name = [firstName, lastName].filter(Boolean).join(" ");
+  }
+
+  // ── ROUND 134 · HOW TO REACH THEM ────────────────────────────────────────
+  // ⚠️ `e164()` FOR THE PHONE, NOT A SECOND RULE WRITTEN HERE. lib/phone.ts is
+  // explicit that a second copy is a second rule that can drift, and it is
+  // already the rule the import wizard and the duplicate check use: a US
+  // 10- or 11-digit number becomes +1XXXXXXXXXX, and ANYTHING ELSE is written
+  // exactly as typed. A UK mobile or a number with an extension may be
+  // perfectly correct, and code does not get to decide otherwise.
+  if (n.email !== undefined) body.email = n.email.trim();
+  if (n.phone !== undefined) body.phone = n.phone.trim() ? e164(n.phone).value : "";
+
+  if (!Object.keys(body).length) return;
+  await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, body);
 }
