@@ -34,6 +34,9 @@ export default function InlineName({
   err,
   disabled,
   heading,
+  what,
+  link,
+  empty,
   onSave,
 }: {
   /** What the name reads as when nobody is editing it. */
@@ -49,6 +52,12 @@ export default function InlineName({
   disabled?: boolean;
   /** The opportunity name is the panel's heading; the person's name is not. */
   heading?: boolean;
+  /** The small uppercase label — PERSON, PHONE, EMAIL. Omitted on a heading. */
+  what?: string;
+  /** `tel:` / `mailto:` — see the note on the resting state below. */
+  link?: string;
+  /** What to show when there is no value: "No phone", not "Unnamed". */
+  empty?: string;
   onSave: (values: Record<string, string>) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
@@ -82,23 +91,56 @@ export default function InlineName({
   };
 
   const Rest = heading ? "h2" : "div";
+  const pencil = (
+    <button
+      type="button"
+      className="inmpenbtn"
+      onClick={() => setOpen(true)}
+      disabled={disabled}
+      title={disabled ? "You can only edit records you own or follow." : editLabel}
+      aria-label={`${editLabel}. Currently ${display || "not set"}.`}
+    >
+      ✎
+    </button>
+  );
   if (!open)
     return (
       <Rest className={heading ? "inmhead" : "inmline"}>
-        {!heading ? <span className="inmwhat">Person</span> : null}
-        <button
-          type="button"
-          className="inmbtn"
-          onClick={() => setOpen(true)}
-          disabled={disabled}
-          title={disabled ? "You can only rename records you own or follow." : editLabel}
-          aria-label={`${editLabel}. Currently ${display || "unnamed"}.`}
-        >
-          <span className="inmval">{display || "Unnamed"}</span>
-          {!disabled ? <span className="inmpen" aria-hidden="true">✎</span> : null}
-        </button>
-        {/* ⚠️ THE ERROR SURVIVES THE EDITOR CLOSING. A failed rename that took
-            its message away with it would look like a save. */}
+        {!heading && what ? <span className="inmwhat">{what}</span> : null}
+        {/* 🔴 ROUND 134 — A VALUE THAT IS ALSO A LINK KEEPS THE LINK.
+            A phone number's commonest job on a care-agency dashboard is to be
+            DIALLED, not corrected, and `tel:` / `mailto:` is how that happens.
+            Making the whole value an edit button would have traded the everyday
+            action for the rare one. So the value stays an anchor and the pencil
+            beside it is the editor.
+            ⚠️ AND THE EMPTY STATE IS THE OTHER WAY ROUND: with no number there
+            is no link to protect, so the placeholder IS the button — click "No
+            phone", type, save. That is exactly the case the transfer refusal
+            points at. */}
+        {link && display ? (
+          <>
+            <a className="inmbtn inmanchor" href={link}>
+              <span className="inmval">{display}</span>
+            </a>
+            {pencil}
+          </>
+        ) : (
+          <button
+            type="button"
+            className="inmbtn"
+            onClick={() => setOpen(true)}
+            disabled={disabled}
+            title={disabled ? "You can only edit records you own or follow." : editLabel}
+            aria-label={`${editLabel}. Currently ${display || empty || "not set"}.`}
+          >
+            <span className={`inmval${!display ? " inmnone" : ""}`}>
+              {display || empty || "Unnamed"}
+            </span>
+            {!disabled ? <span className="inmpen" aria-hidden="true">✎</span> : null}
+          </button>
+        )}
+        {/* ⚠️ THE ERROR SURVIVES THE EDITOR CLOSING. A failed save that took its
+            message away with it would look like a save. */}
         {err ? <ErrorMessage error={err} /> : null}
       </Rest>
     );

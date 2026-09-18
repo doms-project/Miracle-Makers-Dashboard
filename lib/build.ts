@@ -25,13 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "133",
+  round: "134",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the transfer dialog refuses before the confirm rather than after it: a " +
-    "contact with no phone and no email cannot be created on any account, and " +
-    "the preflight says so with Send disabled · and “no fields carry” is a " +
-    "sentence rather than a nought",
+    "the phone and the email are editable in the record panel — click to type, " +
+    "the link is kept and the pencil beside it opens the editor · which is what " +
+    "makes round 133's “add one, then transfer” an instruction somebody can " +
+    "actually follow",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

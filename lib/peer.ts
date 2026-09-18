@@ -120,7 +120,7 @@ function peerError(path: string, status: number, raw: string): GhlError {
     return new GhlError(
       "That person has no phone number and no email address.",
       status,
-      `GoHighLevel needs one of them to create a contact — it will not accept a person with neither, on any account. Add a phone number or an email on this record, then transfer. (${peerLabel()}: ${path} → ${status})`,
+      `GoHighLevel needs one of them to create a contact — it will not accept a person with neither, on any account. Add one on the record panel — the phone and the email are editable there — then transfer. (${peerLabel()}: ${path} → ${status})`,
     );
   return new GhlError(
     `${peerLabel()} refused the request.`,

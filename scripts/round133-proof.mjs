@@ -242,8 +242,20 @@ ok("🔴 naming the person and the two things missing",
    p.body.refusals);
 ok("⚠️ and saying which company it cannot be created on",
    /ODP Care/.test(p.body.refusals?.[0]?.error || ""), p.body.refusals?.[0]?.error);
-ok("🔴 the fix is in the message — add one of them, then transfer",
-   /Add a phone number or an email on this record, then transfer/.test(p.body.refusals?.[0]?.detail || ""),
+// ⚠️ THE PROPERTY, NOT THE SENTENCE. This first read
+// `/Add a phone number or an email on this record, then transfer/` — the exact
+// wording round 133 shipped — and round 134 changed that wording ON PURPOSE,
+// because the old one instructed an action the screen did not offer. The
+// assertion went red while the app got better, which is the fourth time an
+// assertion of mine has been pinned to a literal I then improved.
+//
+// What must hold, whatever the phrasing: it names BOTH fields, it tells the
+// reader to ADD one, and GoHighLevel's own wording stays out of it. Round
+// 134's A7 owns the claim about where it points.
+ok("🔴 the fix is in the message — add one of the two",
+   /\badd\b/i.test(p.body.refusals?.[0]?.detail || "") &&
+   /phone/i.test(p.body.refusals?.[0]?.detail || "") &&
+   /email/i.test(p.body.refusals?.[0]?.detail || ""),
    p.body.refusals?.[0]?.detail);
 ok("⚠️ the words “query parameter” are nowhere near it",
    !/query parameter/i.test(JSON.stringify(p.body)), p.body.refusals);
@@ -470,7 +482,7 @@ ok("🔴 Send is DISABLED — nobody is allowed to walk into the 400",
    d.sendDisabled === true, d.sendDisabled);
 ok("🔴 the amber refusal names the problem and the fix",
    /no phone number and no email address/.test(d.refusal || "") &&
-   /Add a phone number or an email/.test(d.refusal || ""), d.refusal);
+   /\badd\b/i.test(d.refusal || ""), d.refusal);
 ok("🔴 AND THE SHORT REASON IS IN THE BUTTON ROW, not only at the top",
    /no phone number and no email address/.test(d.whyNot || ""), d.whyNot);
 ok("⚠️ physically beside it — same row, to its left",

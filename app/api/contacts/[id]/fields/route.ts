@@ -3,7 +3,7 @@ import {
   getContactCustomFields,
   countContactOpportunities,
   updateContactCustomFields,
-  updateContactName,
+  updateContactNative,
   getEditableFieldDefs,
   getOpportunityById,
   GhlError,
@@ -12,6 +12,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord, canSeeRecord } from "@/lib/visibility";
 import { isFieldEditable } from "@/lib/editable";
 import { versionGuard } from "@/lib/concurrency";
+import { emailKey, phoneKey } from "@/lib/phone";
 import type { ApiError } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -98,6 +99,18 @@ export async function PATCH(
       // in `fields`: `fields` is validated against the custom-field definitions
       // and a native name has no definition to validate against.
       name?: { firstName?: string; lastName?: string };
+      /**
+       * 🔴 ROUND 134 — HOW TO REACH THEM. Native, like the name, and for the
+       * same reason a separate key: `fields` is validated against the
+       * custom-field definitions and these have none.
+       *
+       * ⚠️ `undefined` MEANS "LEAVE ALONE" AND `""` MEANS "CLEAR". They are not
+       * the same thing and must not be collapsed: a panel that sends both boxes
+       * on every save would wipe the email whenever somebody corrected a phone
+       * number.
+       */
+      email?: string;
+      phone?: string;
     };
     const g = await gate(id, body.ssoKey || null, "write");
     if (g instanceof NextResponse) return g;
@@ -106,7 +119,56 @@ export async function PATCH(
     const wantsName = !!body.name;
     const newFirst = String(body.name?.firstName ?? "").trim();
     const newLast = String(body.name?.lastName ?? "").trim();
-    if (!entries.length && !wantsName)
+    const wantsEmail = typeof body.email === "string";
+    const wantsPhone = typeof body.phone === "string";
+    const newEmail = String(body.email ?? "").trim();
+    const newPhone = String(body.phone ?? "").trim();
+
+    // ═══ 🔴 ROUND 134 · VALIDATE ENOUGH TO BE USEFUL, NOT ENOUGH TO BE
+    //                   ANNOYING ═══════════════════════════════════════════
+    //
+    // GoHighLevel rejects a malformed email with a 400 whose wording is its
+    // own; catching it here and saying so in a sentence is the difference
+    // between "fix the address" and a raw refusal the rep has to interpret.
+    //
+    // ⚠️ AND BOTH RULES ARE DELIBERATELY LOOSE.
+    //   · the email test is shape-only — something, an @, something, a dot,
+    //     something. It does not know which domains exist, does not object to
+    //     "+" tags, and does not enforce a TLD list that goes stale.
+    //   · the phone test is `phoneKey`'s OWN threshold, reused rather than
+    //     invented: fewer than ten digits is "too short to be a phone number",
+    //     which is already this codebase's definition. Ten or more goes
+    //     through — an international number with an extension is not this
+    //     code's business to refuse.
+    //
+    // ⚠️ CLEARING IS ALLOWED. "" is a correction — somebody typed the wrong
+    // number — and refusing it would leave a wrong number on the record,
+    // which is worse than none. A person with neither is then refused by the
+    // TRANSFER, where the consequence actually lives.
+    if (wantsEmail && newEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail))
+      return NextResponse.json(
+        {
+          error: `“${newEmail}” is not an email address.`,
+          detail:
+            "It needs an @ and a dot after it — like name@example.com. Nothing has been changed.",
+          refusal: true,
+          status: 400,
+        } as ApiError,
+        { status: 400 },
+      );
+    if (wantsPhone && newPhone && !phoneKey(newPhone))
+      return NextResponse.json(
+        {
+          error: `“${newPhone}” is too short to be a phone number.`,
+          detail:
+            "A phone number needs at least ten digits. Nothing has been changed.",
+          refusal: true,
+          status: 400,
+        } as ApiError,
+        { status: 400 },
+      );
+
+    if (!entries.length && !wantsName && !wantsEmail && !wantsPhone)
       return NextResponse.json(
         { error: "Nothing to save." } as ApiError,
         { status: 400 },
@@ -190,10 +252,11 @@ export async function PATCH(
     if (conflict) return conflict;
 
     if (entries.length) await updateContactCustomFields(g.contactId, entries);
-    if (wantsName)
-      await updateContactName(g.contactId, {
-        firstName: newFirst,
-        lastName: newLast,
+    if (wantsName || wantsEmail || wantsPhone)
+      await updateContactNative(g.contactId, {
+        ...(wantsName ? { firstName: newFirst, lastName: newLast } : {}),
+        ...(wantsEmail ? { email: newEmail } : {}),
+        ...(wantsPhone ? { phone: newPhone } : {}),
       });
 
     const after = await getContactCustomFields(g.contactId);
@@ -220,6 +283,38 @@ export async function PATCH(
         } as ApiError,
         { status: 502 },
       );
+
+    // ═══ 🔴 ROUND 134 · AND THE READ-BACK MUST COMPARE MEANING, NOT TEXT ═════
+    //
+    // GOHIGHLEVEL NORMALISES BOTH OF THESE. Send "610-555-0101" and it stores
+    // "+16105550101"; send "Mary@Example.com" and it stores it lower-cased. A
+    // strict string comparison would then FAIL a save that worked perfectly —
+    // the panel would revert a correct number and tell the rep to go and fix it
+    // in GoHighLevel, where they would find it already correct.
+    //
+    // 🔴 THAT IS A WORSE BUG THAN THE ONE THE READ-BACK EXISTS TO CATCH,
+    // because it fires on the happy path rather than the broken one.
+    //
+    // ⚠️ `phoneKey` AND `emailKey`, NOT A COMPARISON WRITTEN HERE. They are
+    // lib/phone.ts's own answer to "is this the same number / the same
+    // address", already used by the duplicate check, and that file says in so
+    // many words that a second copy is a second rule that can drift.
+    const reachMismatch =
+      (wantsPhone && phoneKey(after.phone) !== phoneKey(newPhone)) ||
+      (wantsEmail && emailKey(after.email) !== emailKey(newEmail));
+    if (reachMismatch) {
+      const what = wantsPhone && phoneKey(after.phone) !== phoneKey(newPhone)
+        ? { label: "phone number", sent: newPhone, got: after.phone }
+        : { label: "email address", sent: newEmail, got: after.email };
+      return NextResponse.json(
+        {
+          error: `GoHighLevel accepted the ${what.label} but did not store it.`,
+          detail: `Sent “${what.sent || "(blank)"}”, read back “${what.got || "(nothing)"}”. It has been left as it was on screen; change it in GoHighLevel.`,
+          status: 502,
+        } as ApiError,
+        { status: 502 },
+      );
+    }
 
     return NextResponse.json(after, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
