@@ -417,10 +417,70 @@ for (const f of files) {
   }
 }
 
+// ── 11 · A CLASS USED IN JSX AND DEFINED NOWHERE ──────────────────────────
+//
+// 🔴 THREE ROUNDS RUNNING. Round 120 shipped `.moveacts` and `.savemsg.ok`
+// used everywhere and defined nowhere. Round 130 shipped `.pfunkname`, in a
+// round about not repeating faults. Round 132 wrote `.moveback` and `.movego`
+// into a new dialog — a backdrop with no `position:fixed` and a primary button
+// with no colour, which renders as a dialog inlined into the page behind a
+// plain-text button.
+//
+// ⚠️ ALL THREE WERE CAUGHT BY GREPPING THE STYLESHEET BY HAND, which is not a
+// process. Each time the report said "the sweep only catches shapes it has
+// already met". It has now met this one three times.
+//
+// ⚠️ STRING LITERALS ONLY — `className="a b c"` — and deliberately not template
+// literals. A first pass split `className={...}` too and produced two dozen
+// false positives out of interpolated variables (`isOver`, `sortKey`, `def`),
+// and rule 9 already says a sweep that produces false positives is worse than
+// no sweep. The conservative version catches every one of the five real faults.
+//
+// 🔴 AND THE FIRST RUN OF THIS RULE PRODUCED A FALSE POSITIVE ANYWAY — it
+// matched `className="chips"` inside a COMMENT in app/page.tsx describing the
+// bug that class once was. Two lines below a comment saying false positives are
+// worse than no sweep. Comments are stripped first now, which is what every
+// other rule in this file already does and this one did not.
+//
+// ⚠️ A CLASS USED AS A SELECTOR IN scripts/ IS NOT UNDEFINED, IT IS A HOOK.
+// `.pffolders` and `.pfstages` style nothing and are load-bearing in
+// section-grid-proof and pipeline-controls-proof, which address the section
+// list through them. A marker with a job is not the fault this rule is for, and
+// exempting them automatically beats a hand-kept ignore list that goes stale.
+const cssText = readFileSync("app/globals.css", "utf8");
+const cssDefined = new Set(
+  [...cssText.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]),
+);
+const scriptText = readdirSync("scripts")
+  .filter((n) => /\.mjs$/.test(n))
+  .map((n) => readFileSync(`scripts/${n}`, "utf8"))
+  .join("\n");
+const isHook = (cls) =>
+  new RegExp(`["'\`][^"'\`]*\\.${cls}\\b`).test(scriptText);
+/** Comments out, so the rule cannot be triggered by prose about itself. */
+const stripComments = (s) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+for (const f of files) {
+  if (!/\.tsx$/.test(f)) continue;
+  const src = stripComments(readFileSync(f, "utf8"));
+  for (const m of src.matchAll(/className="([^"{}]+)"/g)) {
+    for (const cls of m[1].trim().split(/\s+/)) {
+      if (!cls || cssDefined.has(cls) || isHook(cls)) continue;
+      const n = src.slice(0, m.index).split("\n").length;
+      flag("A CLASS USED IN JSX AND DEFINED NOWHERE", f, n, m[0],
+           `\`.${cls}\` appears in no rule in globals.css and in no proof ` +
+           "selector. It renders as an unstyled element — which looks like a " +
+           "layout bug, not a missing class, so it gets investigated as one. " +
+           "Define it, or use the existing class that already means what you " +
+           "meant, or delete it.");
+    }
+  }
+}
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`
-    : "\nNo loader, credential, trim, wall or tickbox shape matches a known defect. ✅",
+    : "\nNo loader, credential, trim, wall, tickbox or undefined-class shape matches a known defect. ✅",
 );
 console.log(
   "\n⚠️ A CLEAN SWEEP IS NOT A PROOF OF CORRECTNESS. It only says nothing " +

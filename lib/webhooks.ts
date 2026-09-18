@@ -27,6 +27,13 @@ export type WebhookEventName =
    * not, so anything mirroring this pipeline needs to be told.
    */
   | "opportunity.deleted"
+  /**
+   * 🔴 ROUND 132 — THE RECORD LEFT THE COMPANY. A consumer mirroring this
+   * account sees a pipeline move and nothing else; this says the case now lives
+   * in a different sub-account, and carries both ids so the trail is followable
+   * from either side.
+   */
+  | "opportunity.transferred"
   | "field.changed"
   | "note.added"
   | "follower.added"

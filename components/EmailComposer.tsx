@@ -205,7 +205,15 @@ export default function EmailComposer({
               </button>
             </div>
           ) : confirming ? (
-            <div className="emailconfirm">
+            <div>
+              {/* ⚠️ ROUND 132 — this carried `className="emailconfirm"`, a
+                  class defined in no stylesheet and queried by no proof. It
+                  styled nothing and read as though it did. Found by the
+                  sweep's new rule 11 on its first run; removing it is a
+                  provable no-op because nothing anywhere selects it.
+                  ⚠️ THE COMMENT IS INSIDE THE DIV, not above it: a ternary arm
+                  takes ONE element, and a comment placed beside it is a second
+                  child. That is what the first version of this did. */}
               <div className="istep">Confirm send</div>
               <div className="imeta" style={{ marginBottom: 8 }}>
                 To:{" "}
