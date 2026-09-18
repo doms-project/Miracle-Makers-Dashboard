@@ -202,6 +202,15 @@ export function translate(args: {
   contactValues: Record<string, unknown>;
   contactFirst: string;
   contactLast: string;
+  /**
+   * 🔴 ROUND 133 — FROM THE CONTACT READ, NOT FROM `record.contactEmail`.
+   * The opportunity carries a copy of its contact from the SEARCH index, which
+   * lags; these are what `/contacts/{id}` currently says. They are also the two
+   * fields GoHighLevel requires to create a person at all, so the value that
+   * decides whether a transfer is possible must be the live one.
+   */
+  contactEmail: string;
+  contactPhone: string;
   notes: string[];
   selfContactDefs: EditableFieldDef[];
   selfOppDefs: EditableFieldDef[];
@@ -224,8 +233,8 @@ export function translate(args: {
     contact: {
       firstName: args.contactFirst,
       lastName: args.contactLast,
-      email: args.record.contactEmail || "",
-      phone: args.record.contactPhone || "",
+      email: args.contactEmail,
+      phone: args.contactPhone,
       // ⚠️ THE SOURCE IS REWRITTEN, NOT COPIED. "Facebook lead form" on the
       // receiving account would be false: this person arrived there by
       // transfer, and where they originally came from is in the notes.

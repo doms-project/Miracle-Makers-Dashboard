@@ -180,6 +180,35 @@ async function preflight(oppId: string): Promise<
   ]);
 
   const refusals: Refusal[] = [];
+
+  // ═══ 🔴 ROUND 133 · THE CONTACT THAT CANNOT BE CREATED AT ALL ════════════
+  //
+  // PROVEN LIVE: "Jack Ratigan" has no phone and no email, and
+  // `/contacts/upsert` answered 400 "Pass at least one of number, email query
+  // parameter". The safety property held — nothing reached the peer and the
+  // source stayed open — but the person only found out AFTER pressing Send, and
+  // what they were shown was:
+  //
+  //     400 · Miracle Makers refused the request.
+  //     /contacts/upsert → 400 — Pass at least one of number, email query parameter
+  //
+  // 🔴 ACCURATE AND UNREADABLE, IN THREE SEPARATE WAYS. It reads as the other
+  // company objecting to something, when this is GoHighLevel's universal rule
+  // about what a contact IS. "Query parameter" is GHL's wording for a body
+  // field. And it arrives as a fault, after a confirm, so it reads as something
+  // the user did.
+  //
+  // ⚠️ AND THE PREFLIGHT ALREADY KNOWS. It reads the contact — that is where
+  // the carried-field count comes from — so this was answerable before anybody
+  // clicked. The same shape as round 119's item 3: the app declining on purpose
+  // is not a fault and must not wear the fault wrapper.
+  if (!contact.email && !contact.phone)
+    refusals.push({
+      error: `${[contact.firstName, contact.lastName].filter(Boolean).join(" ") || "This contact"} has no phone number and no email address, so they cannot be created on ${peerLabel()}.`,
+      detail:
+        "GoHighLevel needs one of them to identify a person — it will not create a contact without either. Add a phone number or an email on this record, then transfer.",
+    });
+
   const arrival = arrivalIn(record.pipelineName || "", peerPipes);
   if (isRefusal(arrival)) refusals.push(arrival);
   const departure = departureFrom(selfPipes, record.pipelineId);
@@ -191,10 +220,12 @@ async function preflight(oppId: string): Promise<
   // GoHighLevel allows one opportunity per contact per pipeline, so the case
   // would be rejected at the second write, after the contact had been touched.
   let existing: Preflight["existing"];
-  const found = await peerFindContact({
-    email: record.contactEmail,
-    phone: record.contactPhone,
-  });
+  // ⚠️ THE CONTACT'S OWN EMAIL AND PHONE, not the opportunity's embedded copy.
+  // `upsert` matches on these, so the preflight has to ask the same question of
+  // the same values the write will use — the search index lags, and a preflight
+  // that says "nobody there" for somebody who is there is the input to the
+  // duplicate-case failure this route exists to prevent.
+  const found = await peerFindContact({ email: contact.email, phone: contact.phone });
   if (found) {
     existing = { contactId: found.id, contactName: found.name };
     if (!isRefusal(arrival)) {
@@ -215,6 +246,8 @@ async function preflight(oppId: string): Promise<
     contactValues: contact.values,
     contactFirst: contact.firstName || record.first,
     contactLast: contact.lastName || record.last,
+    contactEmail: contact.email,
+    contactPhone: contact.phone,
     notes: notes.map((n) => `${n.dateAdded ? `${n.dateAdded.slice(0, 10)} · ` : ""}${n.who || "Unknown"}: ${n.txt}`),
     selfContactDefs,
     selfOppDefs,

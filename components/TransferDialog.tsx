@@ -200,6 +200,21 @@ export default function TransferDialog({
           {/* ── WHAT CARRIES, ON BOTH SIDES OF THE SEND ──────────────────── */}
           {pre && (!pre.refusals?.length || done) ? (
             <>
+              {/* 🔴 ROUND 133 — ZERO IS NOT A NUMBER TO PRINT, IT IS A
+                  SENTENCE TO SAY. "0 fields will carry" reads as a fault the
+                  reader has to diagnose; it is usually correct and expected —
+                  every answer on this record lives in a field the other account
+                  deliberately does not have. What DOES go still goes, and
+                  saying which is the difference between a warning and a
+                  puzzle. */}
+              {!carried.length ? (
+                <div className="tfnote">
+                  <b>No custom fields {done ? "carried" : "will carry"}.</b> Every
+                  answer on this record is in a field {peerLabel} does not have —
+                  which is usually correct rather than a fault. The person, the
+                  case name, its value and the notes still go.
+                </div>
+              ) : null}
               <div className="tfcount">
                 <b>{carried.length}</b> field{carried.length === 1 ? "" : "s"}{" "}
                 {done ? "carried" : "will carry"}
@@ -258,6 +273,16 @@ export default function TransferDialog({
               <button type="button" className="ighost" onClick={onClose} disabled={busy}>
                 Cancel
               </button>
+              {/* 🔴 ROUND 133 — THE REASON SITS WITH THE DISABLED BUTTON.
+                  A refusal discovered after the confirm is a refusal the user
+                  thinks they caused; a refusal explained at the top of a
+                  scrolling dialog is a refusal they scroll past. The amber box
+                  above carries the full sentence and the fix; this is the short
+                  form, in the one place somebody is looking when they wonder
+                  why they cannot press Send. */}
+              {!loading && pre && !pre.canTransfer ? (
+                <span className="tfwhynot">{pre.refusals?.[0]?.error}</span>
+              ) : null}
               <button
                 type="button"
                 className="cgsave"
@@ -266,7 +291,7 @@ export default function TransferDialog({
                 title={
                   pre?.canTransfer
                     ? `Creates this person and case on ${peerLabel}, then closes this one`
-                    : "Read the reason above — nothing can be sent yet"
+                    : pre?.refusals?.[0]?.detail || "Nothing can be sent yet"
                 }
               >
                 {busy ? "Sending…" : `Send to ${peerLabel}`}
