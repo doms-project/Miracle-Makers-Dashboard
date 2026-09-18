@@ -25,13 +25,13 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "132",
+  round: "133",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "a case can be transferred to the other company's sub-account: fields are " +
-    "translated by name and by option value, it lands at TRANSFERRED IN, this " +
-    "side closes into Transferred Out and is never deleted — and every skipped " +
-    "field is named on the screen before anything is sent",
+    "the transfer dialog refuses before the confirm rather than after it: a " +
+    "contact with no phone and no email cannot be created on any account, and " +
+    "the preflight says so with Send disabled · and “no fields carry” is a " +
+    "sentence rather than a nought",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

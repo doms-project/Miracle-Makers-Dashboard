@@ -5547,6 +5547,21 @@ export interface ContactFieldsRead {
    */
   firstName: string;
   lastName: string;
+  /**
+   * 🔴 ROUND 133 — THE TWO FIELDS THAT DECIDE WHETHER A PERSON CAN EXIST AT ALL.
+   *
+   * GoHighLevel will not create a contact without one of them: `/contacts/upsert`
+   * answers 400 "Pass at least one of number, email query parameter". A
+   * cross-account transfer recreates the person first, so a contact with neither
+   * cannot be transferred — and that is knowable before anybody clicks.
+   *
+   * ⚠️ READ FROM THE CONTACT, NOT FROM THE OPPORTUNITY'S EMBEDDED COPY.
+   * `OpportunityRecord.contactEmail` comes from the opportunities SEARCH index,
+   * which lags. A refusal built on a stale copy would block the transfer of
+   * somebody whose email was added an hour ago.
+   */
+  email: string;
+  phone: string;
 }
 
 /**
@@ -5594,6 +5609,8 @@ export async function getContactCustomFields(
     version: String(rc.dateUpdated ?? rc.updatedAt ?? ""),
     firstName,
     lastName,
+    email: String(rc.email ?? "").trim(),
+    phone: String(rc.phone ?? "").trim(),
   };
 }
 

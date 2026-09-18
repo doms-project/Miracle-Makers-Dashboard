@@ -101,6 +101,27 @@ function peerError(path: string, status: number, raw: string): GhlError {
   } catch {
     message = raw.slice(0, 300);
   }
+  // 🔴 ROUND 133 — ONE OF GOHIGHLEVEL'S MESSAGES IS NOT ABOUT THE PEER AT ALL,
+  // AND THE WRAPPER MADE IT LOOK AS THOUGH IT WERE.
+  //
+  // `/contacts/upsert` answers 400 "Pass at least one of number, email query
+  // parameter" for a contact with neither. That is GoHighLevel's universal rule
+  // about what a contact IS — not this account objecting to something — and
+  // "query parameter" is its wording for a body field. Wrapped as
+  // "<peer> refused the request", it reads as a quarrel between two companies.
+  //
+  // ⚠️ THE PREFLIGHT CATCHES THIS BEFORE ANYBODY CLICKS, so this path should be
+  // unreachable in normal use. It is here for the case the preflight cannot
+  // cover: the contact's phone and email removed in GoHighLevel between the
+  // dialog opening and Send being pressed. Unreachable-in-practice is not a
+  // reason for an unreadable message — it is the reason it will be read cold,
+  // by somebody with no idea what happened.
+  if (/at least one of.*(number|email)/i.test(message))
+    return new GhlError(
+      "That person has no phone number and no email address.",
+      status,
+      `GoHighLevel needs one of them to create a contact — it will not accept a person with neither, on any account. Add a phone number or an email on this record, then transfer. (${peerLabel()}: ${path} → ${status})`,
+    );
   return new GhlError(
     `${peerLabel()} refused the request.`,
     status,
