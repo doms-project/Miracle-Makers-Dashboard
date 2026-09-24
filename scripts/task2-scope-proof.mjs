@@ -282,8 +282,16 @@ ok("⚠️ no pipeline name reaches them at all",
 // What it was really claiming is that section 1 did not break the REST of the
 // payload, so that is what it now says — and it picks up §4's own rule beside
 // it: a withheld partner is counted, never silently absent.
-ok("⚠️ the case list still loads whole — that is section 2's, not section 1's",
-   (n.body.referrals || []).length === 1, (n.body.referrals || []).length);
+// 🔴 THIS WAS A TRIPWIRE AND IT HAS FIRED, ON PURPOSE. Written in round 145 as
+// "the case list still loads whole — that is section 2's, not section 1's", so
+// that anything scoping the cases early would show. Section 2 scopes them, and
+// this viewer holds no division, so they get none. Inverted rather than
+// deleted: the claim is now that §2 reaches this viewer too, and a regression
+// would put the whole list back.
+ok("🔴 §2 scopes the case list too — a viewer holding nothing gets no cases",
+   (n.body.referrals || []).length === 0, (n.body.referrals || []).length);
+ok("⚠️ and it is counted, not silently empty — the same rule as the picker",
+   n.body.meta.referralsWithheld === 1, n.body.meta.referralsWithheld);
 ok("🔴 and §4 withholds the OLTL partner from a viewer holding nothing — and COUNTS it",
    (n.body.partners || []).length === 0 && n.body.meta.partnersWithheld === 1,
    { partners: (n.body.partners || []).length, withheld: n.body.meta.partnersWithheld });

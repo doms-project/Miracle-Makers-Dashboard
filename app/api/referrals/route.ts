@@ -681,7 +681,7 @@ export async function GET(request: Request) {
         }).map((r) => r.id),
       );
 
-      const referrals: RawReferral[] = records
+      const allReferrals: RawReferral[] = records
         .map((r) => ({
           id: r.id,
           // Same fallback chain the events list uses one block down, so an
@@ -692,6 +692,14 @@ export async function GET(request: Request) {
           value: r.monetaryValue || 0,
           ago: daysSince(r.createdAt || ""),
           eventId: oppEventField ? String(r.cf?.[oppEventField] ?? "").trim() : "",
+          // 🔴 TASK 2 · §2 — THE CASE'S OWN DIVISION, DERIVED FROM ITS PIPELINE.
+          //
+          // `OpportunityRecord.pipelineName` already exists for the division
+          // badge (lib/types.ts:57), so this costs nothing. It is the ONE field
+          // that lets a case be placed in a division at all — without it the
+          // aggregates could only ever be scoped by ownership, which is the
+          // thing round 122 refused.
+          pipelineName: r.pipelineName || "",
           // ⚠️ TAGGED, NEVER FILTERED OUT HERE. Every aggregate reads the whole
           // array; only the drawer's per-record list honours this flag. See
           // RawReferral.visible for why two arrays would have been wrong.
@@ -723,7 +731,42 @@ export async function GET(request: Request) {
       // case and its partner can be withheld independently and this still has
       // to be computed before BOTH filters. A second edit to this line is the
       // price of not shipping a wrong sentence in the meantime.
-      const danglingCount = danglingReferrals(referrals, allPartners);
+      //
+      // ✅ AND SECTION 2 DID NOT NEED THE SECOND EDIT WE BOTH EXPECTED. The
+      // worry was that scoping the CASES too would leave this counting against
+      // one filtered list and one whole one. It does not, because the inputs
+      // here are `allReferrals` and `allPartners` — both pre-filter, both by
+      // name. The ordering makes it correct rather than any care taken at the
+      // call site, which is why the names say `all`.
+      const danglingCount = danglingReferrals(allReferrals, allPartners);
+
+      // ═══ TASK 2 · §2 — THE CASE ARRAY IS SCOPED BY DIVISION ═══════════════
+      //
+      // 🔴 THIS IS THE REVERSAL OF ROUND 122, AND ONLY HALF OF IT. Round 122
+      // refused to scope the aggregates because the filter on offer was
+      // OWNERSHIP: two reps in one division would read different win rates
+      // under one label, which is not a narrower truth but a different number
+      // wearing the same name.
+      //
+      // ⚠️ DIVISION IS NOT THAT. "ODP revenue" is a real figure that exists
+      // whether or not anybody is looking, and every ODP rep reads the same
+      // one. Round 122's rule survives in the form that mattered: AN AGGREGATE
+      // MUST NEVER DEPEND ON WHO IS ASKING. It now depends on WHICH PROGRAMME
+      // is being asked about, and two people asking about the same programme
+      // get the same answer. That is falsifiable — if two viewers ever saw
+      // different numbers under the same division label, this is wrong.
+      //
+      // 🔴 `visible` IS UNTOUCHED AND STAYS A TAG. It is the ownership flag,
+      // it still feeds only the drawer's "6 of 12 shown", and nothing here
+      // reads it. See RawReferral.visible, whose comment still stands.
+      const scopedReferrals = partnerDivisions
+        ? allReferrals.filter((o) =>
+            partnerDivisions.includes(divisionLabel(o.pipelineName)),
+          )
+        : allReferrals;
+      /** Cases outside this viewer's divisions. A count, never the records. */
+      const referralsWithheld = allReferrals.length - scopedReferrals.length;
+      const referrals = scopedReferrals;
 
       // ══ ROUND 122 · ITEM 2 — APPLICANTS, IN THEIR OWN LIST ════════════════
       //
@@ -761,6 +804,19 @@ export async function GET(request: Request) {
             value: 0,
             ago: daysSince(r.createdAt || ""),
             eventId: "",
+            // 🔴 CARRIED, AND DELIBERATELY NOT USED TO SCOPE — task 2 · §2.
+            //
+            // divisionLabel("OLTL Caregiver Applicants") is "OLTL Caregiver",
+            // which is not a `Partner Division` value on any account. Scoping
+            // this list the way the client list is scoped would not narrow the
+            // applicant columns, it would EMPTY them — for every viewer, in
+            // every division, from a change that looks like consistency.
+            //
+            // ⚠️ AND THE COLUMN EXISTS TO SHOW A CROSS-DIVISION FACT. Round 122
+            // item 2 added it so a Private Pay manager can see that their
+            // hospital partner also sends caregivers. Scoping it by the
+            // viewer's grants would hide exactly that.
+            pipelineName: r.pipelineName || "",
             visible: cgVisible.has(r.id),
           }))
           .filter((o) => o.partnerId);
@@ -956,6 +1012,29 @@ export async function GET(request: Request) {
              * viewer: it is a data-quality number for whoever can fix it.
              */
             partnersNoDivision,
+            /**
+             * 🔴 TASK 2 · §2 — CASES OUTSIDE THIS VIEWER'S DIVISIONS.
+             *
+             * ⚠️ THE AGGREGATES ABOVE ARE NOW A DIVISION'S FIGURES, NOT THE
+             * ACCOUNT'S, and a viewer has to be able to tell that from an
+             * account with no business in it. Same shape and same reason as
+             * partnersWithheld and clientPipelinesWithheld.
+             */
+            referralsWithheld,
+            /**
+             * 🔴 HOW MANY DIVISIONS THIS VIEWER HOLDS — task 2 · §4.
+             *
+             * ⚠️ A COUNT, AND IT DECIDES A SENTENCE, NOT A FILTER. Zero means
+             * they hold no pipeline at all, which is the case manager's
+             * intended state and needs a different explanation from a rep who
+             * holds some. `null` for an admin becomes 0 here and never reaches
+             * that branch, because nothing is withheld from them to explain.
+             *
+             * 🔴 NEVER "IS A CASE MANAGER". Nothing knows that, and reading it
+             * off an absent grant would infer a role from an absence — the same
+             * rule that bans reading one off a `-Sale` name suffix.
+             */
+            viewerDivisions: partnerDivisions ? partnerDivisions.length : null,
             /**
              * 🔴 ROUND 145 — COMPUTED AGAINST THE FULL PARTNER LIST, SERVER
              * SIDE, because the client cannot tell a withheld partner from a

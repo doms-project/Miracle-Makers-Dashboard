@@ -315,6 +315,18 @@ export interface RawReferral {
    * excluded number is stated: the round-97 rule.
    */
   ago: number | null;
+  /**
+   * 🔴 TASK 2 · §2 — THE PIPELINE THIS CASE IS IN, so its DIVISION can be
+   * derived with `divisionLabel()`. Without it a case cannot be placed in a
+   * division at all, and the aggregates could only ever be scoped by
+   * ownership — which is exactly what round 122 refused.
+   *
+   * ⚠️ THE NAME, NOT THE ID. `divisionLabel` reads names, the switcher
+   * compares against `Partner Division` values, and an id would need a second
+   * lookup on the client to mean anything. `OpportunityRecord.pipelineName`
+   * already carries it for the division badge, so this costs no request.
+   */
+  pipelineName: string;
   eventId?: string;
   /**
    * 🔴 WHOLE NUMBERS, FILTERED DETAIL — AND THIS FLAG IS THE WHOLE MECHANISM.
@@ -329,6 +341,33 @@ export interface RawReferral {
    * number and identical for everyone. Only the drawer's per-record list, which
    * names individual cases, filters on it. Two arrays would make the next
    * person choose which to aggregate, and eventually they would choose wrong.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * 🔴 TASK 2 · §2 — THE AGGREGATES *ARE* SCOPED NOW, AND NOT BY THIS FLAG.
+   *
+   * Everything below still stands. It is about OWNERSHIP, and ownership is
+   * still not allowed to cut a total. What changed is that a second, different
+   * filter was added above it — DIVISION — and the argument against the first
+   * does not reach the second:
+   *
+   *   ownership  two reps in ONE division read different win rates under one
+   *              label. The same question answered two ways: not a narrower
+   *              truth, a different number wearing the same name.
+   *
+   *   division   "ODP revenue" is a real figure that exists whether or not
+   *              anybody is looking, and every ODP rep reads the SAME one. The
+   *              label can carry the scope — "Revenue · ODP" — and mean it.
+   *
+   * ⚠️ SO ROUND 122'S RULE SURVIVES IN THE FORM THAT MATTERED: an aggregate
+   * must never depend on WHO is asking. It now depends on WHICH PROGRAMME is
+   * being asked about, and two people asking about the same programme get the
+   * same answer. That is falsifiable — if two viewers ever see different
+   * numbers under the same division label, this reasoning is wrong and the
+   * paragraph below wins again.
+   *
+   * 🔴 AND `visible` ITSELF IS UNTOUCHED. No aggregate reads it; `shown` is
+   * still its only reader, and the seam described below is still the seam.
+   * ═══════════════════════════════════════════════════════════════════════
    *
    * 🔴 THE SEAM, ACCEPTED KNOWINGLY — DO NOT "FIX" IT BY SCOPING THE TOTALS.
    * Whole totals beside a filtered list make the withheld residual derivable:
