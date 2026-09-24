@@ -42,7 +42,15 @@ const server = http.createServer((req, res) => {
     const body = raw ? JSON.parse(raw) : null;
     seen.push({ method: req.method, path, body });
 
-    // 🔴 THE REAL REFUSALS. Verified live by the owner, both of them.
+    // 🔴 THE REAL REFUSALS. Verified live by the owner, all three of them.
+    //
+    // ⚠️ THE BARE `POST /custom-fields/` WAS MISSING FROM THIS LIST, and that is
+    // why the assertion below went green for four rounds against a call the
+    // real API refuses. A fake that answers something GoHighLevel would refuse
+    // is a harness bug whether or not a test is red — this file's own rule,
+    // broken by this file.
+    if (path === "/custom-fields/" && req.method === "POST")
+      return json(res, 400, { message: "Api does not support objectKey of type contact or opportunity" });
     if (path === "/custom-fields/folder" && req.method === "POST")
       return json(res, 400, { message: "Api does not support objectKey of type contact or opportunity" });
     if (/^\/custom-fields\/[^/]+$/.test(path) && req.method === "PUT")
@@ -117,11 +125,19 @@ const code = ghl
 // `ghlSend<[^>]*>` could never match it. Look for the PATH literal in code.
 const stray = [...code.matchAll(/"(\/custom-fields\/[^"]*)"/g)].map((m) => m[1]);
 console.log(`  /custom-fields/ CALL SITES remaining: ${stray.join(", ") || "(none)"}`);
-// ⚠️ ONE REMAINS AND IT IS CORRECT: POST /custom-fields/ creates a FIELD, which
-// round 93 verified works. What that route refuses is folders and field
-// UPDATES for these objects — two different operations on one path.
-ok("⚠️ only the field CREATE remains, which round 93 proved works",
-   stray.length === 1 && stray[0] === "/custom-fields/", stray);
+// 🔴 THIS ASSERTED THE OPPOSITE AND WAS GREEN FOR FOUR ROUNDS.
+//
+// It read: "only the field CREATE remains, which round 93 proved works". Round
+// 93 proved no such thing — `createCustomField` was never moved, the live API
+// answers that POST with 400 "Api does not support objectKey of type contact or
+// opportunity", and the "add field" button on the Pipelines screen had
+// therefore never worked. The assertion passed because the fake above answered
+// an endpoint the real one refuses.
+//
+// ⚠️ THE CLAIM IS NOW THE OPPOSITE AND IT IS FALSIFIABLE: nothing in this
+// codebase may call that path at all.
+ok("🔴 NO /custom-fields/ call site remains — all three are on the location API",
+   stray.length === 0, stray);
 
 // ═══ 2 · THE FIRST STAGE ══════════════════════════════════════════════════
 console.log("\n2 · 🔴 THE FIRST STAGE IS BY POSITION, NOT ARRAY ORDER");

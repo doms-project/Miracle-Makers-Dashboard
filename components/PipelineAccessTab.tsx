@@ -39,6 +39,23 @@ export default function PipelineAccessTab({
   // ITEM 4 — Master view. One more column in the SAME custom value, as agreed:
   // it is a grant, not a role, and it never widens what a person can see.
   const [masterUsers, setMasterUsers] = useState<string[]>([]);
+  // ═══ TASK 1 — CASE MANAGERS ═══════════════════════════════════════════
+  // repId -> managerId[]. The SAME custom value, a fourth key, one more
+  // section — not a new tab. Rendered entirely from the live user list; only
+  // ids are stored, so a renamed user needs nothing here.
+  const [caseManagers, setCaseManagers] = useState<Grants>({});
+  /** Which way round the list reads. Both counts in the header flip it. */
+  const [cmView, setCmView] = useState<"manager" | "rep">("manager");
+  /** The row whose "add" picker is open — a rep id, or a manager id in manager-first. */
+  const [cmAdding, setCmAdding] = useState<string | null>(null);
+  const [cmQ, setCmQ] = useState("");
+  /**
+   * A row that has been STARTED but holds nothing yet. It exists only in this
+   * state, never in the map: a half-made row — a manager with no reps — is not
+   * something the store can represent, and writing one would invent a state
+   * `applyCaseManagers` has no meaning for.
+   */
+  const [cmPending, setCmPending] = useState<string | null>(null);
   const [usingEnvFallback, setUsingEnvFallback] = useState(false);
   const [loadErr, setLoadErr] = useState<unknown>(null);
   /** Which load() is current — see the sequence guard inside it. */
@@ -83,6 +100,7 @@ export default function PipelineAccessTab({
       setFoldersError(j.foldersError || null);
       setFolderGrants(j.folderGrants || {});
       setMasterUsers(j.masterUsers || []);
+      setCaseManagers(j.caseManagers || {});
       setPublicFolderId(j.publicFolderId || "");
       setUsingEnvFallback(!!j.usingEnvFallback);
       setDirty(false);
@@ -150,6 +168,7 @@ export default function PipelineAccessTab({
           grants,
           folderGrants,
           masterUsers,
+          caseManagers,
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -158,6 +177,7 @@ export default function PipelineAccessTab({
       setGrants(j.grants || {});
       setFolderGrants(j.folderGrants || {});
       setMasterUsers(j.masterUsers || []);
+      setCaseManagers(j.caseManagers || {});
       setUsingEnvFallback(false);
       setDirty(false);
       setSaveMsg("✓ Saved to GoHighLevel.");
@@ -166,6 +186,55 @@ export default function PipelineAccessTab({
     } finally {
       setSaving(false);
     }
+  };
+
+  // ═══ TASK 1 — THE TWO WAYS TO READ ONE MAP ════════════════════════════
+  //
+  // The store is rep → managers. Manager-first is its inverse, computed here
+  // rather than stored: two copies of one relationship is two things to keep in
+  // step, and the whole point of the flip is that it is the SAME data.
+  const cmByManager = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const [rep, mgrs] of Object.entries(caseManagers))
+      for (const m of mgrs) (out[m] ||= []).push(rep);
+    return out;
+  }, [caseManagers]);
+
+  const userById = useMemo(
+    () => new Map(users.map((u) => [u.id, u])),
+    [users],
+  );
+  // ⚠️ AN ID WITH NO USER IS STILL SHOWN, as the id. A manager who left the
+  // account would otherwise vanish from the screen while still following every
+  // one of their reps' cases — invisible, and unremovable from here.
+  const nameOf = (id: string) => userById.get(id)?.name || id;
+
+  const cmManagerCount = Object.keys(cmByManager).length;
+  const cmRepCount = Object.keys(caseManagers).length;
+
+  /**
+   * 🔴 ONE WRITE, WHICHEVER END IT IS MADE FROM. Removing Carla from Ern's row
+   * and removing Ern from Carla's row are the same mutation of the same map,
+   * so both go through here and there is no second code path to disagree.
+   */
+  const linkCaseManager = (repId: string, managerId: string, on: boolean) => {
+    if (!repId || !managerId) return;
+    setCaseManagers((prev) => {
+      const next = { ...prev };
+      const have = new Set(next[repId] || []);
+      if (on) have.add(managerId);
+      else have.delete(managerId);
+      // ⚠️ THE LAST ONE REMOVED DELETES THE KEY, which is what makes the row
+      // disappear — "a user stops being a manager when the last rep is
+      // removed". `applyCaseManagers` still tidies up, because its test is its
+      // own stored record rather than this map.
+      if (have.size) next[repId] = [...have];
+      else delete next[repId];
+      return next;
+    });
+    setCmPending(null);
+    setDirty(true);
+    setSaveMsg(null);
   };
 
   const visibleUsers = useMemo(() => {
@@ -460,11 +529,222 @@ export default function PipelineAccessTab({
         </div>
       )}
 
+      {/* ═══ TASK 1 — CASE MANAGERS ═══════════════════════════════════════
+          A SECOND SECTION, below the grid. Not a new tab: it is the same custom
+          value, saved by the same button, and an admin thinking about who sees
+          what is already here.
+
+          🔴 NO ROLE LABELS, NO WARNINGS, NO "sees nothing" FLAGS. The system
+          cannot know who is a rep — `-Sale` and `Case Manager` in a display
+          name are conventions, not data — so it must not draw an absence as a
+          problem. The pipeline grid above counts unmapped users; this one
+          deliberately does not. */}
+      <div className="cmhead">
+        <span className="cmtitle">Case managers</span>
+        {/* 🔴 BOTH COUNTS ARE CONTROLS, and they must not look like the numbers
+            in the grid's own count line. A number that filters and a number
+            that is just a number reading the same is the fault this styling
+            exists to avoid — so they are buttons, with a pressed state. */}
+        <span className="cmcounts">
+          <button
+            type="button"
+            className={`cmcount${cmView === "manager" ? " on" : ""}`}
+            aria-pressed={cmView === "manager"}
+            onClick={() => { setCmView("manager"); setCmAdding(null); }}
+            title="List each manager and the reps they support"
+          >
+            <b>{cmManagerCount}</b> manager{cmManagerCount === 1 ? "" : "s"}
+          </button>
+          <span className="cmdot">·</span>
+          <button
+            type="button"
+            className={`cmcount${cmView === "rep" ? " on" : ""}`}
+            aria-pressed={cmView === "rep"}
+            onClick={() => { setCmView("rep"); setCmAdding(null); }}
+            title="List each rep and the managers who follow their cases"
+          >
+            <b>{cmRepCount}</b> rep{cmRepCount === 1 ? "" : "s"}
+          </button>
+        </span>
+      </div>
+      <div className="imeta cmintro">
+        A case manager follows every case owned by a rep they support — in any
+        pipeline, with no grant needed. Applied whenever an owner is set.
+      </div>
+
+      <div className="cmlist">
+        {(() => {
+          const real = cmView === "manager" ? Object.keys(cmByManager) : Object.keys(caseManagers);
+          // The started-but-empty row sits with the others so it reads as a row,
+          // not as a dialog. It vanishes the moment it gets its first chip —
+          // at which point it is a real row — or when the picker is closed.
+          return cmPending && !real.includes(cmPending) ? [...real, cmPending] : real;
+        })().sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map((rowId) => {
+          const chips = cmView === "manager" ? cmByManager[rowId] : caseManagers[rowId];
+          return (
+            <div className="cmrow" key={rowId}>
+              <span className="cmwho">{nameOf(rowId)}</span>
+              <span className="cmchips">
+                {[...(chips || [])]
+                  .sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
+                  .map((otherId) => (
+                    <span className="cmchip" key={otherId}>
+                      {nameOf(otherId)}
+                      <button
+                        type="button"
+                        className="cmx"
+                        // 🔴 THE SAME WRITE FROM EITHER END. In manager-first the
+                        // row IS the manager and the chip is the rep; in
+                        // rep-first it is the other way round. One call, the
+                        // arguments swapped.
+                        onClick={() =>
+                          cmView === "manager"
+                            ? linkCaseManager(otherId, rowId, false)
+                            : linkCaseManager(rowId, otherId, false)
+                        }
+                        aria-label={`Remove ${nameOf(otherId)} from ${nameOf(rowId)}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                <button
+                  type="button"
+                  className="cmadd"
+                  onClick={() => { setCmAdding(cmAdding === rowId ? null : rowId); setCmQ(""); }}
+                >
+                  {cmView === "manager" ? "+ rep" : "+ manager"}
+                </button>
+              </span>
+              {cmAdding === rowId ? (
+                <CasePicker
+                  users={users}
+                  exclude={new Set([rowId, ...(chips || [])])}
+                  q={cmQ}
+                  setQ={setCmQ}
+                  onPick={(id) => {
+                    if (cmView === "manager") linkCaseManager(id, rowId, true);
+                    else linkCaseManager(rowId, id, true);
+                    setCmAdding(null);
+                  }}
+                  onClose={() => { setCmAdding(null); setCmPending(null); }}
+                />
+              ) : null}
+            </div>
+          );
+        })}
+
+        {/* 🔴 THE ONLY WAY A ROW IS BORN — no "add manager" button. Somebody
+            becomes a manager by having a rep assigned to them, and stops being
+            one when the last is removed. A button that made an empty manager
+            would create a state the map cannot hold. */}
+        <div className="cmrow cmnew">
+          <span className="cmwho cmmuted">
+            {cmView === "manager" ? "Another manager" : "Another rep"}
+          </span>
+          <span className="cmchips">
+            <button
+              type="button"
+              className="cmadd"
+              onClick={() => { setCmAdding(cmAdding === "__new" ? null : "__new"); setCmQ(""); }}
+            >
+              {cmView === "manager" ? "+ manager" : "+ rep"}
+            </button>
+          </span>
+          {cmAdding === "__new" ? (
+            <CasePicker
+              users={users}
+              exclude={new Set(cmView === "manager" ? Object.keys(cmByManager) : Object.keys(caseManagers))}
+              q={cmQ}
+              setQ={setCmQ}
+              // ⚠️ PICKING HERE OPENS THE SECOND PICKER RATHER THAN SAVING. A
+              // row needs both halves to exist at all, so a half-made row is
+              // never written.
+              onPick={(id) => { setCmPending(id); setCmAdding(id); setCmQ(""); }}
+              onClose={() => setCmAdding(null)}
+            />
+          ) : null}
+        </div>
+      </div>
+
       <div className="imeta">
         Stored in GoHighLevel as the <code>MM Pipeline Access</code> custom value.
         Users, pipelines and folders are read live — new staff, new pipelines and
         new folders appear here automatically.
       </div>
+    </div>
+  );
+}
+
+/**
+ * 🔴 TASK 1 — THE USER PICKER FOR A CASE-MANAGER ROW.
+ *
+ * ⚠️ ALL USERS, ALWAYS, WITH NO ROLE FILTER. The system cannot know who is a
+ * rep and who is a manager — `-Sale` and `Case Manager` in a display name are
+ * conventions, not data, and inferring from them would be the hardcoded-facts
+ * mistake in a new place. Anyone can be picked for either end; the map is the
+ * only thing that says who is which.
+ *
+ * ⚠️ `exclude` IS ABOUT DUPLICATES, NOT ROLES — the row's own subject and the
+ * people already on it, so the list never offers something that would do
+ * nothing.
+ */
+function CasePicker({
+  users,
+  exclude,
+  q,
+  setQ,
+  onPick,
+  onClose,
+}: {
+  users: User[];
+  exclude: Set<string>;
+  q: string;
+  setQ: (v: string) => void;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const t = q.trim().toLowerCase();
+  const hits = users
+    .filter((u) => !exclude.has(u.id))
+    .filter((u) => !t || u.name.toLowerCase().includes(t) || u.email.toLowerCase().includes(t))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return (
+    // `data-esc-local` — round 131's marker. The record panel's document-level
+    // Escape handler is not on this screen, but the convention is cheap and the
+    // next person to add one will not have to rediscover it.
+    <div className="cmpick" data-esc-local>
+      <input
+        className="cgsearch"
+        autoFocus
+        value={q}
+        placeholder="Search everyone…"
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") { e.preventDefault(); onClose(); }
+          if (e.key === "Enter" && hits[0]) { e.preventDefault(); onPick(hits[0].id); }
+        }}
+        aria-label="Search users"
+      />
+      <div className="cmpicklist">
+        {hits.length ? (
+          hits.map((u) => (
+            <button type="button" className="cmpickrow" key={u.id} onClick={() => onPick(u.id)}>
+              <span className="cmpickname">{u.name}</span>
+              <span className="cmpickmail">{u.email}</span>
+            </button>
+          ))
+        ) : (
+          // ⚠️ "Nobody left" and "nobody matched" are different states and must
+          // not share a sentence — the same rule the folder read follows above.
+          <div className="cmpicknone">
+            {t ? `Nobody matches “${q.trim()}”.` : "Everyone is already on this row."}
+          </div>
+        )}
+      </div>
+      <button type="button" className="ighost cmpickclose" onClick={onClose}>
+        Cancel
+      </button>
     </div>
   );
 }

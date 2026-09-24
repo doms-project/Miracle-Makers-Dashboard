@@ -154,6 +154,9 @@ export async function GET(request: Request) {
         grants: stored?.pipelines ?? {},
         folderGrants: stored?.folders ?? {},
         masterUsers: stored?.master ?? [],
+        // TASK 1 — the case-manager map, from the same single read. The tab
+        // renders it from the LIVE user list, so only ids travel here.
+        caseManagers: stored?.caseManagers ?? {},
         publicFolderId: (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim(),
         // true => nothing readable is stored yet, so the env var is what's
         // actually in force until the first save.
@@ -174,6 +177,8 @@ export async function PUT(request: Request) {
       grants?: Record<string, string[]>;
       folderGrants?: Record<string, string[]>;
       masterUsers?: string[];
+      /** TASK 1 — rep user id → the managers who follow their cases. */
+      caseManagers?: Record<string, string[]>;
     };
     const denied = gate(request, body.ssoKey);
     if (denied) return denied;
@@ -196,18 +201,25 @@ export async function PUT(request: Request) {
       return clean;
     };
 
+    // ⚠️ `norm` DROPS AN EMPTY ARRAY, and for the case-manager map that is the
+    // right behaviour rather than a limitation — see the report. Removing a
+    // rep's last manager deletes the key, the row disappears from the tab, and
+    // `applyCaseManagers` still removes what it added because the test is its
+    // own stored record, not the map. The `[]` state stays meaningful in the
+    // storage model and is simply not something this screen can produce.
+    const caseManagersPatch = norm(body.caseManagers);
     const pipelinesPatch = norm(body.grants);
     const foldersPatch = norm(body.folderGrants);
     const masterPatch = Array.isArray(body.masterUsers)
       ? [...new Set(body.masterUsers.map(String).filter(Boolean))]
       : undefined;
 
-    if (!pipelinesPatch && !foldersPatch && !masterPatch)
+    if (!pipelinesPatch && !foldersPatch && !masterPatch && !caseManagersPatch)
       return NextResponse.json(
         {
           error: "Nothing to save.",
           detail:
-            "Send `grants` (userId -> pipelineId[]), `folderGrants` (userId -> folderId[]) or `masterUsers` (userId[]).",
+            "Send `grants` (userId -> pipelineId[]), `folderGrants` (userId -> folderId[]), `masterUsers` (userId[]) or `caseManagers` (repId -> managerId[]).",
         } as ApiError,
         { status: 400 },
       );
@@ -216,6 +228,7 @@ export async function PUT(request: Request) {
       ...(pipelinesPatch ? { pipelines: pipelinesPatch } : {}),
       ...(foldersPatch ? { folders: foldersPatch } : {}),
       ...(masterPatch ? { master: masterPatch } : {}),
+      ...(caseManagersPatch ? { caseManagers: caseManagersPatch } : {}),
     });
     // Echo the MERGED state, not just what was sent — the caller needs to see
     // what is actually stored now, including the scopes it didn't touch.
@@ -227,6 +240,7 @@ export async function PUT(request: Request) {
         grants: saved?.pipelines ?? {},
         folderGrants: saved?.folders ?? {},
         masterUsers: saved?.master ?? [],
+        caseManagers: saved?.caseManagers ?? {},
       },
       { headers: { "Cache-Control": "no-store" } },
     );

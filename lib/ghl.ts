@@ -13,6 +13,7 @@ import {
 import { divisionLabel } from "./division";
 import { e164, emailKey, phoneKey } from "./phone";
 import { mapLimit, type Settled } from "./concurrency";
+import { getCaseManagers } from "./pipelineAccess";
 
 // Account-specific — MUST come from env (re-derive per account with
 // scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
@@ -777,7 +778,29 @@ export async function updateOpportunity(
   // still let a concurrent caller re-populate the entry from a read that
   // started before the write landed. See the note on oppBurst above.
   invalidateOpportunity(id);
-  return getOpportunityByIdUncached(id);
+  const rec = await getOpportunityByIdUncached(id);
+
+  // ═══ TASK 1 · HOOK 1 OF 2 — THE PANEL'S OWN OWNER DROPDOWN ═══════════════
+  //
+  // 🔴 CONDITIONAL ON `"assignedTo" in body`, AND THAT IS NOT A DETAIL. This
+  // is the write path for EVERY field save on the record panel — every note,
+  // every date, every tick. Hooking it unconditionally would run the mapping
+  // hundreds of times a day for an owner that had not changed.
+  //
+  // ⚠️ AND IT IS HERE RATHER THAN IN THE ROUTE so a sixth owner-write path
+  // added later inherits it. `moveOpportunity` does NOT come through here —
+  // it has its own PUT via `putOpportunityVerified` — which is why there are
+  // two hooks and not one.
+  //
+  // ⚠️ NEVER AWAITED INTO A FAILURE. `applyCaseManagers` does not throw; if it
+  // did, a completed owner change would report itself as a failed save.
+  if ("assignedTo" in body)
+    // ⚠️ `rec` IS FRESH — read uncached two lines above, after the PUT — so the
+    // unmapped-and-unrecorded case costs no request at all on this path, which
+    // is the common one.
+    await applyCaseManagers(id, String(body.assignedTo ?? ""), rec);
+
+  return rec;
 }
 
 // ---------------------------------------------------------------------------
@@ -2770,9 +2793,26 @@ export interface AccessGrantsV2 {
   pipelines: AccessGrants;
   folders: AccessGrants;
   master: string[];
+  /**
+   * 🔴 TASK 1 — CASE MANAGERS. Rep user id → the manager user ids who follow
+   * every case that rep owns. Data, never code: nothing about who is a manager
+   * or a rep belongs in a source file, and no role is inferred from a name.
+   *
+   * ⚠️ IT RIDES THIS VALUE RATHER THAN ITS OWN because `withGrants` reads this
+   * one custom value once per request and hands it to every route through
+   * AsyncLocalStorage. A separate custom value would be a second GET on every
+   * API call in the app, for a map that changes a few times a year — the same
+   * reasoning written at lib/withGrants.ts:28 for folders and master.
+   */
+  caseManagers: AccessGrants;
 }
 
-const emptyV2 = (): AccessGrantsV2 => ({ pipelines: {}, folders: {}, master: [] });
+const emptyV2 = (): AccessGrantsV2 => ({
+  pipelines: {},
+  folders: {},
+  master: [],
+  caseManagers: {},
+});
 
 function asIdMap(v: unknown): AccessGrants {
   const out: AccessGrants = {};
@@ -2795,13 +2835,23 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const o = parsed as Record<string, unknown>;
 
-  // v2 — recognised by ANY of its three keys, so a value holding only folders
-  // (no pipelines yet) is still read as v2 rather than mistaken for legacy.
-  if ("pipelines" in o || "folders" in o || "master" in o) {
+  // v2 — recognised by ANY of its keys, so a value holding only folders (no
+  // pipelines yet) is still read as v2 rather than mistaken for legacy.
+  //
+  // 🔴 `caseManagers` IS IN THE TEST, NOT JUST THE BODY. Without it, a value
+  // holding ONLY that key falls through to the legacy branch below and is read
+  // as a flat pipeline map — every rep id becoming a grant of the manager ids
+  // as though they were pipelines. Only reachable on a fresh account, which is
+  // exactly the kind of thing that bites once and is never explained.
+  if ("pipelines" in o || "folders" in o || "master" in o || "caseManagers" in o) {
     return {
       pipelines: asIdMap(o.pipelines),
       folders: asIdMap(o.folders),
       master: Array.isArray(o.master) ? o.master.map(String).filter(Boolean) : [],
+      // ⚠️ SAME SHAPE AS THE OTHER TWO MAPS, so `asIdMap` validates it for free:
+      // non-array values are dropped rather than stored as a string that later
+      // code would iterate character by character.
+      caseManagers: asIdMap(o.caseManagers),
     };
   }
 
@@ -2855,10 +2905,22 @@ export async function saveAccessGrantsV2(
   // MERGE, never replace. The Access tab may save only the folder grid; writing
   // just that would wipe every pipeline grant on the account.
   const current = (await fetchAccessGrantsV2()) ?? emptyV2();
+  // 🔴 EVERY KEY, OR THE ONES LEFT OUT ARE DESTROYED.
+  //
+  // This is a LITERAL, not a spread, and that is deliberate — a spread would
+  // silently carry forward whatever junk a hand-edited custom value contained.
+  // The cost is that a key added to `AccessGrantsV2` and forgotten here is
+  // wiped on the next save of any other key, with a 200 and nothing on screen.
+  // `caseManagers` was that key until this commit: storing the map and then
+  // ticking one box on the Access tab would have erased it.
+  //
+  // ⚠️ IF YOU ADD A FIFTH KEY, ADD IT IN FOUR PLACES — the interface, emptyV2,
+  // the parseAccessValue branch AND here — and extend round135-proof.
   const next: AccessGrantsV2 = {
     pipelines: patch.pipelines ?? current.pipelines,
     folders: patch.folders ?? current.folders,
     master: patch.master ?? current.master,
+    caseManagers: patch.caseManagers ?? current.caseManagers,
   };
   const body = JSON.stringify(next);
   const existing = await findAccessCustomValue();
@@ -2897,24 +2959,6 @@ function bustFieldCaches(): void {
 }
 
 /**
- * A display name -> the lower_snake_case half of a `fieldKey`.
- *
- * ⚠️ Not a label and never read back as one: `fieldKey` is the stable machine
- * name GoHighLevel stores alongside the field. Everything in this codebase
- * still resolves fields by NAME or by id — this exists only to satisfy the
- * create call.
- */
-function fieldKeyFromName(name: string): string {
-  return (
-    (name || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 60) || `field_${Date.now()}`
-  );
-}
-
-/**
  * Create a custom-field FOLDER (a "section" on the record panel).
  *
  * ⚠️ documentType=folder is what distinguishes this from creating a field on
@@ -2931,9 +2975,15 @@ export async function createFieldFolder(args: {
   // "/custom-fields/ and /locations/{id}/customFields are DIFFERENT APIs with
   // different vocabularies." `/custom-fields/` is the write API and it REFUSES
   // these objects — "Api does not support objectKey of type contact or
-  // opportunity". `createCustomField` was moved to the location endpoint in
-  // round 93; THIS FUNCTION WAS NOT, and nothing exercised it until round 118
-  // built an action that calls it.
+  // opportunity". THIS FUNCTION was moved to the location endpoint in round
+  // 119, and nothing exercised it until round 118 built an action that calls it.
+  //
+  // 🔴 AN EARLIER VERSION OF THIS COMMENT SAID `createCustomField` HAD BEEN
+  // MOVED IN ROUND 93. IT HAD NOT — it was still posting to `/custom-fields/`
+  // four rounds later, and the sentence here was the reason nobody looked. A
+  // comment asserting that another function is fixed is a claim about code it
+  // cannot see; this one was wrong for four rounds and read as reassurance.
+  // Both are on the location endpoint now.
   //
   // ✅ THE LOCATION ENDPOINT IS PROVEN: all four folders created on this
   // account this week went through it — Referral Partner, Event Attendance,
@@ -3067,31 +3117,55 @@ export async function createCustomField(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A field needs a name.", 400);
-  // 🔴 TWO DIFFERENT APIS, AND ROUND 90 MIXED THEM.
+  // 🔴 TWO DIFFERENT APIS, AND THIS FUNCTION WAS ON THE WRONG ONE UNTIL NOW.
   //
-  // Definitions are READ from /locations/{id}/customFields?model=opportunity —
-  // the location custom-fields API, whose vocabulary is `model` and
-  // `documentType`. Fields are WRITTEN to /custom-fields/, the Custom Fields V2
-  // API, whose vocabulary is `objectKey` and `fieldKey`. Round 90 took the read
-  // API's body shape and posted it to the write API's endpoint, so every create
-  // came back 422 — the screen was fixed twice over while the form it fixed
-  // could not create anything.
-  const objectKey = args.model === "contact" ? "contact" : "opportunity";
+  // `/custom-fields/` is the Custom Objects write API. It REFUSES a contact or
+  // an opportunity, in so many words:
+  //
+  //     POST /custom-fields/  ->  400
+  //     "Api does not support objectKey of type contact or opportunity"
+  //
+  // ⚠️ AND THE TREE SAID SO, THREE HUNDRED LINES ABOVE, WHILE THIS CALL SAT
+  // HERE. `createCustomFieldFolder`'s round-119 comment quotes that exact error
+  // and states "createCustomField was moved to the location endpoint in round
+  // 93". It was not. The claim and the counter-evidence lived in the same file
+  // for four rounds, and the only caller — the "add field" action on the
+  // Pipelines screen — has never once worked.
+  //
+  // ✅ THE WORKING SHAPE, PROVEN TWICE ON THIS ACCOUNT:
+  //
+  //     POST /locations/{id}/customFields
+  //     { name, dataType, model, parentId, documentType: "field" }
+  //     -> 201
+  //
+  // ⚠️ `documentType: "field"` IS WHAT DISTINGUISHES THIS FROM A FOLDER CREATE.
+  // Same endpoint, same verb; the discriminator is that one key, and omitting
+  // it is how a field create becomes a folder create by accident.
+  //
+  // ⚠️ AND THE VOCABULARY IS `model`, NOT `objectKey`. `fieldKey` belongs to the
+  // other API and is not sent here — GoHighLevel derives its own.
   const body: Record<string, unknown> = {
-    locationId,
     name,
     dataType: args.dataType,
-    objectKey,
-    // `fieldKey` is the stable machine name and is REQUIRED. It is derived from
-    // the display name, namespaced by the object, and lower_snake_case — the
-    // shape GoHighLevel's own field keys use.
-    fieldKey: `${objectKey}.${fieldKeyFromName(name)}`,
+    model: args.model === "contact" ? "contact" : "opportunity",
+    documentType: "field",
   };
   if (args.parentId) body.parentId = args.parentId;
+  // 🔴 UNVERIFIED ON THIS ENDPOINT. The shape proven above created a TEXT field,
+  // which carries no options. Whether this endpoint spells them `options` or
+  // `picklistOptions` on a SINGLE_OPTIONS create has NOT been established, and
+  // a wrong key here is a 200 with an empty picklist — the failure mode this
+  // codebase has met four times. `addFieldOption` writes options through
+  // PUT /locations/{id}/customFields/{id} and IS proven, so a field created
+  // without options can still be filled afterwards. See the report.
   if (args.options?.length)
     body.options = args.options.map((o) => String(o).trim()).filter(Boolean);
 
-  const res = await ghlSend<Record<string, unknown>>("POST", "/custom-fields/", body);
+  const res = await ghlSend<Record<string, unknown>>(
+    "POST",
+    `/locations/${encodeURIComponent(locationId)}/customFields`,
+    body,
+  );
   const cf = pickCreated(res);
   const id = pickCreatedId(res);
   if (!id)
@@ -4802,6 +4876,26 @@ export async function moveOpportunity(args: {
         `moved pipeline+stage (${unassigning ? REASSIGN_STAGE_NAME : "TRANSFERRED IN"})${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );
 
+      // ═══ TASK 1 · HOOK 2 OF 2 — AFTER THE PIPELINE MOVE, DELIBERATELY ═════
+      //
+      // 🔴 RULE C IN ORDER. Step 2 above cleared EVERY follower but the new
+      // owner — that is the transfer's removal and it belongs to the transfer.
+      // This adds the new owner's managers back, afterwards, and the two
+      // mechanisms never consult each other.
+      //
+      // ⚠️ AFTER THE PIPELINE MOVE RATHER THAN AFTER THE CLEAR. The move is the
+      // step whose failure strands the record — see the comment above — and
+      // managers following a case still sitting in the source pipeline is the
+      // worse of the two half-states.
+      //
+      // ⚠️ ONLY THE TRANSFER PATH REACHES THIS. A simple move does not change
+      // the owner, so nothing recomputes: the owner is the only input.
+      if (!unassigning && args.newOwnerId) {
+        const cm = await applyCaseManagers(args.oppId, args.newOwnerId);
+        if (!cm.skipped && (cm.added.length || cm.removed.length))
+          steps.push(`case managers: ${cm.steps.join("; ")}`);
+      }
+
       // 5. Tag the CONTACT. Written only HERE — after the pipeline move actually
       // landed — so the tag can never claim a transfer that stopped half way.
       // A failure is logged and swallowed: the transfer is complete and correct
@@ -4891,6 +4985,254 @@ export async function removeOpportunityFollowers(
       { body: { followers: userIds }, what: "the followers" },
     )) ?? {};
   return j.followers ?? j.followersRemoved ?? [];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 TASK 1 — A CASE MANAGER FOLLOWS EVERY CASE OWNED BY A REP THEY SUPPORT.
+//
+// One rule, applied wherever an owner is set. The OWNER ID IS THE ONLY INPUT:
+// no division logic, no transfer-specific branch, no pipeline test. A case
+// changing pipelines with the same owner keeps the same managers and nothing
+// recomputes, because nothing about the answer depended on the pipeline.
+//
+// Visibility follows from the follower alone — `canSeeRecord` tests
+// `followerIds` on line 35, BEFORE any pipeline or grant test, and
+// `applyAccess` admits a follower in a non-home pipeline as `shared: true`.
+// Nothing here needs to grant anything.
+//
+// ── THE THREE RULES THIS MUST HOLD ────────────────────────────────────────
+//
+// A · A REP NOT IN THE MAP IS NOT AN ERROR. Add nothing, remove nothing, leave
+//     the field alone. Most of the 26 users on this account are in that state,
+//     and treating "unmapped" as "no managers" would blank a field on every one
+//     of their cases at every owner change.
+//
+// B · REMOVAL IS ONLY EVER FROM THIS FUNCTION'S OWN STORED RECORD — the
+//     "Case Manager Followers" field, written by this function and read by this
+//     function. NEVER inferred from the live followers (which include people a
+//     human added) and never from the access map. No field means remove
+//     NOTHING, inherited deliberately from `setReassignFollowers`.
+//
+//     🔴 AND IT IS A SEPARATE FIELD FROM "Reassign Followers" ON PURPOSE. The
+//     reassign claim CLEARS that one wholesale; a shared field would have each
+//     mechanism wiping the other's list, which is the failure that made the
+//     reassign field exist in the first place.
+//
+// C · TWO REMOVALS, TWO TRIGGERS, NEVER MERGED. `moveOpportunity` clears every
+//     follower but the new owner on a transfer — that is the transfer's
+//     removal, it runs on transfer, and this function's add runs after it. This
+//     function's OWN removal fires when a mapping changes, on cases that were
+//     never transferred. They do not know about each other and must not.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The name written to the record. Resolved by name; there is no id in this repo. */
+export const CASE_MANAGER_FIELD = "Case Manager";
+/** Rule B's own record: the ids THIS function added. Never the live list. */
+export const CASE_MANAGER_FOLLOWERS_FIELD = "Case Manager Followers";
+
+export interface CaseManagerResult {
+  /** True when rule A applied — no entry in the map, so nothing was touched. */
+  skipped: boolean;
+  why: string;
+  added: string[];
+  removed: string[];
+  /** What the Case Manager field now holds, or null when it was left alone. */
+  fieldValue: string | null;
+  /** Rule B could not run: no "Case Manager Followers" field on this account. */
+  noRecordField: boolean;
+  steps: string[];
+}
+
+/** The ids this function previously added, from its OWN field. Never inferred. */
+function readOwnRecord(
+  rec: { cf: Record<string, unknown> },
+  def: FieldDefinition | undefined,
+): string[] {
+  if (!def) return [];
+  const raw = rec.cf[def.id];
+  const text = Array.isArray(raw) ? raw.join(",") : String(raw ?? "");
+  return text.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * 🔴 NEVER THROWS. Every caller is a hook on a write that has ALREADY
+ * SUCCEEDED — the owner changed, and it changed correctly. A follower failure
+ * must not make a completed save report itself as failed. Everything that goes
+ * wrong comes back in `steps` and in the log, and the owner change stands.
+ */
+export async function applyCaseManagers(
+  oppId: string,
+  ownerId: string,
+  /**
+   * The record, when the caller already holds a FRESH one. `updateOpportunity`
+   * reads uncached immediately after its PUT, so passing it there makes the
+   * unmapped-and-unrecorded case cost nothing at all. `moveOpportunity` must
+   * NOT pass its copy: that one predates the transfer's follower clear by two
+   * steps, and acting on it would re-add people the transfer just removed.
+   */
+  known?: OpportunityRecord | null,
+): Promise<CaseManagerResult> {
+  const steps: string[] = [];
+  const out = (r: Partial<CaseManagerResult>): CaseManagerResult => ({
+    skipped: false, why: "", added: [], removed: [], fieldValue: null,
+    noRecordField: false, steps, ...r,
+  });
+
+  // ── RULE A, IN ITS RESOLVED FORM ────────────────────────────────────────
+  //
+  // 🔴 UNMAPPED DOES NOT MEAN UNTOUCHED — IT MEANS WE REMOVE WHAT WE ADDED AND
+  // NOTHING ELSE.
+  //
+  // The first version returned here the moment the owner had no entry, and that
+  // left a real leak: a case owned by a managed rep, reassigned to an unmapped
+  // one, kept the old managers following it forever. Rule A was never "do not
+  // touch a case whose owner is unmapped" — it was "never touch a follower this
+  // function did not add", and rule B's own stored field answers that exactly.
+  //
+  // ⚠️ SO THE TEST IS THE STORED RECORD, NOT THE MAP. Removing a follower named
+  // in our own field is READING, not inferring; the rule being protected — never
+  // touch the live follower list or the access map — is untouched by it.
+  //
+  //   no key · no stored record    nothing touched, no write
+  //   no key · stored record       remove what we added, clear the field
+  //   []     · either              remove what we added, clear the field
+  //   [ids]                        reconcile to the map
+  //
+  // ⚠️ `null` AND `[]` STILL MEAN DIFFERENT THINGS TO THE TAB — never mapped
+  // versus deliberately emptied. They converge on one behaviour only here, and
+  // only when we hold a record.
+  const mapped = getCaseManagers(ownerId);
+  const want = mapped ?? [];
+
+  try {
+    // 🔴 READ FRESH UNLESS THE CALLER HANDS ONE OVER. On the transfer path the
+    // caller's copy is the PRE-write one whose followers were cleared two steps
+    // ago, so that path always re-reads.
+    const rec = known ?? (await getOpportunityByIdUncached(oppId));
+    if (!rec) return out({ skipped: true, why: "the record could not be read back" });
+
+    const defs = await getFieldDefinitions();
+    const recordDef = findDefByName(defs, CASE_MANAGER_FOLLOWERS_FIELD);
+    const nameDef = findDefByName(defs, CASE_MANAGER_FIELD);
+    const noRecordField = !recordDef;
+    if (noRecordField)
+      // eslint-disable-next-line no-console
+      console.error(
+        `[casemgr] no "${CASE_MANAGER_FOLLOWERS_FIELD}" custom field on this account — the follower list cannot be recorded, so this apply will ADD but REMOVE NOTHING rather than guess. Create the field (TEXT, opportunity).`,
+      );
+
+    const mine = readOwnRecord(rec, recordDef);
+    const current = new Set(rec.followerIds);
+
+    // 🔴 TRUE RULE A: no entry AND nothing of ours on the record. There is
+    // nothing to add and nothing we are entitled to remove, so not one write is
+    // sent — which is the state 21 of the 26 users on this account are in.
+    if (mapped === null && mine.length === 0)
+      return out({
+        skipped: true,
+        why: ownerId
+          ? "that owner has no entry in the map and this function added nothing to this record"
+          : "the record has no owner",
+        noRecordField,
+      });
+
+    const added = want.filter((u) => u && u !== rec.ownerId && !current.has(u));
+    // 🔴 RULE B. Only from `mine`. A co-rep a human added is not in `mine`, so
+    // it can never appear here however the mapping changes.
+    const removed = noRecordField
+      ? []
+      : mine.filter((u) => u && !want.includes(u) && current.has(u));
+
+    // Remove first, then add — the same order the human followers route uses,
+    // "so a same-tick add wins if both are sent".
+    if (removed.length) {
+      await removeOpportunityFollowers(oppId, removed);
+      steps.push(`removed ${removed.length} follower(s) this function had added`);
+    }
+    if (added.length) {
+      await addOpportunityFollowers(oppId, added);
+      steps.push(`added ${added.length} manager(s) as follower(s)`);
+    }
+    if (noRecordField && mine.length === 0 && !removed.length)
+      steps.push(`⚠️ no "${CASE_MANAGER_FOLLOWERS_FIELD}" field — nothing was removed`);
+
+    // ── THE TWO FIELD WRITES ────────────────────────────────────────────────
+    // ⚠️ The Case Manager field is REWRITTEN FROM THE MAP, always — it is
+    // system-owned and there is no human value to preserve. An entry that is
+    // deliberately empty clears it; rule A above already returned for the
+    // absent-entry case, so this is never reached for an unmapped rep.
+    let fieldValue: string | null = null;
+    if (nameDef) {
+      const users = await getUserMap();
+      fieldValue = want.map((u) => users.get(u) || "").filter(Boolean).join(", ");
+      await putOpportunityVerified(
+        oppId,
+        { customFields: [{ id: nameDef.id, value: fieldValue }] },
+        "casemgr-name",
+      );
+      steps.push(fieldValue ? `Case Manager = "${fieldValue}"` : "Case Manager cleared");
+    } else {
+      steps.push(`⚠️ no "${CASE_MANAGER_FIELD}" field on this account — the name was not written`);
+    }
+    // 🔴 WHAT WE ADDED, NOT WHAT THE MAP SAYS. These differ in exactly one
+    // case, and storing `want` here would have let rule B be broken through the
+    // back door:
+    //
+    //   a human adds Carla as a co-rep on Ern's case
+    //   Ern's mapping later GAINS Carla   → `added` excludes her (already
+    //                                       following), so we added nothing …
+    //                                     → but `want` would record her as OURS
+    //   Ern's mapping later DROPS Carla   → 🔴 we remove a follower a human added
+    //
+    // `removed` reads this field and nothing else, so a name that reaches it
+    // wrongly becomes a removal we are not entitled to make — one run later,
+    // when the evidence is gone. The live follower list is never consulted for
+    // removal; that is the whole of rule B, and this is the only line that can
+    // put a name in front of it.
+    //
+    // ⚠️ `mine` IS KEPT, NOT JUST `added`. Somebody already ours and still
+    // wanted appears in neither `added` (they are following) nor `removed`
+    // (still in `want`) — dropping them would disown a manager we really did
+    // add, and the next mapping change would leave them following forever.
+    const nowOurs = want.filter((u) => added.includes(u) || mine.includes(u));
+    if (recordDef) {
+      await putOpportunityVerified(
+        oppId,
+        { customFields: [{ id: recordDef.id, value: nowOurs.join(",") }] },
+        "casemgr-record",
+      );
+    }
+
+    // 🔴 A 200 IS NOT A SUCCESS. Read back and check the managers are actually
+    // following before this reports itself done.
+    if (added.length || removed.length) {
+      invalidateOpportunity(oppId);
+      const after = await getOpportunityByIdUncached(oppId);
+      const now = new Set(after?.followerIds ?? []);
+      const missing = want.filter((u) => u !== rec.ownerId && !now.has(u));
+      const lingering = removed.filter((u) => now.has(u));
+      if (missing.length || lingering.length) {
+        steps.push(
+          `🔴 read-back MISMATCH — ${missing.length} manager(s) are still not following${
+            lingering.length ? `, ${lingering.length} removal(s) did not take` : ""
+          }`,
+        );
+        // eslint-disable-next-line no-console
+        console.error(
+          `[casemgr] ${oppId}: wrote followers and the read-back disagrees. missing=${missing.join(",")} lingering=${lingering.join(",")}`,
+        );
+      } else {
+        steps.push("read-back confirms the followers");
+      }
+    }
+
+    return out({ added, removed, fieldValue, noRecordField });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[casemgr] ${oppId}: apply failed — the owner change stands.`, e);
+    steps.push(`🔴 failed: ${e instanceof Error ? e.message : String(e)}`);
+    return out({ skipped: true, why: "the apply failed — see the log" });
+  }
 }
 
 // ---------------------------------------------------------------------------

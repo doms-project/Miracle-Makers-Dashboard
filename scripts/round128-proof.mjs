@@ -131,7 +131,20 @@ const code = rs.replace(/\/\*[\s\S]*?\*\//g, "").split("\n")
 console.log("  ⚠️ comments stripped — this file's prose names DIVISIONS repeatedly.");
 ok("🔴 the menu no longer maps the hardcoded list",
    !/DIVISIONS\.map\(/.test(code), "DIVISIONS.map survives in the menu");
-ok("it maps a derived list instead", /divisionChoices\.map\(/.test(code), "no derived list");
+// ⚠️ THE PROPERTY, NOT THE SPELLING. This read `/divisionChoices\.map\(/` and
+// task 2 · §3 made the menu `[ALL_DIVISIONS, ...divisionChoices].map(` — the
+// same claim, one character of syntax apart, and the assertion went red against
+// working code. Pinned to a literal I later improved, which is the recurring
+// one. What round 128 cares about is that the menu maps a DERIVED list and not
+// the hardcoded `DIVISIONS`; both halves of that are still tested.
+//
+// 🔴 AND WHAT `divisionChoices` IS HAS CHANGED UNDER THIS ASSERTION. Round 128
+// made it `Partner Division`'s option set; task 2 · §3 derives it from the
+// partners and events actually in the payload, because a FILTER must not offer
+// something that matches nothing. Round 128's own argument — that a list must
+// not name a division the account cannot have — survives intact, and still owns
+// the two create dialogs below.
+ok("it maps a derived list instead", /divisionChoices[^\n]*\.map\(/.test(code), "no derived list");
 ok("🔴 the event dialog is given the EVENT field's options",
    /<AddEventDialog[\s\S]{0,400}divisions=\{eventDivisions\}/.test(code), "still the partner list");
 ok("and the partner dialog the partner field's",

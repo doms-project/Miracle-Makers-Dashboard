@@ -262,6 +262,19 @@ export interface RawPartner {
   ownerId: string;
   notes: string;
   /**
+   * 🔴 TASK 2 · SECTION 4 — YOU OWN THIS PARTNER, AND THEIR DIVISION IS NOT ONE
+   * YOU HOLD.
+   *
+   * The exact parallel to `applyAccess` admitting an owned record from any
+   * pipeline as `shared: true` (lib/pipelineAccess.ts:143): a rep who owns an
+   * ODP partner while holding only Private Pay must still see them, because
+   * withholding it would hide their own work from them.
+   *
+   * ⚠️ ALWAYS FALSE FOR AN ADMIN, and for a deployment with no SSO — there is
+   * no viewer to be outside anything.
+   */
+  shared: boolean;
+  /**
    * Days since the newest note on this contact.
    *
    * 🔴 NULL MEANS UNKNOWN, NOT ZERO — the notes for this partner have not been

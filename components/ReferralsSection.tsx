@@ -18,7 +18,6 @@ import {
   partnerKpis,
   eventKpis,
   partnerEvents,
-  danglingReferrals,
   TOUCH_TYPES,
   type Division,
   type EnrichedPartner,
@@ -96,6 +95,27 @@ export interface Payload {
     outcomeField: string;
     eventsPipelineConfigured: boolean;
     eventsPipelineName: string;
+    /**
+     * 🔴 CLIENT PIPELINES THIS VIEWER MAY NOT FILE INTO — a count, never names.
+     *
+     * ⚠️ IT IS WHAT TELLS A FILTER FROM AN ABSENCE. `clientPipelines` empty and
+     * this 0 means the account has none configured; empty and this above 0
+     * means the viewer holds no grant. The two need different sentences, and
+     * only one of them sends the reader to an admin.
+     *
+     * Optional so an older payload reads as 0 rather than undefined-in-a-test.
+     */
+    clientPipelinesWithheld?: number;
+    /** Partners withheld from THIS viewer by division — task 2 · §4. */
+    partnersWithheld?: number;
+    /** Partners with no division at all, so visible to everyone. Account-wide. */
+    partnersNoDivision?: number;
+    /**
+     * 🔴 Cases whose partner was DELETED — computed server-side against the
+     * full partner list, round 145. Never recomputed here: the client sees
+     * only the partners it may see, so it cannot tell deleted from withheld.
+     */
+    danglingReferrals?: number;
     /** "role" = marked on the Pipelines screen · "name" = still matched on the string. */
     eventsPipelineVia?: "role" | "name" | "none";
     attendeeEventField: string;
@@ -138,7 +158,21 @@ const CADENCE_WORD: Record<string, string> = {
   C: "quarterly",
   Prospect: "3-weekly",
 };
-const divLabel = (d: Division) => (d === "All" ? "All divisions" : d);
+/**
+ * 🔴 TASK 2 · §4 — THE SWITCHER'S SECOND NON-DIVISION VALUE.
+ *
+ * `ALL_DIVISIONS` was already one: a menu value that is not a division and is
+ * never expected in the data. This is the other — "partners I own whose
+ * division I do not hold" — and it mirrors the Clients board's `scope ===
+ * "shared"` (app/page.tsx:2585) exactly.
+ *
+ * ⚠️ A SENTINEL THAT CANNOT COLLIDE WITH A REAL DIVISION. "Shared" is a
+ * plausible thing for somebody to type into a picklist; the space and the
+ * colon are not.
+ */
+const SHARED_SCOPE = "shared:owned";
+const divLabel = (d: Division) =>
+  d === "All" ? "All divisions" : d === SHARED_SCOPE ? "Shared with me" : d;
 
 function TierBadge({ t }: { t: string }) {
   const cls = t === "Prospect" ? "prospect" : t.toLowerCase();
@@ -313,12 +347,65 @@ export default function ReferralsSection({
     () => (data?.divisionOptions.length ? data.divisionOptions : [...DIVISIONS]),
     [data],
   );
+  /**
+   * 🔴 TASK 2 · SECTION 3 — THE SWITCHER READS THE RECORDS, NOT THE FIELD.
+   *
+   * This was `Partner Division`'s own option set. That is the right source for
+   * a CREATE FORM — which must offer every value the field can legitimately
+   * store, including one no record uses yet — and the wrong source for a
+   * FILTER, which should never offer something that matches nothing.
+   *
+   * ⚠️ IT MIRRORS THE CLIENTS BOARD, app/page.tsx:2424-2432, which builds its
+   * scope options from the records the viewer can see and nothing else. The
+   * shape is deliberately the same; the FIELD is not, and that is the point:
+   * Clients derives a division from the case's pipeline name, this screen
+   * reads one stored on the contact. Copying `divisionLabel(pipelineName)`
+   * here would build the option list in one vocabulary and filter in another —
+   * "OLTL Caregiver Applicants" reduces to "OLTL Caregiver", which is not a
+   * Partner Division value at all.
+   *
+   * 🔴 AND IT NARROWS BECAUSE THE DATA NARROWS. There is no grants logic here
+   * and there must not be: section 4 filters the partners server-side, so this
+   * list becomes viewer-correct as a consequence. That is exactly how the
+   * Clients switcher stays honest.
+   *
+   * ⚠️ "All" IS EXCLUDED FROM THE OPTIONS AND STILL HONOURED IN THE DATA. A
+   * partner marked "All" appears under every division (inDivision) — that is
+   * the record saying something, not a menu entry.
+   */
   const divisionChoices = useMemo(() => {
-    const live = (data?.divisionOptions || []).filter((d) => d !== ALL_DIVISIONS);
-    // ⚠️ THE FALLBACK IS THE OLD LIST, and it already ends in "All" — so it is
-    // used whole rather than having All appended twice.
-    return live.length ? [...live, ALL_DIVISIONS] : [...DIVISIONS];
+    const found = new Set<string>();
+    for (const p of data?.partners || [])
+      if (p.division && p.division !== ALL_DIVISIONS) found.add(p.division);
+    for (const e of data?.events || [])
+      if (e.division && e.division !== ALL_DIVISIONS) found.add(e.division);
+    return [...found].sort();
   }, [data]);
+  /**
+   * 🔴 THE `anyShared` HALF — app/page.tsx:2426, same idea. A partner you OWN
+   * whose division you do not hold; the parallel to applyAccess admitting an
+   * owned record from any pipeline. Before section 4 filtered anything this
+   * was always false, which is why it arrives with that section rather than
+   * with the switcher.
+   */
+  const anyShared = useMemo(
+    () => (data?.partners || []).some((p) => p.shared),
+    [data],
+  );
+  /**
+   * 🔴 BELOW TWO DIVISIONS THERE IS NOTHING TO SWITCH, SO THERE IS NO SWITCH —
+   * app/page.tsx:5823-5824, copied including the `anyShared` half.
+   *
+   * ⚠️ AND IT ANSWERS "ALL MUST NOT LIE" BY REMOVING THE THING THAT WOULD LIE.
+   * A viewer who can see exactly one division read "All divisions" over a
+   * screen showing one — true in the sense that nothing was filtered, and
+   * false in every sense the reader cares about. With no control there is no
+   * label to be wrong, and the heading names what is actually there.
+   */
+  const canSwitchDivision = divisionChoices.length > 1 || anyShared;
+  /** The heading when there is nothing to switch. Never "All divisions". */
+  const staticDivLabel =
+    divisionChoices.length === 1 ? divisionChoices[0] : "Referral partners";
   /**
    * 🔴 ROUND 130 — THE FALLBACK IS FIRING, AND SILENTLY IS THE PROBLEM.
    *
@@ -331,6 +418,21 @@ export default function ReferralsSection({
    * ⚠️ SO IT SAYS SO. Whichever cause it is — a renamed field, a plain-text
    * field, or a field that genuinely holds all four values — the person looking
    * at the switcher can tell which list they are being offered.
+   */
+  /**
+   * 🔴 ROUND 130'S WARNING NOW BELONGS TO THE CREATE DIALOGS, NOT THE SWITCHER.
+   *
+   * It said "these are the app's built-in divisions, no Partner Division
+   * options could be read" and rendered inside the switcher menu — correct when
+   * the switcher read that field. Task 2 · §3 moved the switcher onto the
+   * records, so leaving the note there would describe the SOURCE OF A DIFFERENT
+   * CONTROL: round 130's own complaint ("nothing said which you were looking
+   * at"), re-created by the fix that was supposed to help.
+   *
+   * ⚠️ DELETING IT WAS THE OTHER OPTION AND IT IS WORSE. The fallback still
+   * happens — `partnerDivisions` above still drops to the hardcoded four — and
+   * round 130 exists because that fallback is silent. Moving it is the only
+   * choice that keeps both true.
    */
   const divisionsAreLive = !!data && data.divisionOptions.length > 0;
   /**
@@ -360,9 +462,16 @@ export default function ReferralsSection({
    * is about, arrived at from the other direction.
    */
   useEffect(() => {
+    // ⚠️ SHARED_SCOPE IS NOT A DIVISION, so it is not clamped against the
+    // division list — it is clamped against whether anything IS shared, which
+    // is the same rule for a different menu entry.
+    if (division === SHARED_SCOPE) {
+      if (!anyShared) setDivision(ALL_DIVISIONS);
+      return;
+    }
     if (division !== ALL_DIVISIONS && !divisionChoices.includes(division))
       setDivision(ALL_DIVISIONS);
-  }, [divisionChoices, division]);
+  }, [divisionChoices, division, anyShared]);
 
   /** Round 124 · item 4 — the event awaiting a confirmed delete. */
   const [delEvent, setDelEvent] = useState<RawEvent | null>(null);
@@ -668,7 +777,13 @@ export default function ReferralsSection({
   const all = useMemo<EnrichedPartner[]>(() => {
     if (!data) return [];
     return data.partners
-      .filter((p) => inDivision(p.division, division))
+      // ⚠️ SHARED_SCOPE SHORT-CIRCUITS inDivision. "Shared with me" is not a
+      // division and inDivision would fall through to `d === viewing`, which
+      // no partner's field can ever equal — an option that silently matches
+      // nothing, which is what this round removed from the other end.
+      .filter((p) =>
+        division === SHARED_SCOPE ? p.shared : !p.shared && inDivision(p.division, division),
+      )
       // ITEM 2 — the two lists stay two lists right up to the row.
       .map((p) => enrichPartner(p, data.referrals, data.applicantRefs || []));
   }, [data, division]);
@@ -730,8 +845,16 @@ export default function ReferralsSection({
     }
   }, [all, data, ssoBlob]);
 
+  // ⚠️ AN EVENT IS NEVER "SHARED". Shared is a property of a PARTNER you own
+  // outside your divisions; events carry no owner on this screen, so under that
+  // scope the events list is empty rather than unfiltered. Falling through to
+  // inDivision would show EVERY event beside a partner list of one, which reads
+  // as the filter having failed.
   const events = useMemo(
-    () => (data ? data.events.filter((e) => inDivision(e.division, division)) : []),
+    () =>
+      !data || division === SHARED_SCOPE
+        ? []
+        : data.events.filter((e) => inDivision(e.division, division)),
     [data, division],
   );
   /**
@@ -893,7 +1016,18 @@ export default function ReferralsSection({
   }, [all]);
 
   const dangling = useMemo(
-    () => (data ? danglingReferrals(data.referrals, data.partners) : 0),
+    // 🔴 ROUND 145 — FROM THE SERVER, NOT COMPUTED HERE.
+    //
+    // This was `danglingReferrals(data.referrals, data.partners)`, and round
+    // 143 made `data.partners` the FILTERED list — so a partner this viewer
+    // may not see became indistinguishable from one that had been deleted, and
+    // the caveat below said their revenue was "attributed to nobody".
+    //
+    // ⚠️ THE CLIENT CANNOT MAKE THAT DISTINCTION and must not try: it only ever
+    // receives the partners it may see. The server computes it against the
+    // pre-filter list. `danglingReferrals` is still exported and still used —
+    // by the route.
+    () => data?.meta.danglingReferrals ?? 0,
     [data],
   );
 
@@ -1044,6 +1178,16 @@ export default function ReferralsSection({
             listbox under it — so it reads as a heading and behaves as a
             control, which is exactly what was asked for. */}
         <div className="rfhead" ref={divRef}>
+          {!canSwitchDivision ? (
+            /* 🔴 TASK 2 · §3 — A HEADING, NOT A CONTROL. See canSwitchDivision:
+               with one division (or none) there is nothing to choose, and a
+               control offering one option looks broken while its "All divisions"
+               label describes a filter that is doing nothing. */
+            <span className="rfdiv rfdivstatic">
+              <span className="rfdivname">{staticDivLabel}</span>
+            </span>
+          ) : (
+          <>
           <button
             type="button"
             className="rfdiv"
@@ -1079,7 +1223,11 @@ export default function ReferralsSection({
               id="rf-division-menu"
               aria-label="Division"
             >
-              {divisionChoices.map((d) => (
+              {/* ⚠️ "All" IS THE MENU'S OWN ENTRY. It was the last element of
+                  the old divisionChoices array; the new one is derived from the
+                  records and "All" is not a value any record's field should
+                  hold as a filter target, so the menu adds it here. */}
+              {[ALL_DIVISIONS, ...divisionChoices].map((d) => (
                 // ⚠️ `role` GOES ON THE FOCUSABLE ELEMENT, NOT ITS WRAPPER.
                 // `role="option"` sat on the <li> while the <button> inside it
                 // was the thing you could reach — so the element a keyboard
@@ -1101,20 +1249,36 @@ export default function ReferralsSection({
                   </button>
                 </li>
               ))}
-              {/* 🔴 ROUND 130 — WHICH LIST THIS IS. Round 128 made the switcher
-                  read `Partner Division`'s own options; when that read comes
-                  back empty the hardcoded four are shown instead, and until now
-                  nothing said which you were looking at. */}
-              {!divisionsAreLive ? (
-                <li className="rfdivnote">
-                  ⚠️ These are this app&apos;s built-in divisions. No{" "}
-                  <b>Partner Division</b> options could be read from this
-                  account — check the field exists, is named exactly{" "}
-                  <b>Partner Division</b>, and is a dropdown.
+              {/* 🔴 ROUND 130'S NOTE HAS MOVED — see divisionsAreLive. It
+                  described `Partner Division`'s option set, which this menu no
+                  longer reads; it now sits in the two dialogs that still do. */}
+              {/* 🔴 TASK 2 · §4 — A PARTNER YOU OWN, OUTSIDE YOUR DIVISIONS.
+                  The parallel to the Clients board's "Shared with me"
+                  (app/page.tsx:5838-5840): applyAccess admits an owned record
+                  from ANY pipeline, and this admits an owned partner from any
+                  division. Offered only when one exists, because an option that
+                  can never match is the thing this round removed. */}
+              {anyShared ? (
+                <li>
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={division === SHARED_SCOPE}
+                    className={division === SHARED_SCOPE ? "on" : ""}
+                    onClick={() => {
+                      setDivision(SHARED_SCOPE);
+                      setDivOpen(false);
+                    }}
+                  >
+                    <span>{divLabel(SHARED_SCOPE)}</span>
+                    {division === SHARED_SCOPE ? <span className="rftick">✓</span> : null}
+                  </button>
                 </li>
               ) : null}
             </ul>
           ) : null}
+          </>
+          )}
           <p className="rfsub">
             Referral sources, the contact cadence they are owed, and what they
             have sent.{" "}
@@ -1671,6 +1835,41 @@ export default function ReferralsSection({
                 </>
               ) : null}
             </p>
+            {/* ═══ TASK 2 · §4 — THE TWO COUNTS ═══════════════════════════════
+                🔴 EMPTY BECAUSE FILTERED AND EMPTY BECAUSE THERE IS NOTHING
+                MUST NOT LOOK THE SAME. The case that makes this necessary is a
+                recruiter granted only an applicant pipeline: divisionLabel
+                turns "OLTL Caregiver Applicants" into "OLTL Caregiver", which
+                matches no partner, so they get a blank table and no switcher.
+                Without this line that is indistinguishable from an account with
+                no partners — the same fault section 1 fixed one screen over. */}
+            {(data?.meta.partnersWithheld ?? 0) > 0 ? (
+              <p className="rffoot rfwithheld">
+                <b>
+                  {data?.meta.partnersWithheld}{" "}
+                  {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
+                  shown
+                </b>{" "}
+                — they belong to divisions you do not hold. You see the divisions
+                your pipelines are in, plus any partner assigned to you. Ask an
+                admin on <b>Admin → Access</b> if that is wrong.
+              </p>
+            ) : null}
+            {/* ⚠️ THE LABELLED LEAK, AND IT IS ACCOUNT-WIDE, NOT PER VIEWER. A
+                partner with no division is shown to everyone — deliberately,
+                because hiding it means nobody ever notices it needs one. The
+                create dialog now requires a division, so this set cannot grow:
+                the number should fall to zero and stay there. */}
+            {(data?.meta.partnersNoDivision ?? 0) > 0 ? (
+              <p className="rffoot">
+                ⚠️ <b>{data?.meta.partnersNoDivision}</b>{" "}
+                {data?.meta.partnersNoDivision === 1 ? "partner has" : "partners have"} no
+                division set, so {data?.meta.partnersNoDivision === 1 ? "it is" : "they are"}{" "}
+                visible to everyone whichever division they work in. Set{" "}
+                <b>Partner Division</b> on {data?.meta.partnersNoDivision === 1 ? "it" : "them"}{" "}
+                to scope {data?.meta.partnersNoDivision === 1 ? "it" : "them"}.
+              </p>
+            ) : null}
           </>
         ) : null}
 
@@ -2314,6 +2513,7 @@ export default function ReferralsSection({
           partner={refFor.partner}
           event={refFor.event}
           pipelines={data?.clientPipelines || []}
+          withheld={data?.meta.clientPipelinesWithheld || 0}
           onClose={() => setRefFor(null)}
           onLogged={() => void load()}
         />
@@ -2338,6 +2538,7 @@ export default function ReferralsSection({
           categories={data?.categoryOptions.length ? data.categoryOptions : [...PARTNER_CATEGORIES]}
           tiers={data?.tierOptions.length ? data.tierOptions : [...TIERS]}
           divisions={partnerDivisions}
+          divisionsAreLive={divisionsAreLive}
           onClose={() => setAddOpen(false)}
           onAdded={() => void load()}
         />
@@ -3234,6 +3435,7 @@ function AddPartnerDialog({
   categories,
   tiers,
   divisions,
+  divisionsAreLive,
   onClose,
   onAdded,
 }: {
@@ -3245,6 +3447,16 @@ function AddPartnerDialog({
   categories: string[];
   tiers: string[];
   divisions: string[];
+  /**
+   * 🔴 ROUND 130'S WARNING, MOVED HERE FROM THE SWITCHER — task 2 · §3.
+   *
+   * False means `Partner Division`'s options could not be read and `divisions`
+   * above is this app's hardcoded fallback. That fallback reproduces the
+   * pre-round-128 behaviour exactly, so without a note it hides its own
+   * failure — and this dialog is now the place it can actually mislead, since
+   * it is what writes the value.
+   */
+  divisionsAreLive: boolean;
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -3621,6 +3833,29 @@ function AddPartnerDialog({
                     </option>
                   ))}
                 </select>
+                {/* 🔴 TASK 2 · §4 — WHY IT IS NOW REQUIRED. A partner saved with
+                    no division is visible to EVERY viewer, because blank means
+                    "every division" (inDivision). That was the leak, and the
+                    count of it is on the Sources table. Requiring it here is
+                    what stops the set growing; the count then shrinks to zero
+                    on its own instead of being a permanent label. */}
+                {!div ? (
+                  <div className="rfdhint rfdbad">
+                    ⚠️ Required. A partner with no division is shown to
+                    everybody, whichever division they work in.
+                  </div>
+                ) : null}
+                {/* 🔴 ROUND 130'S NOTE, MOVED FROM THE SWITCHER. This dialog is
+                    what WRITES the value, so a fallback list misleads here in a
+                    way it no longer can on a switcher fed by the records. */}
+                {!divisionsAreLive ? (
+                  <div className="rfdhint">
+                    ⚠️ These are this app&apos;s built-in divisions. No{" "}
+                    <b>Partner Division</b> options could be read from this
+                    account — check the field exists, is named exactly{" "}
+                    <b>Partner Division</b>, and is a dropdown.
+                  </div>
+                ) : null}
               </div>
               <div>
                 <label htmlFor="rf-owner">Owner</label>
@@ -3668,7 +3903,13 @@ function AddPartnerDialog({
             type="button"
             className="cgsave"
             onClick={() => void save()}
-            disabled={busy || (mode === "new" ? !org.trim() : !picked)}
+            // 🔴 `!div` IS NEW — task 2 · §4. Both modes send `division: div`,
+            // and the guard checked only the name, so a partner added from the
+            // "All divisions" view (where `div` deliberately seeds EMPTY, so a
+            // view is not stored as a property) saved with no division at all —
+            // and blank means visible to everyone. This is the end that closes;
+            // the count on the Sources table is the end that labels.
+            disabled={busy || !div || (mode === "new" ? !org.trim() : !picked)}
           >
             {busy ? "Saving…" : mode === "existing" ? "Mark as partner" : "Add partner"}
           </button>
@@ -3694,6 +3935,7 @@ function LogReferralDialog({
   partner,
   event,
   pipelines,
+  withheld,
   onClose,
   onLogged,
 }: {
@@ -3708,6 +3950,15 @@ function LogReferralDialog({
   /** Set when the referral came from an event card. */
   event?: RawEvent;
   pipelines: PipelineChoice[];
+  /**
+   * 🔴 HOW MANY CLIENT PIPELINES THIS VIEWER MAY NOT FILE INTO — task 2 · §1.
+   *
+   * ⚠️ IT ONLY EVER CHANGES A SENTENCE. Nothing about the form's behaviour
+   * reads it; an empty `pipelines` already disables the save. What it decides
+   * is WHICH empty state is on screen, and that decision sends the reader to
+   * two different places.
+   */
+  withheld: number;
   onClose: () => void;
   onLogged: () => void;
 }) {
@@ -4241,6 +4492,23 @@ function LogReferralDialog({
                 {(partner?.division || event?.division)
                   ? `Defaulted from the ${partner?.division || event?.division} division.`
                   : "No division is set on the source, so the default is Private Pay."}
+              </>
+            ) : withheld > 0 ? (
+              /* 🔴 TASK 2 · §1 — THE SENTENCE THAT WAS FALSE. This read "There
+                 is no client pipeline CONFIGURED to file this in" for both
+                 empty states. On an account with three client pipelines and a
+                 viewer holding no grant, every word of it was wrong, and it
+                 sent them to look for a configuration problem that did not
+                 exist — the "0 of 2 that meant a filter, not an absence"
+                 failure, written before the filter it now describes.
+
+                 ⚠️ IT NAMES A COUNT AND NOT THE PIPELINES. Naming them is the
+                 disclosure this whole section closes. */
+              <>
+                You do not have access to any pipeline a referral can be filed
+                in. {withheld === 1 ? "One exists" : `${withheld} exist`} on this
+                account — ask an admin to grant you one on{" "}
+                <b>Admin → Access</b>.
               </>
             ) : (
               "There is no client pipeline configured to file this in."

@@ -24,7 +24,11 @@ import {
 } from "@/lib/ghl";
 import { mapLimit } from "@/lib/concurrency";
 import { divisionLabel } from "@/lib/division";
-import { applyAccess } from "@/lib/pipelineAccess";
+import {
+  applyAccess,
+  getUserHomePipelines,
+  userDivisions,
+} from "@/lib/pipelineAccess";
 import { isAdminSession } from "@/lib/visibility";
 import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
@@ -45,6 +49,8 @@ import {
   EVENT_HOST_FIELD_ID,
   composeTouch,
   parseTouch,
+  ALL_DIVISIONS,
+  danglingReferrals,
   type RawPartner,
   type RawReferral,
   type RawEvent,
@@ -483,18 +489,48 @@ export async function GET(request: Request) {
       // The client panel needs names to choose from, not a scorecard.
       if (only === "partners") {
         const rt = idOf(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id);
-        const res = await ghlSearchContacts(rt, PARTNER_RECORD_TYPE);
         const catId = idOf(PARTNER_FIELDS.category.name, PARTNER_FIELDS.category.id);
         const divId = idOf(PARTNER_FIELDS.division.name, PARTNER_FIELDS.division.id);
+        // 🔴 TASK 2 · SECTION 4 — THE SECOND LIST, AND IT GETS THE SAME TEST.
+        //
+        // This feeds the "Referred by" picker on a client record. It was the
+        // other unfiltered partner list, and two lists disagreeing about who
+        // may see whom is a second source of truth — the picker would have
+        // offered a partner the Referrals tab withholds, by name.
+        //
+        // ⚠️ `assignedTo` IS NOW IN THE PROJECTION. Without it the ownership
+        // arm below cannot run here, and the two lists would agree on division
+        // and differ on ownership — which is the same disagreement, smaller.
+        const [res, pipesForPicker] = await Promise.all([
+          ghlSearchContacts(rt, PARTNER_RECORD_TYPE),
+          listPipelines(),
+        ]);
+        const pickerAdmin = !session || isAdminSession(session.role, session.type);
+        const pickerDivisions = pickerAdmin
+          ? null
+          : userDivisions(
+              session?.userId || "",
+              new Map(pipesForPicker.map((p) => [p.id, p.name])),
+            );
+        const rows = res.rows
+          .map((c) => ({
+            id: c.id,
+            org: c.name,
+            cat: c.fields[catId] || "",
+            division: c.fields[divId] || "",
+            ownerId: c.assignedTo || "",
+          }))
+          .filter((p) => {
+            const d = (p.division || "").trim();
+            if (!pickerDivisions || !d || d === ALL_DIVISIONS) return true;
+            return pickerDivisions.includes(d) || p.ownerId === (session?.userId || "");
+          });
         return NextResponse.json(
           {
-            partners: res.rows.map((c) => ({
-              id: c.id,
-              org: c.name,
-              cat: c.fields[catId] || "",
-              division: c.fields[divId] || "",
-            })),
+            partners: rows,
             truncated: res.truncated,
+            /** Same honesty as the full list — a count, never the names. */
+            withheld: res.rows.length - rows.length,
           },
           { headers: { "Cache-Control": "no-store" } },
         );
@@ -514,12 +550,24 @@ export async function GET(request: Request) {
       // ── partners, by Record Type ───────────────────────────────────────────
       const partnerRes = await ghlSearchContacts(F.recordType, PARTNER_RECORD_TYPE);
 
-      const [users, attendeeRes] = await Promise.all([
+      // ⚠️ HOISTED ABOVE THE PARTNER BLOCK — task 2 · §4 needs it there, and it
+      // depends on nothing but `session`. It used to sit beside the referral
+      // filter two hundred lines down, which is why the first build of this
+      // section failed to compile rather than quietly reading undefined.
+      const isAdmin = !session || isAdminSession(session.role, session.type);
+      const [users, attendeeRes, allPipes] = await Promise.all([
         getUserMap(),
         ghlSearchContacts(F.recordType, ATTENDEE_RECORD_TYPE),
+        // ⚠️ `listPipelines`, NOT `getSelectedPipelines("client")`. A viewer's
+        // HOME pipelines are whatever the access map grants them, which need
+        // not be client-scoped — a recruiter holds applicant pipelines. Naming
+        // only the client ones would read those grants as no division at all.
+        // It is memoised (cache.pipelines), so this costs no extra request.
+        listPipelines(),
       ]);
+      const pipelineNameById = new Map(allPipes.map((p) => [p.id, p.name]));
 
-      const partners: RawPartner[] = partnerRes.rows.map((c) => ({
+      const allPartners: RawPartner[] = partnerRes.rows.map((c) => ({
         id: c.id,
         org: c.name,
         email: c.email,
@@ -530,8 +578,54 @@ export async function GET(request: Request) {
         owner: users.get(c.assignedTo) || "",
         ownerId: c.assignedTo || "",
         notes: c.fields[F.notes] || "",
+        shared: false, // decided by partnerScope below
         lastTouch: null, // resolved below, for the ids asked for
       }));
+
+      // ═══ TASK 2 · SECTION 4 — PARTNER ROWS GET AN ACCESS TEST ══════════════
+      //
+      // 🔴 THEY HAD NONE AT ALL. Round 100 found `isMine` only in the touch
+      // queue; every viewer received every partner contact on the account —
+      // name, email, phone, owner and notes. Partners are CONTACTS, so
+      // applyAccess (which takes OpportunityRecord[]) never reached them.
+      //
+      // ⚠️ AND THE SCOPE IS DIVISION, NOT OWNERSHIP. `visible` on a referral is
+      // an ownership flag and round 122 settled that aggregates must not be cut
+      // by it. This is a different question — which PROGRAMME's partners you
+      // work with — and it has a different answer.
+      const partnerDivisions = isAdmin
+        ? null
+        : userDivisions(session?.userId || "", pipelineNameById);
+      const scoped = allPartners.map((p) => {
+        // Blank and "All" are UNIVERSAL FOR DISPLAY — see inDivision, and the
+        // decision recorded there. Blank is counted below rather than hidden.
+        const d = (p.division || "").trim();
+        const mine = !partnerDivisions || !d || d === ALL_DIVISIONS || partnerDivisions.includes(d);
+        // 🔴 THE `shared` HALF, and it is the exact parallel to applyAccess
+        // admitting an owned record from ANY pipeline (lib/pipelineAccess.ts:143):
+        // a rep who OWNS an ODP partner while holding only Private Pay must
+        // still see that partner. Withholding it would hide their own work.
+        const owned = !!p.ownerId && p.ownerId === (session?.userId || "");
+        return { p, visible: mine || owned, shared: !mine && owned };
+      });
+      const partners: RawPartner[] = scoped
+        .filter((s) => s.visible)
+        .map((s) => ({ ...s.p, shared: s.shared }));
+      /** Withheld from THIS viewer. A count, never the names. */
+      const partnersWithheld = allPartners.length - partners.length;
+      /**
+       * 🔴 PARTNERS WITH NO DIVISION AT ALL — THE LABELLED LEAK.
+       *
+       * Blank matches every division, so an uncategorised partner reaches every
+       * viewer. That is deliberate: hiding it would mean nobody ever notices it
+       * needs a division, and it fights the touch queue's rule that unclaimed
+       * relationships surface rather than hide.
+       *
+       * ⚠️ SO IT IS COUNTED AND SAID, not closed. What closes it is the create
+       * dialog now REQUIRING a division, which stops the set growing — this
+       * number should shrink to zero and stay there.
+       */
+      const partnersNoDivision = allPartners.filter((p) => !(p.division || "").trim()).length;
 
       // ── last touch, for the partners asked for ─────────────────────────────
       const live = new Set(partners.map((p) => p.id));
@@ -564,7 +658,22 @@ export async function GET(request: Request) {
       // SSO configured there is no viewer to scope to, so everything is
       // visible — the same posture ssoConfigured() takes everywhere else,
       // rather than hiding every record from a session that cannot exist.
-      const isAdmin = !session || isAdminSession(session.role, session.type);
+      /**
+       * 🔴 TASK 2 · SECTION 1 — THE VIEWER'S OWN PIPELINES, OR `null` FOR AN
+       * ADMIN. Read once here and used twice below (the picker list and its
+       * withheld count); the POST computes its own, because it is a separate
+       * request with its own session.
+       *
+       * ⚠️ `null` AND AN EMPTY Set ARE DIFFERENT ANSWERS. `null` means "do not
+       * filter" (admin, or no SSO); an empty Set means "granted nothing", which
+       * is a real state on this account today and must filter everything out.
+       * Collapsing them — `home?.size ? … : all` — is a fail-open that looks
+       * exactly like the bug being unfixed, which is why it is not written that
+       * way.
+       */
+      const clientHome = isAdmin
+        ? null
+        : getUserHomePipelines(session?.userId || "");
       const visibleIds = new Set(
         applyAccess(records, {
           userId: session?.userId || "",
@@ -589,6 +698,32 @@ export async function GET(request: Request) {
           visible: visibleIds.has(r.id),
         }))
         .filter((o) => o.partnerId);
+
+      // ═══ 🔴 ROUND 145 — A WITHHELD PARTNER IS NOT A DELETED ONE ═══════════
+      //
+      // THIS IS A DEFECT ROUND 143 SHIPPED, AND IT IS FIXED HERE BECAUSE ONLY
+      // THE SERVER CAN TELL THE TWO APART.
+      //
+      // `danglingReferrals` counts cases whose partnerId is absent from the
+      // partner list, and the screen says "…points at a partner that no longer
+      // exists, so their revenue is attributed to nobody." Round 143 began
+      // WITHHOLDING partners by division while leaving every case in the array,
+      // so for a scoped viewer a partner they merely may not see read as one
+      // that had been deleted. Reproduced, not suspected:
+      //
+      //   admin  (full partner list)  dangling = 0
+      //   PP rep (p_oltl withheld)    dangling = 1
+      //
+      // ⚠️ THE CLIENT CANNOT FIX THIS. It receives only the partners it may
+      // see, so "absent" is all it can observe; "absent because deleted" and
+      // "absent because withheld" are the same shape there. The count is
+      // computed against `allPartners` — the pre-filter list — and sent.
+      //
+      // 🔴 AND IT WILL MOVE AGAIN IN SECTION 2. Once cases are scoped too, a
+      // case and its partner can be withheld independently and this still has
+      // to be computed before BOTH filters. A second edit to this line is the
+      // price of not shipping a wrong sentence in the meantime.
+      const danglingCount = danglingReferrals(referrals, allPartners);
 
       // ══ ROUND 122 · ITEM 2 — APPLICANTS, IN THEIR OWN LIST ════════════════
       //
@@ -675,6 +810,32 @@ export async function GET(request: Request) {
         version: c.version,
       }));
 
+      // ═══ TASK 2 · SECTION 1 — THE TWO LISTS, SO THE DIFFERENCE IS SAYABLE ══
+      //
+      // 🔴 THE COUNT IS THE HONESTY, and it is why this is computed here rather
+      // than inline in the payload. An empty picker has TWO causes that look
+      // identical on screen:
+      //
+      //   nothing configured   the account has no client pipeline at all
+      //   nothing granted      it has three and this viewer holds none
+      //
+      // The dialog said "There is no client pipeline CONFIGURED to file this
+      // in" for both, which is true of the first and false of the second — the
+      // "0 of 2 that meant a filter, not an absence" failure, in a sentence
+      // written before this filter existed. Sending the withheld COUNT (never
+      // the names) lets the screen say which it is.
+      //
+      // ⚠️ AND A COUNT IS ITSELF A SMALL DISCLOSURE: it tells a Private Pay rep
+      // that pipelines exist they cannot use. Taken deliberately, on the same
+      // reasoning as the drawer's "6 of 12 shown" — a number with no name in it
+      // is the price of not lying, and silence is the worse trade.
+      const clientChoices = (await getSelectedPipelines("client")).filter(
+        (p) => p.id !== evPipe?.id,
+      );
+      const clientAllowed = clientChoices.filter(
+        (p) => !clientHome || clientHome.has(p.id),
+      );
+
       return NextResponse.json(
         {
           partners,
@@ -713,8 +874,35 @@ export async function GET(request: Request) {
           // Where "Log a referral" may file a case. 🔴 The Events pipeline is
           // EXCLUDED: an event is not a client, and offering it would let a
           // referral be filed as one.
-          clientPipelines: (await getSelectedPipelines("client"))
-            .filter((p) => p.id !== evPipe?.id)
+          //
+          // ═══ TASK 2 · SECTION 1 — AND IT IS SCOPED TO THE VIEWER ═══════════
+          //
+          // 🔴 THIS LIST USED TO GO OUT WHOLE, TO EVERYONE. Two faults, and the
+          // second is the one that damages data:
+          //
+          //   DISCLOSURE      the pipeline names on this account are
+          //                   "OLTL Enrollment", "ODP Transfer", "Private Pay
+          //                   Clients". A Private Pay rep holding no OLTL grant
+          //                   read OLTL in a dropdown.
+          //
+          //   A RECORD THE    "Log a referral → New enquiry" creates an
+          //   CREATOR CANNOT  UNASSIGNED opportunity (this form sends no owner
+          //   SEE            — deliberately, the pipeline's workflow decides).
+          //                   applyAccess admits an unassigned record ONLY in a
+          //                   home pipeline (lib/pipelineAccess.ts:140), so a
+          //                   case filed into an ungranted pipeline vanished
+          //                   from its creator's board the moment it was made.
+          //
+          // ⚠️ AND THE SAME FILTER IS ON THE WRITE — see `log-referral` in the
+          // POST. Filtering only here would stop the dropdown NAMING OLTL while
+          // still accepting an OLTL pipelineId, which is the same fault with a
+          // cosmetic patch over it.
+          //
+          // 🔴 `null` FOR AN ADMIN, A Set FOR EVERYONE ELSE. An empty Set is a
+          // real answer — "granted nothing" — and must not read as "unfiltered".
+          // That distinction is the whole bug in one line: `!home` is false for
+          // an empty Set, so an ungranted viewer correctly gets nothing.
+          clientPipelines: clientAllowed
             .map((p) => ({
               id: p.id,
               name: p.name,
@@ -738,6 +926,42 @@ export async function GET(request: Request) {
           meta: {
             eventsPipelineConfigured: !!evPipe,
             eventsPipelineName: evPipe?.name || "",
+            /**
+             * 🔴 TASK 2 · SECTION 1 — HOW MANY CLIENT PIPELINES THIS VIEWER MAY
+             * NOT FILE INTO. A COUNT, NEVER THE NAMES — naming them is the
+             * disclosure the filter exists to close.
+             *
+             * ⚠️ IT IS WHAT MAKES THE EMPTY PICKER SAYABLE. `clientPipelines`
+             * empty with this at 0 means the account has none configured;
+             * empty with this above 0 means the viewer holds no grant. The two
+             * need different sentences and one of them names a different
+             * person to go and ask.
+             */
+            clientPipelinesWithheld: clientChoices.length - clientAllowed.length,
+            /**
+             * 🔴 TASK 2 · SECTION 4 — PARTNERS THIS VIEWER MAY NOT SEE.
+             *
+             * ⚠️ IT EXISTS FOR THE CASE THAT LOOKS BROKEN: a recruiter granted
+             * only an applicant pipeline has the division "OLTL Caregiver"
+             * (divisionLabel strips " Applicants" and leaves the rest), which
+             * matches no partner — so they get an EMPTY table. Empty because
+             * filtered and empty because there is nothing must not look the
+             * same. Same shape and same reason as clientPipelinesWithheld.
+             */
+            partnersWithheld,
+            /**
+             * Partners carrying no division at all, and therefore visible to
+             * everyone. The labelled leak — see the decision at
+             * lib/referrals.ts inDivision. Counted account-wide, not per
+             * viewer: it is a data-quality number for whoever can fix it.
+             */
+            partnersNoDivision,
+            /**
+             * 🔴 ROUND 145 — COMPUTED AGAINST THE FULL PARTNER LIST, SERVER
+             * SIDE, because the client cannot tell a withheld partner from a
+             * deleted one. See the note beside danglingCount.
+             */
+            danglingReferrals: danglingCount,
             // ⚠️ HOW IT WAS FOUND — round 124, item 2. "role" means an admin
             // marked it and a rename cannot break it; "name" means it is still
             // being matched on the string "Events" and one rename away from
@@ -890,16 +1114,61 @@ export async function POST(request: Request) {
         const pipelines = await getSelectedPipelines("client");
         const { pipe: evPipe } = await eventsPipeline();
         const choices = pipelines.filter((p) => p.id !== evPipe?.id);
+
+        // ═══ TASK 2 · SECTION 1 — THE WRITE HALF ═══════════════════════════
+        //
+        // 🔴 THE GET FILTER WITHOUT THIS ONE IS A COSMETIC PATCH. The dropdown
+        // would stop NAMING OLTL while this handler still accepted an OLTL
+        // pipelineId — the same fault, hidden. So the destination list is
+        // scoped here too, from this request's own session.
+        //
+        // ⚠️ A REFUSAL, NOT A QUIET FALLBACK. If an ungranted pipeline were
+        // simply dropped from `choices`, the `||` chain below would file the
+        // case SOMEWHERE ELSE and return 200 — a referral silently landing in
+        // a pipeline nobody chose, which is worse than the leak. Naming an
+        // ungranted pipeline is answered with 403 and the pipeline's name,
+        // because the caller is entitled to know why their pick was refused.
+        //
+        // ⚠️ AND IT NAMES ONLY WHAT THEY ALREADY NAMED. The 403 echoes the
+        // pipeline the caller sent; it never lists the others.
+        const postHome = isAdminSession(session?.role, session?.type) || !session
+          ? null
+          : getUserHomePipelines(session?.userId || "");
+        const allowed = choices.filter((p) => !postHome || postHome.has(p.id));
+        const picked = (body.pipelineId || "").trim();
+        const pickedReal = choices.find((p) => p.id === picked);
+        if (picked && pickedReal && !allowed.some((p) => p.id === picked))
+          return NextResponse.json(
+            {
+              error: `You do not have access to "${pickedReal.name}".`,
+              // ⚠️ "…OR FILE IT IN ONE OF YOUR OWN" IS ADVICE A VIEWER WITH
+              // NONE CANNOT TAKE, and the proof caught it: an ungranted rep
+              // naming a pipeline got told to use another of theirs when they
+              // have none. `allowed.length` is already in hand, so the sentence
+              // can stop short rather than send them looking.
+              detail:
+                "Nothing was created. A case filed there would not appear on your board. Ask an admin to grant you that pipeline on Admin → Access" +
+                (allowed.length ? ", or file this referral in one of your own." : "."),
+              status: 403,
+            } as ApiError,
+            { status: 403 },
+          );
+
         // 🔴 RESOLVED, NEVER HARDCODED. The brief says "creates an opportunity
         // in Private Pay"; section 9 forbids hardcoded pipeline ids. So the
         // destination is the one the CALLER picked, and the fallback is matched
         // by divisionLabel() — the same derivation the whole app uses.
+        //
+        // ⚠️ EVERY ARM READS `allowed`, INCLUDING THE FALLBACKS. A viewer who
+        // sends no pipelineId must not be defaulted into a pipeline they hold
+        // no grant for — that is the same "record the creator cannot see",
+        // arrived at by omission instead of by choice.
         const dest =
-          choices.find((p) => p.id === (body.pipelineId || "").trim()) ||
-          choices.find(
+          allowed.find((p) => p.id === picked) ||
+          allowed.find(
             (p) => norm(divisionLabel(p.name)) === norm((body.division || "Private Pay").trim()),
           ) ||
-          choices.find((p) => /private\s*pay/i.test(p.name));
+          allowed.find((p) => /private\s*pay/i.test(p.name));
         // 🔴 TWO DIFFERENT FAILURES, AND ONE MESSAGE WAS LYING ABOUT BOTH.
         //
         // This said "There is no client pipeline to file this referral in" for
@@ -907,21 +1176,33 @@ export async function POST(request: Request) {
         // OLTL pipeline and no Private Pay one — so the dashboard refused the
         // referral while telling the user there was nowhere to put it, with a
         // perfectly good pipeline sitting right there. Say which it is.
+        //
+        // ⚠️ AND NOW THERE IS A THIRD: pipelines exist, and this viewer holds
+        // none of them. Telling them to "give a pipeline client scope in Admin
+        // → Pipelines" would send them to configure something already
+        // configured — the same lie the dialog told, in the route.
         if (!dest)
           return NextResponse.json(
-            choices.length
+            !allowed.length && choices.length
               ? {
-                  error: "Choose where to file this referral.",
-                  detail: `Nothing was created. No client pipeline matches ${body.division ? `the partner's division (${body.division})` : "Private Pay"}, so the destination has to be picked: ${choices.map((p) => p.name).join(", ")}.`,
-                  status: 409,
-                }
-              : {
-                  error: "There is no client pipeline to file this referral in.",
+                  error: "You do not have access to any pipeline a referral can be filed in.",
                   detail:
-                    "Nothing was created. Give a pipeline client scope in Admin → Pipelines, then log the referral.",
-                  status: 409,
-                },
-            { status: 409 },
+                    "Nothing was created. The pipelines exist — you hold no grant for them. Ask an admin to grant you one on Admin → Access.",
+                  status: 403,
+                }
+              : allowed.length
+                ? {
+                    error: "Choose where to file this referral.",
+                    detail: `Nothing was created. No client pipeline matches ${body.division ? `the partner's division (${body.division})` : "Private Pay"}, so the destination has to be picked: ${allowed.map((p) => p.name).join(", ")}.`,
+                    status: 409,
+                  }
+                : {
+                    error: "There is no client pipeline to file this referral in.",
+                    detail:
+                      "Nothing was created. Give a pipeline client scope in Admin → Pipelines, then log the referral.",
+                    status: 409,
+                  },
+            { status: !allowed.length && choices.length ? 403 : 409 },
           );
         // 🔴 ROUND 126 — the same rule that the picker DISPLAYED must be the
         // one the write USES, or the dialog promises one stage and files

@@ -204,6 +204,47 @@ export function getMasterUsers(): string[] {
   return [...(masterStore.getStore() ?? [])];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 TASK 1 — CASE MANAGERS. Rep user id → the managers who follow their cases.
+//
+// Same store discipline as the three above: request-scoped, filled by
+// `withGrants` from the one custom value it already reads, NEVER a module
+// variable. A module cache here would mean a mapping changed on the Access tab
+// did not take effect until the lambda recycled.
+// ═══════════════════════════════════════════════════════════════════════════
+const caseManagerStore = new AsyncLocalStorage<AccessMap>();
+
+export function runWithCaseManagers<T>(map: AccessMap, fn: () => T): T {
+  return caseManagerStore.run(map, fn);
+}
+
+/**
+ * 🔴 `null` AND `[]` ARE DIFFERENT ANSWERS AND THE CALLER MUST TELL THEM APART.
+ *
+ *   null  this rep has NO ENTRY in the map — they are not managed by this
+ *         system at all. Rule A: add nothing, remove nothing, touch nothing.
+ *         Most of the 26 users on this account are in this state.
+ *   []    this rep HAS an entry and it is deliberately empty — somebody removed
+ *         their last manager on the Access tab. That is an instruction to clear,
+ *         not an absence.
+ *
+ * ⚠️ COLLAPSING THEM WOULD BLANK THE Case Manager FIELD ON EVERY UNMANAGED
+ * REP'S CASES, on every owner change — 21 of 26 users' records, silently.
+ */
+export function getCaseManagers(repId: string): string[] | null {
+  const store = caseManagerStore.getStore();
+  if (!store || !repId) return null;
+  const hit = store.get(repId);
+  return hit ? [...hit] : null;
+}
+
+/** The whole map, for the Access tab's own rendering. */
+export function allCaseManagers(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [rep, mgrs] of caseManagerStore.getStore() ?? []) out[rep] = [...mgrs];
+  return out;
+}
+
 export function buildIdMap(stored: Record<string, string[]> | undefined): AccessMap {
   const map: AccessMap = new Map();
   for (const [k, ids] of Object.entries(stored || {}))

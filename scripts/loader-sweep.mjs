@@ -477,10 +477,43 @@ for (const f of files) {
   }
 }
 
+// ── RULE 12 · THE BUILD STAMP IS OLDER THAN THE NEWEST REPORT ──────────────
+//
+// 🔴 ROUNDS 135, 136 AND 137 ALL SHIPPED WITH THE FOOTER READING 134. That is
+// the one failure `lib/build.ts` exists to prevent: "what does the footer say?"
+// is the first question of every bug report, and for three rounds the answer
+// named a round that predated the work entirely.
+//
+// ⚠️ THIS IS A RULE AND NOT A CHECKLIST LINE BECAUSE A CHECKLIST IS WHAT
+// MISSED IT — three times, by the same person, who had written the file. The
+// round number is in the report's own filename, so the check is mechanical:
+// if a report is numbered above the stamp, the stamp is stale.
+//
+// Suffixed rounds (134 → "115b" style) compare on the numeric part alone; a
+// report and a stamp at the same number is the state this rule wants.
+const stampText = readFileSync("lib/build.ts", "utf8");
+const stamped = /round:\s*"(\d+)/.exec(stampText)?.[1];
+const reportNums = readdirSync(".")
+  .map((n) => /^V2-REPORT-(\d+)/.exec(n)?.[1])
+  .filter(Boolean)
+  .map(Number);
+const newest = reportNums.length ? Math.max(...reportNums) : 0;
+if (stamped && newest > Number(stamped)) {
+  const n = stampText.slice(0, stampText.indexOf('round: "')).split("\n").length;
+  flag("THE BUILD STAMP IS OLDER THAN THE NEWEST ROUND", "lib/build.ts", n,
+       `round: "${stamped}"  ·  newest report: ${newest}`,
+       `The footer will say v${stamped} while the build contains round ${newest}'s ` +
+       "changes. That is the first thing asked about every live defect, and a " +
+       "wrong answer sends the investigation looking for a deployment problem " +
+       "that is not there. Bump BUILD.round in the same commit as the work — " +
+       "and do NOT backfill a stamp after the fact: a hole in the numbering is " +
+       "worth more than a number nobody can trust.");
+}
+
 console.log(
   findings
     ? `\n${findings} finding(s). Each is a shape that has already shipped broken.`
-    : "\nNo loader, credential, trim, wall, tickbox or undefined-class shape matches a known defect. ✅",
+    : "\nNo loader, credential, trim, wall, tickbox, undefined-class or stale-stamp shape matches a known defect. ✅",
 );
 console.log(
   "\n⚠️ A CLEAN SWEEP IS NOT A PROOF OF CORRECTNESS. It only says nothing " +

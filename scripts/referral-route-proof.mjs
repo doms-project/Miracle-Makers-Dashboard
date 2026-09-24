@@ -17,6 +17,37 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 THIS FILE COULD NOT GO RED, AND THAT WAS WORSE THAN THE STALE ASSERTION
+// IT WAS HIDING.
+//
+// Every check here is written inline as `${cond ? "ok  " : "FAIL"}` inside a
+// console.log, and the file ended `process.exit(0)` unconditionally. So a FAIL
+// was a STRING, not a result: the proof printed it, exited 0, and any runner
+// that reads exit codes — including the regression sweep that finally caught
+// this — recorded a pass. One assertion had been red for an entire round and
+// nothing anywhere said so.
+//
+// ⚠️ A COUNTING SHIM RATHER THAN FIFTEEN REWRITES, deliberately. Rewriting the
+// call sites to an `ok()` helper would fix today's fifteen and leave the next
+// person free to add a sixteenth in the file's own established style — silent
+// again. This counts the OUTPUT, so anything printed in that shape counts
+// whether or not its author knew about this block.
+//
+// The prefix is exact: two spaces, then `ok  ` or `FAIL`, then a space. The
+// section heading "5 · THE SECOND WRITE FAILS" contains the word and is not
+// matched, which is the case that makes a looser regex wrong.
+// ═══════════════════════════════════════════════════════════════════════════
+let pass = 0, fail = 0;
+const realLog = console.log.bind(console);
+console.log = (...args) => {
+  for (const line of String(args[0] ?? "").split("\n")) {
+    const m = /^ {2}(ok {2}|FAIL) /.exec(line);
+    if (m) (m[1] === "FAIL" ? (fail += 1) : (pass += 1));
+  }
+  realLog(...args);
+};
+
 const LOC = "loc_test";
 const RT = "F_RECORD_TYPE";
 const CAT = "F_CAT";
@@ -472,8 +503,30 @@ console.log(`  cf sent: ${JSON.stringify(eb.customFields)}`);
 console.log(
   `  ${(eb.customFields || []).some((f) => f.id === "F_EVHOST" && f.value === "p1") ? "ok  " : "FAIL"} Event Host written — "Run by" can now resolve`,
 );
+// 🔴 THIS ASSERTED THE BEHAVIOUR THE CODE DELIBERATELY REMOVED — `eb.contactId
+// === "p1"`, the HOST's contact. A later round changed an event to hang off a
+// VENUE contact, and said why at the call site:
+//
+//   "'Riddle Hospital' is both a plausible venue and an actual partner on this
+//    account — and attaching the event to the PARTNER's contact is the exact
+//    bug this item exists to remove."
+//
+// ⚠️ THE HOST IS NOT LOST, it moved to the field built for it: the assertion
+// directly above checks `Event Host` = p1 and passes. The two lines contradicted
+// each other for a round and the passing one was the right one.
+//
+// 🔴 SAME SHAPE AS ROUND 121, INVERTED. That proof was GREEN on a bug because
+// its fake answered an endpoint GoHighLevel refuses; this one was RED on a fix
+// because it outlived the belief it encoded. A proof is a claim with a date on
+// it, and neither direction is safe to leave.
 console.log(
-  `  ${eb.contactId === "p1" ? "ok  " : "FAIL"} the host IS the opportunity's contact (no invented placeholder)`,
+  `  ${eb.contactId && eb.contactId !== "p1" ? "ok  " : "FAIL"} the event hangs off a VENUE contact, never the host's (got ${JSON.stringify(eb.contactId)})`,
+);
+// ⚠️ AND THE CONTROL FOR IT. "Not the host" is satisfied by an empty id or by
+// no request at all, so the response must also name the venue contact it used
+// and say whether it reused one.
+console.log(
+  `  ${newEv.body?.venueContactId === eb.contactId ? "ok  " : "FAIL"} and the route REPORTS which venue contact it used (${JSON.stringify(newEv.body?.venueContactId)}, reused=${JSON.stringify(newEv.body?.venueReused)})`,
 );
 
 // (c) the touch type — collected AND persisted, then parsed back out.
@@ -513,4 +566,8 @@ console.log(
 
 dev.kill("SIGTERM");
 fake.close();
-setTimeout(() => process.exit(0), 500);
+// 🔴 THE TALLY, AND AN EXIT CODE THAT MEANS SOMETHING. `process.exit(0)` was
+// unconditional here, so this file reported success while printing FAIL. A
+// proof that cannot go red is not a proof — it is a log with opinions.
+realLog(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
+setTimeout(() => process.exit(fail ? 1 : 0), 500);

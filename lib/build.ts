@@ -25,13 +25,22 @@ export const BUILD = {
    * numeric field would have forced a renumber, and renumbering a stamp whose
    * whole job is to identify a build defeats the stamp.
    */
-  round: "134",
+  /*
+   * ⚠️ 135, 136 AND 137 NEVER MOVED THIS. Task 1's three steps shipped under a
+   * stamp that read 134, which is the one failure this file exists to prevent:
+   * "what does the footer say?" would have answered with a round that predates
+   * the case-manager work entirely. The jump 134 → 138 is that gap, left visible
+   * rather than backfilled — a stamp rewritten after the fact is a stamp that
+   * cannot be trusted to mean anything.
+   */
+  round: "145",
   /** One line naming what that round changed, for a reader who has the tab open. */
   summary:
-    "the phone and the email are editable in the record panel — click to type, " +
-    "the link is kept and the pencil beside it opens the editor · which is what " +
-    "makes round 133's “add one, then transfer” an instruction somebody can " +
-    "actually follow",
+    "140 · “Log a referral” only offers — and only accepts — a pipeline the " +
+    "viewer holds, and an empty picker says whether that is a grant you lack " +
+    "or a pipeline nobody configured · 141 · no product change: the referrals " +
+    "route proof now counts its own results and can fail, having printed FAIL " +
+    "and exited 0 for a round · 143 · partner rows are scoped to the divisions you hold, plus any partner assigned to you; the switcher lists the divisions actually present rather than the field's whole picklist, and disappears when there is nothing to switch · 144 · no product change, a design report only — and it found a live defect from 143: a partner withheld by division reads as one that was deleted · 145 · that defect fixed: the count is computed server-side against the full partner list, so a partner you may not see is no longer reported as one that was deleted",
 } as const;
 
 export const BUILD_LABEL = `v${BUILD.round}`;

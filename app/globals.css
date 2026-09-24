@@ -1242,6 +1242,12 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rfdiv:hover .rfdivname{text-decoration:underline;text-decoration-color:var(--plum-line);
   text-underline-offset:5px;text-decoration-thickness:2px}
 .rfdiv:focus-visible{outline:2px solid var(--plum);outline-offset:4px;border-radius:4px}
+/* TASK 2 · §3 — the heading when there is nothing to switch between. It keeps
+   .rfdiv's typography and gives up every affordance that promises a control:
+   a pointer cursor and a hover underline on a plain heading are the same lie
+   as an "All divisions" label over a single division. */
+.rfdivstatic{cursor:default}
+.rfdivstatic:hover .rfdivname{text-decoration:none}
 .rfcar{width:11px;height:7px;color:var(--ink-3);flex:none;transition:transform .14s}
 .rfdiv[aria-expanded="true"] .rfcar{transform:rotate(180deg)}
 .rfdivpop{position:absolute;top:100%;left:-10px;z-index:40;margin:6px 0 0;padding:5px;
@@ -2033,3 +2039,37 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rftable tr[role="button"]:focus-visible,
 .rfdrawer:focus-visible{outline:2px solid var(--plum);outline-offset:-2px;}
 .rftable th[tabindex]{cursor:pointer;}
+
+/* ── TASK 1 · case managers, the Access tab's second section ─────────────────
+   🔴 THE TWO COUNTS ARE CONTROLS AND MUST NOT READ AS THE GRID'S OWN COUNT
+   LINE. A number that filters and a number that is just a number looking the
+   same is the whole reason this has a pressed state, a border and a pointer —
+   `.pacount` above is the plain kind and deliberately shares nothing with it. */
+.cmhead{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;margin:26px 0 4px;padding-top:18px;border-top:1px solid var(--line);}
+.cmtitle{font-size:14px;font-weight:800;color:var(--plum-deep);letter-spacing:-.01em;}
+.cmcounts{display:flex;align-items:baseline;gap:6px;}
+.cmcount{font-size:12px;color:var(--plum);background:#fff;border:1px solid var(--plum-line);border-radius:999px;padding:3px 11px;transition:background .12s,color .12s,border-color .12s;}
+.cmcount b{font-weight:800;}
+.cmcount:hover{background:var(--plum-soft);}
+.cmcount.on{background:var(--plum-deep);border-color:var(--plum-deep);color:#fff;}
+.cmdot{color:var(--ink-3);}
+.cmintro{margin-bottom:12px;}
+.cmlist{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
+.cmrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;}
+.cmwho{flex:0 0 190px;font-size:12.5px;font-weight:700;color:var(--ink);overflow-wrap:anywhere;}
+.cmmuted{color:var(--ink-3);font-weight:500;font-style:italic;}
+.cmnew{background:var(--canvas);border-style:dashed;}
+.cmchips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1 1 240px;}
+.cmchip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:999px;padding:3px 5px 3px 10px;}
+.cmx{font-size:12px;line-height:1;padding:2px 4px;border-radius:999px;color:var(--plum);background:transparent;transition:background .12s,color .12s;}
+.cmx:hover{background:var(--blk-soft);color:var(--blk);}
+.cmadd{font-size:11.5px;font-weight:700;color:var(--plum);background:transparent;border:1px dashed var(--plum-line);border-radius:999px;padding:3px 10px;transition:background .12s;}
+.cmadd:hover{background:var(--plum-soft);}
+.cmpick{flex:1 1 100%;margin-top:4px;border:1px solid var(--plum-line);border-radius:9px;background:#fff;padding:9px;box-shadow:var(--shadow-sm);}
+.cmpicklist{max-height:220px;overflow-y:auto;min-height:0;margin-top:7px;display:flex;flex-direction:column;gap:2px;}
+.cmpickrow{display:flex;align-items:baseline;gap:9px;width:100%;text-align:left;padding:6px 9px;border-radius:7px;background:transparent;transition:background .12s;}
+.cmpickrow:hover{background:var(--plum-soft);}
+.cmpickname{font-size:12.5px;font-weight:600;color:var(--ink);}
+.cmpickmail{font-size:11px;color:var(--ink-3);overflow-wrap:anywhere;}
+.cmpicknone{font-size:12px;color:var(--ink-3);padding:8px 9px;}
+.cmpickclose{margin-top:7px;font-size:11.5px;}
