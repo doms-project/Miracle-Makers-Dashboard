@@ -35,6 +35,14 @@ import { chromium } from "playwright-core";
 import { appendFileSync, writeFileSync } from "node:fs";
 import CryptoJS from "crypto-js";
 
+// 🔴 TWO FIXTURES, TWO RUNS — and the reason is §4 itself. The "no partners in
+// scope" empty state needs a viewer who sees ZERO partners, and the dialog
+// assertions need that same viewer to reach a DRAWER, which needs a row. Rule
+// (iii) makes a blank-division partner universal, so one fixture cannot be both.
+// Same answer as task2-scope-proof's child: shape it from the first request.
+const SHAPE = process.env.SHAPE || "normal";
+const BLANK_PARTNER = SHAPE !== "nopartners";
+
 let pass = 0, fail = 0;
 const ok = (n, c, got) => {
   if (c) { pass++; say(`  ok   ${n}`); }
@@ -45,11 +53,11 @@ const LOC = "loc_test";
 const SECRET = "harness_shared_secret";
 const RT = "F_RT", CAT = "F_CAT", TIER = "F_TIER", DIV = "F_DIV", REF = "F_REF";
 const PP = "pipe_pp", OLTL = "pipe_oltl", ODP = "pipe_odp", EV = "pipe_events";
-const U_PP = "u_pp", U_NONE = "u_none";
+const U_PP = "u_pp", U_NONE = "u_none", U_ADMIN = "u_admin";
 
-const blob = (userId) =>
+const blob = (userId, role = "user") =>
   CryptoJS.AES.encrypt(JSON.stringify({
-    userId, role: "user", type: "location", activeLocation: LOC,
+    userId, role, type: "location", activeLocation: LOC,
     userName: userId, email: `${userId}@test`, companyId: "co1",
   }), SECRET).toString();
 
@@ -77,7 +85,10 @@ const fake = http.createServer((req, res) => {
               picklistOptions: ["Private Pay", "OLTL", "ODP", "All"] },
           ] });
     if (path === "/users/")
-      return send(200, { users: [{ id: U_PP, name: "A PP Rep" }, { id: U_NONE, name: "An Ungranted Rep" }] });
+      return send(200, { users: [
+        { id: U_PP, name: "A PP Rep" }, { id: U_NONE, name: "An Ungranted Rep" },
+        { id: U_ADMIN, name: "An Admin" },
+      ] });
     if (path === "/opportunities/pipelines")
       return send(200, { pipelines: [
         { id: PP, name: "Private Pay Clients", stages: [{ id: "pp_s1", name: "NEW ENQUIRY", position: 0 }] },
@@ -99,14 +110,34 @@ const fake = http.createServer((req, res) => {
             pipelines: { [U_PP]: [PP] }, folders: {}, master: [], caseManagers: {},
           }) },
       ] });
+    // ⚠️ TWO PARTNERS IN TWO DIVISIONS — task 2 · §3's gate needs both states in
+    // one run. The ADMIN sees both, so the switcher renders for them; the PP rep
+    // sees only Private Pay, so it is hidden for them. One fixture, and the
+    // difference is the viewer rather than the data.
     if (path === "/contacts/search")
-      return send(200, { contacts: [{
-        id: "p1", contactName: "Riddle Hospital", email: "dp@riddle.test",
-        customFields: [
-          { id: RT, value: j?.filters?.[0]?.value || "Referral Partner" },
-          { id: TIER, value: "A" }, { id: DIV, value: "Private Pay" },
-        ],
-      }], total: 1 });
+      return send(200, { contacts: [
+        { id: "p1", contactName: "Riddle Hospital", email: "dp@riddle.test",
+          customFields: [
+            { id: RT, value: j?.filters?.[0]?.value || "Referral Partner" },
+            { id: TIER, value: "A" }, { id: DIV, value: "Private Pay" },
+          ] },
+        { id: "p2", contactName: "Delco Elder Law", email: "dl@delco.test",
+          customFields: [
+            { id: RT, value: j?.filters?.[0]?.value || "Referral Partner" },
+            { id: TIER, value: "B" }, { id: DIV, value: "OLTL" },
+          ] },
+        // ⚠️ BLANK DIVISION — universal by the §4.3 decision, so it is the one
+        // row every viewer can reach. Without it the ungranted viewer met an
+        // empty table, could not open a drawer, and this proof timed out on its
+        // own fixture: §4 stopped the harness reaching the thing it tests.
+        ...(BLANK_PARTNER
+          ? [{ id: "p3", contactName: "Uncategorised Clinic", email: "u@unc.test",
+              customFields: [
+                { id: RT, value: j?.filters?.[0]?.value || "Referral Partner" },
+                { id: TIER, value: "C" },
+              ] }]
+          : []),
+      ], total: BLANK_PARTNER ? 3 : 2 });
     if (path === "/opportunities/search") {
       const pid = new URL(`http://x${u}`).searchParams.get("pipeline_id");
       if (pid !== OLTL) return send(200, { opportunities: [], meta: { total: 0 } });
@@ -212,8 +243,14 @@ const browser = await chromium.launch({
   args: ["--no-proxy-server", "--no-sandbox"],
 });
 
+/** Reach the Referrals board as `who` and read what is on it. No drawer. */
+const openBoardAs = async (who, role = "user") => {
+  const d = await openDialogAs(who, role, { board: true });
+  return d;
+};
+
 /** Open the app as `who`, reach Referrals, and open "Log a referral". */
-const openDialogAs = async (who) => {
+const openDialogAs = async (who, role = "user", opts = {}) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
   page.on("pageerror", (e) => console.log(`  [page error] ${e.message}`));
   await page.route(`${base}/__parent`, (route) => route.fulfill({
@@ -221,7 +258,7 @@ const openDialogAs = async (who) => {
     body: `<!doctype html><meta charset="utf-8">
 <style>html,body{margin:0}iframe{border:0;width:1440px;height:950px}</style>
 <script>window.addEventListener("message",(e)=>{if(e.data&&e.data.message==="REQUEST_USER_DATA")
-e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.stringify(blob(who))}},"*");});</script>
+e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.stringify(blob(who, role))}},"*");});</script>
 <iframe src="${base}/"></iframe>`,
   }));
   say(`  [${who}] opening the parent frame…`);
@@ -252,6 +289,25 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
   }
   await frame.waitForSelector(".rfwrap", { timeout: 60000 });
   await frame.waitForFunction(() => !document.querySelector(".rfwrap .spinner"), { timeout: 60000 });
+
+  // ═══ TASK 2 · §3 + §4 — WHAT IS ON SCREEN BEFORE ANY DIALOG OPENS ════════
+  // 🔴 READ FROM THE RENDERED PAGE, not from the payload. "The switcher
+  // disappears" and "the count is shown" are claims about pixels; the route
+  // proof already covers the numbers.
+  const board = await frame.evaluate(() => {
+    const btn = document.querySelector("button.rfdiv");
+    const stat = document.querySelector("span.rfdiv.rfdivstatic");
+    const foots = [...document.querySelectorAll(".rffoot")].map((e) =>
+      (e.textContent || "").replace(/\s+/g, " ").trim());
+    return {
+      switcher: !!btn,
+      staticHeading: stat ? (stat.textContent || "").trim() : null,
+      headingText: ((btn || stat)?.textContent || "").trim(),
+      foots,
+      withheldBox: (document.querySelector(".rfwithheld")?.textContent || "")
+        .replace(/\s+/g, " ").trim(),
+    };
+  });
   // ⚠️ "Log a referral" IS IN THE DRAWER, not on the row — `onLogReferral` is a
   // prop of the partner drawer (ReferralsSection.tsx:2301, button at :2939). My
   // first run clicked around the table for thirty seconds and timed out on
@@ -266,7 +322,24 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
     await page.waitForTimeout(600);
     if (await frame.$(".rfdrawer")) break;
   }
-  await frame.waitForSelector(".rfdrawer", { timeout: 30000 });
+  try {
+    await frame.waitForSelector(".rfdrawer", { timeout: 30000 });
+  } catch (e) {
+    // ⚠️ SAY WHAT THE TABLE ACTUALLY HELD. "The drawer did not open" and "this
+    // viewer has no rows to open" are the same timeout and completely
+    // different faults — and after §4 the second is a real possibility for
+    // every viewer the harness drives.
+    const dump = await frame.evaluate(() => ({
+      rows: document.querySelectorAll(".rftable tbody tr").length,
+      firstRow: (document.querySelector(".rftable tbody tr")?.textContent || "").slice(0, 80),
+      empty: (document.querySelector(".rfempty, .rfnone")?.textContent || "").slice(0, 120),
+      foots: [...document.querySelectorAll(".rffoot")].map((x) => (x.textContent || "").slice(0, 90)),
+    }));
+    say(`  🔴 [${who}] no drawer. rows=${dump.rows} first=${JSON.stringify(dump.firstRow)}`);
+    say(`     empty=${JSON.stringify(dump.empty)}`);
+    for (const f of dump.foots) say(`     foot: ${f}`);
+    throw e;
+  }
   for (let i = 0; i < 12; i++) {
     await frame.evaluate(() => {
       const b = [...document.querySelectorAll("button")].find((x) =>
@@ -292,8 +365,37 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
     const b = [...document.querySelectorAll("button")].find((x) => /Log referral/.test(x.textContent || ""));
     return b ? b.disabled : null;
   });
-  return { page, frame, hint, dialogText, options, saveDisabled };
+  return { page, frame, hint, dialogText, options, saveDisabled, board };
 };
+
+// ── THE CHILD SHAPE, FIRST, BECAUSE IT RETURNS EARLY ──────────────────────
+if (!BLANK_PARTNER) {
+  say("\n5 · 🔴 ZERO PARTNERS IN SCOPE — THE EMPTY STATE  (child process)");
+  // 🔴 THE DEFECT THIS SHAPE EXISTS FOR. With §4 filtering, a viewer holding no
+  // pipeline received zero partners — and the table said "No referral partners
+  // yet · A partner is a contact whose Record Type is…", an ABSENCE, directly
+  // above "2 partners are not shown", a FILTER. The screen contradicted itself.
+  const z = await openBoardAs(U_NONE);
+  say(`  empty state: ${JSON.stringify(z.emptyText.slice(0, 150))}`);
+  say(`  withheld:    ${JSON.stringify(z.withheldBox.slice(0, 120))}`);
+  ok("🔴 it does NOT say the account has no partners — it has two",
+     !/No referral partners yet/.test(z.emptyText), z.emptyText);
+  ok("🔴 it says none is in scope FOR YOU", /No referral partners you can see/.test(z.emptyText), z.emptyText);
+  ok("⚠️ and it does not tell them to go and add one",
+     !/Add one to start tracking/.test(z.emptyText), z.emptyText);
+  ok("🔴 the count agrees with the sentence below the table",
+     /2 partners are tracked/.test(z.emptyText) && /2 partners are not shown/.test(z.withheldBox),
+     { empty: z.emptyText.slice(0, 90), foot: z.withheldBox.slice(0, 90) });
+  // ⚠️ THE CONTROL — an admin against the SAME fixture sees both partners, so
+  // "the table is empty" is about the viewer and not about the account.
+  const zc = await openBoardAs(U_ADMIN, "admin");
+  say(`  admin rows: ${zc.rowCount}`);
+  ok("🔴 THE CONTROL — the admin sees both partners on the same fixture",
+     zc.rowCount === 2, zc.rowCount);
+  say(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed  (no-blank-partner shape)`);
+  await browser.close(); dev.kill("SIGTERM"); fake.close();
+  setTimeout(() => process.exit(fail ? 1 : 0), 300);
+}
 
 console.log("\n═══ 1 · 🔴 THE CONTROL — A GRANTED REP CAN STILL FILE ═══");
 // Without this, "the two empty states differ" is satisfied by a dialog that
@@ -309,7 +411,6 @@ ok("⚠️ the hint names the destination rather than an empty state",
    /Creates an opportunity in/.test(g.hint), g.hint);
 ok("⚠️ and the save button is enabled once a name is typed — not blocked by scope",
    g.saveDisabled === true, g.saveDisabled); // still disabled: no first name yet
-await g.page.close();
 
 console.log("\n═══ 2 · 🔴 AN UNGRANTED REP — THE SENTENCE THAT USED TO BE FALSE ═══");
 const u = await openDialogAs(U_NONE);
@@ -331,9 +432,50 @@ ok("🔴 no pipeline NAME is anywhere in the dialog — the count discloses a nu
    !/OLTL|ODP|Private Pay Clients/.test(u.dialogText), u.dialogText.slice(0, 200));
 ok("⚠️ and the save button is disabled — nothing can be filed", u.saveDisabled === true, u.saveDisabled);
 await u.page.screenshot({ path: "scripts/task2-no-access.png" });
-await u.page.close();
 
 console.log("\n  screenshot: scripts/task2-no-access.png");
+
+console.log("\n═══ 3 · 🔴 THE SWITCHER GATE — BOTH STATES, ONE RUN ═══");
+// 🔴 THE CONTROL IS THE WHOLE SECTION, AND IT IS THE `a11y` LESSON APPLIED.
+// "The switcher disappears below two divisions" is satisfied by a page that
+// failed to render at all — which is exactly how four accessibility assertions
+// went quietly missing last round. So a viewer who SHOULD see it has to see it
+// in the same run, against the same fixture, differing only in who is looking.
+const adm = await openDialogAs(U_ADMIN, "admin");
+console.log(`  admin  -> switcher=${adm.board.switcher} heading=${JSON.stringify(adm.board.headingText)}`);
+console.log(`  pp rep -> switcher=${g.board.switcher} heading=${JSON.stringify(g.board.headingText)}`);
+ok("🔴 THE CONTROL — the admin sees two divisions, so the control IS rendered",
+   adm.board.switcher === true, adm.board);
+ok("🔴 the PP rep sees one, so there is NO control to mislabel",
+   g.board.switcher === false, g.board);
+ok("🔴 and their heading names THAT division, never \"All divisions\"",
+   g.board.headingText === "Private Pay" && !/All divisions/.test(g.board.headingText),
+   g.board.headingText);
+ok("⚠️ it is a plain heading, not a button wearing one",
+   g.board.staticHeading === "Private Pay", g.board.staticHeading);
+
+console.log("\n═══ 4 · 🔴 THE COUNTS, RENDERED ═══");
+console.log(`  pp rep withheld box: ${JSON.stringify(g.board.withheldBox.slice(0, 120))}`);
+console.log(`  ungranted withheld box: ${JSON.stringify(u.board.withheldBox.slice(0, 140))}`);
+ok("🔴 the PP rep is told a partner was kept back, with the number",
+   /1 partner is not shown/.test(g.board.withheldBox), g.board.withheldBox);
+// 🔴 NO NAME. The count is the honesty; naming them is the disclosure §4 closed.
+ok("🔴 and NO partner name appears in that sentence",
+   !/Delco Elder Law/.test(g.board.withheldBox), g.board.withheldBox);
+ok("⚠️ the admin is told nothing — there is nothing to explain",
+   adm.board.withheldBox === "", adm.board.withheldBox);
+
+// 🔴 THE CASE-MANAGER SENTENCE. The ungranted viewer holds NO pipeline, which
+// is a different state from "some, but not that one" and gets its own words.
+ok("🔴 a viewer holding no pipeline gets the OTHER sentence",
+   /you hold no pipeline/i.test(u.board.withheldBox), u.board.withheldBox);
+ok("🔴 and NOT the one that describes a misconfiguration",
+   !/divisions you do not hold/i.test(u.board.withheldBox), u.board.withheldBox);
+ok("⚠️ while the PP rep — who holds one — gets exactly that one",
+   /divisions you do not hold/i.test(g.board.withheldBox), g.board.withheldBox);
+await adm.page.close();
+await g.page.close();
+await u.page.close();
 await browser.close();
 dev.kill("SIGTERM");
 fake.close();

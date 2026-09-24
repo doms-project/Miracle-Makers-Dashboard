@@ -26,6 +26,7 @@ import {
   type RawEvent,
   type RawAttendee,
 } from "@/lib/referrals";
+import { divisionLabel } from "@/lib/division";
 
 // ---------------------------------------------------------------------------
 // REFERRAL PARTNERS — Sources · Touch queue · Events · Overview.
@@ -108,6 +109,13 @@ export interface Payload {
     clientPipelinesWithheld?: number;
     /** Partners withheld from THIS viewer by division — task 2 · §4. */
     partnersWithheld?: number;
+    /** Cases withheld from THIS viewer by division — task 2 · §2. */
+    referralsWithheld?: number;
+    /**
+     * How many divisions this viewer holds. 0 = no pipeline at all, which
+     * needs a different sentence from "some, but not that one". null = admin.
+     */
+    viewerDivisions?: number | null;
     /** Partners with no division at all, so visible to everyone. Account-wide. */
     partnersNoDivision?: number;
     /**
@@ -406,6 +414,21 @@ export default function ReferralsSection({
   /** The heading when there is nothing to switch. Never "All divisions". */
   const staticDivLabel =
     divisionChoices.length === 1 ? divisionChoices[0] : "Referral partners";
+  /**
+   * 🔴 TASK 2 · §2 — THE SUFFIX EVERY SCOPED NUMBER CARRIES.
+   *
+   * A tile reading £40k for a rep and £180k for an admin under one label is the
+   * "0 of 2 meant a filter, not an absence" fault in a new place: both numbers
+   * are right and the label is what makes one of them a lie.
+   *
+   * ⚠️ EMPTY UNDER "All divisions", deliberately. A caveat on every number in
+   * every state is wallpaper, and wallpaper is not read — the same reasoning
+   * that moved round 130's note rather than duplicating it.
+   */
+  const scopeSuffix =
+    division === ALL_DIVISIONS ? "" : division === SHARED_SCOPE ? " · shared" : ` · ${division}`;
+  /** True when a number on screen counts less than the account. */
+  const isScoped = division !== ALL_DIVISIONS;
   /**
    * 🔴 ROUND 130 — THE FALLBACK IS FIRING, AND SILENTLY IS THE PROBLEM.
    *
@@ -773,6 +796,30 @@ export default function ReferralsSection({
     [data?.meta.outcomeField, ssoBlob],
   );
 
+  /**
+   * ═══ TASK 2 · §2 — THE CASE ARRAY, CUT TO THE DIVISION ON SCREEN ═════════
+   *
+   * The server has already scoped this to the viewer's granted divisions; this
+   * is the second cut, by the control they just used. Two layers, exactly like
+   * the partners: the server decides what may be seen, the switcher decides
+   * what is being looked at.
+   *
+   * 🔴 WITHOUT THIS THE HEADING WOULD LIE. Its title attribute promises
+   * "everything below changes with it", and a partner who sent cases into two
+   * divisions would show both divisions' revenue under one division's heading.
+   *
+   * ⚠️ UNDER "Shared with me" IT IS NOT CUT. Those partners are ones you own
+   * OUTSIDE your divisions, so the server has already withheld most of their
+   * cases; cutting again by a value that is not a division would zero
+   * everything. What survives is what you are entitled to, which is the honest
+   * answer — and it is often nothing, which the note under the table says.
+   */
+  const divisionRefs = useMemo<RawReferral[]>(() => {
+    if (!data) return [];
+    if (division === ALL_DIVISIONS || division === SHARED_SCOPE) return data.referrals;
+    return data.referrals.filter((o) => divisionLabel(o.pipelineName) === division);
+  }, [data, division]);
+
   // ── the division cut. Everything below reads from here ───────────────────
   const all = useMemo<EnrichedPartner[]>(() => {
     if (!data) return [];
@@ -785,8 +832,10 @@ export default function ReferralsSection({
         division === SHARED_SCOPE ? p.shared : !p.shared && inDivision(p.division, division),
       )
       // ITEM 2 — the two lists stay two lists right up to the row.
-      .map((p) => enrichPartner(p, data.referrals, data.applicantRefs || []));
-  }, [data, division]);
+      // 🔴 `divisionRefs`, NOT `data.referrals` — task 2 · §2. The applicant
+      // list is deliberately NOT cut: see its note where the tile renders.
+      .map((p) => enrichPartner(p, divisionRefs, data.applicantRefs || []));
+  }, [data, division, divisionRefs]);
 
   const kpis = useMemo(() => partnerKpis(all), [all]);
 
@@ -1372,12 +1421,19 @@ export default function ReferralsSection({
                 value={kpis.activeSources}
                 desc={`referred in the last 90 days · ${kpis.totalSources} tracked`}
               />
+              {/* 🔴 TASK 2 · §2 — THE SCOPE IS IN THE LABEL, not only in the
+                  switcher. Under ODP these count ODP cases, and a number that
+                  counts less than the account must say so where it is read. */}
               <Kpi
-                label="Referrals, 90 days"
+                label={`Referrals, 90 days${scopeSuffix}`}
                 value={kpis.refs90}
                 desc="from these sources"
               />
-              <Kpi label="Clients won" value={kpis.won} desc="lifetime" />
+              <Kpi
+                label={`Clients won${scopeSuffix}`}
+                value={kpis.won}
+                desc="lifetime"
+              />
               <Kpi
                 label="Touches overdue"
                 value={kpis.overdue}
@@ -1686,15 +1742,36 @@ export default function ReferralsSection({
                           <div className="empty">
                             {!all.length ? (
                               <>
+                                {/* 🔴 TASK 2 · §4 — THREE EMPTY STATES, NOT TWO.
+                                    This tested `data.partners.length` to tell
+                                    "the account has none" from "none in this
+                                    division". After §4 the client only ever
+                                    RECEIVES what it may see, so zero partners
+                                    stopped meaning "the account has none" — and
+                                    a viewer holding no pipeline read "No
+                                    referral partners yet · add one to start
+                                    tracking" directly above "2 partners are not
+                                    shown". The screen contradicted itself.
+
+                                    🔴 EXACTLY THE DANGLING DEFECT'S TWIN: a
+                                    client-side test that lost its meaning the
+                                    moment the server began filtering, and one
+                                    the client cannot restore on its own. The
+                                    withheld COUNT is what distinguishes them,
+                                    which is why it is sent. */}
                                 <b>
-                                  {data?.partners.length
-                                    ? `No referral partners in ${divLabel(division)}`
-                                    : "No referral partners yet"}
+                                  {(data?.meta.partnersWithheld ?? 0) > 0
+                                    ? "No referral partners you can see"
+                                    : data?.partners.length
+                                      ? `No referral partners in ${divLabel(division)}`
+                                      : "No referral partners yet"}
                                 </b>
                                 <br />
-                                {data?.partners.length
-                                  ? `${data.partners.length} partner${data.partners.length === 1 ? " is" : "s are"} tracked, but none is in this division. Switch the heading above to All divisions.`
-                                  : 'A partner is a contact whose Record Type is "Referral Partner". Add one to start tracking it.'}
+                                {(data?.meta.partnersWithheld ?? 0) > 0
+                                  ? `${data?.meta.partnersWithheld} ${data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} tracked on this account and none is in scope for you — see the note below the table.`
+                                  : data?.partners.length
+                                    ? `${data.partners.length} partner${data.partners.length === 1 ? " is" : "s are"} tracked, but none is in this division. Switch the heading above to All divisions.`
+                                    : 'A partner is a contact whose Record Type is "Referral Partner". Add one to start tracking it.'}
                               </>
                             ) : activeFilters.length ? (
                               <>
@@ -1825,6 +1902,11 @@ export default function ReferralsSection({
               and are counted nowhere on this screen. Showing {rows.length} of{" "}
               {all.length} · total{" "}
               {moneyMo(rows.reduce((a, p) => a + p.revenue, 0))}
+              {/* 🔴 TASK 2 · §2 — AND THE TOTAL NAMES ITS SCOPE. It is a sum of
+                  sums over the division-cut case list, so under ODP it is ODP's
+                  figure; the same number without the suffix would read as the
+                  account's. */}
+              {scopeSuffix}
               {activeFilters.length ? (
                 <>
                   {" · filtered by "}
@@ -1843,16 +1925,55 @@ export default function ReferralsSection({
                 matches no partner, so they get a blank table and no switcher.
                 Without this line that is indistinguishable from an account with
                 no partners — the same fault section 1 fixed one screen over. */}
+            {/* 🔴 TASK 2 · §2 — ONE LINE FOR THE THREE COLUMNS, not a suffix on
+                each. "Referrals · ODP / Won · ODP / Revenue · ODP" is four
+                lies' worth of noise for one fact. */}
+            {isScoped ? (
+              <p className="rffoot">
+                <b>Referrals</b>, <b>Won</b> and <b>Revenue</b> count{" "}
+                {division === SHARED_SCOPE
+                  ? "only the cases you are entitled to see — these partners work in divisions you do not hold, so most of their business is not counted here"
+                  : `${division} cases only`}
+                .
+              </p>
+            ) : null}
             {(data?.meta.partnersWithheld ?? 0) > 0 ? (
               <p className="rffoot rfwithheld">
-                <b>
-                  {data?.meta.partnersWithheld}{" "}
-                  {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
-                  shown
-                </b>{" "}
-                — they belong to divisions you do not hold. You see the divisions
-                your pipelines are in, plus any partner assigned to you. Ask an
-                admin on <b>Admin → Access</b> if that is wrong.
+                {/* 🔴 TASK 2 · §4 — TWO SENTENCES, BECAUSE TWO STATES.
+                    "They belong to divisions you do not hold" is accurate to
+                    somebody holding SOME pipelines and describes a
+                    misconfiguration to somebody holding NONE — and a case
+                    manager holds none by design. Third time this shape has come
+                    up in this task: the pipeline picker saying "configured", the
+                    403 offering advice a viewer with none cannot take, and this.
+
+                    🔴 THE CONDITION IS "HOLDS NO PIPELINE", NEVER "IS A CASE
+                    MANAGER". Nothing in this system knows who is a case manager,
+                    and reading it off an absent grant would be a role inferred
+                    from an absence — the same rule as the `-Sale` name suffix. */}
+                {(data?.meta.viewerDivisions ?? 0) === 0 ? (
+                  <>
+                    <b>
+                      {data?.meta.partnersWithheld}{" "}
+                      {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
+                      shown
+                    </b>{" "}
+                    — you hold no pipeline, so no partner is in scope for you.
+                    Case managers see cases through the people they support
+                    rather than through a division.
+                  </>
+                ) : (
+                  <>
+                    <b>
+                      {data?.meta.partnersWithheld}{" "}
+                      {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
+                      shown
+                    </b>{" "}
+                    — they belong to divisions you do not hold. You see the
+                    divisions your pipelines are in, plus any partner assigned to
+                    you. Ask an admin on <b>Admin → Access</b> if that is wrong.
+                  </>
+                )}
               </p>
             ) : null}
             {/* ⚠️ THE LABELLED LEAK, AND IT IS ACCOUNT-WIDE, NOT PER VIEWER. A
@@ -2072,7 +2193,11 @@ export default function ReferralsSection({
             ) : (
               <div className="rfpanel">
                 {events.map((e) => {
-                  const st = eventStats(e, data?.attendees || [], data?.referrals || []);
+                  // 🔴 `divisionRefs` — task 2 · §2. Clients and Revenue are the
+                  // division's; Met, Legit and the cost are the event's. The
+                  // card says so below rather than leaving the reader to
+                  // assume one scope for six numbers.
+                  const st = eventStats(e, data?.attendees || [], divisionRefs);
                   const good = st.cpl !== null && st.cpl <= 120;
                   // 🔴 LOOK IN THE FULL LIST, NOT THE DIVISION-FILTERED ONE.
                   // `all` is cut to the division on screen, so an OLTL event
@@ -2162,7 +2287,7 @@ export default function ReferralsSection({
                           ["Met", String(st.met)],
                           ["Legit leads", String(st.legit)],
                           ["Partner prospects", String(st.partners)],
-                          ["Clients", String(st.clients)],
+                          [`Clients${scopeSuffix}`, String(st.clients)],
                         ].map(([l, v]) => (
                           <div className="rfstat" key={l}>
                             <div className="l">{l}</div>
@@ -2182,12 +2307,34 @@ export default function ReferralsSection({
                           </div>
                         </div>
                         <div className="rfstat">
-                          <div className="l">Revenue /mo</div>
+                          <div className="l">Revenue /mo{scopeSuffix}</div>
                           <div className="v">
                             {data?.meta.oppEventField ? moneyMo(st.revenue) : "—"}
                           </div>
                         </div>
                       </div>
+                      {/* 🔴 TASK 2 · §2 — THE WHOLE COST AGAINST THE SCOPED
+                          RETURN, SAID ON THE CARD. An event's cost belongs to
+                          the event, not to a division: splitting it pro-rata
+                          would invent an allocation nobody decided, and hiding
+                          cross-division events would hide the ones most worth
+                          looking at. So the cost stays whole and the card says
+                          which of its six numbers are not.
+
+                          ⚠️ Cost per legit lead is cost ÷ ATTENDEES and moves
+                          for nobody — attendees carry no division and no
+                          `visible` flag. It is named here because a reader
+                          seeing "Clients" and "Revenue" shrink would otherwise
+                          assume it shrank too. */}
+                      {isScoped ? (
+                        <div className="rfdhint">
+                          {money(e.cost)} is the event&apos;s <b>whole</b> cost, and{" "}
+                          <b>Cost per legit lead</b> uses every attendee.{" "}
+                          <b>Clients</b> and <b>Revenue</b> count{" "}
+                          {division === SHARED_SCOPE ? "only cases you may see" : `${division} cases`}{" "}
+                          only.
+                        </div>
+                      ) : null}
 
                       {/* 🔴 PEOPLE MET · SET AN OUTCOME. The dropdown writes
                           immediately — no save button, because a rep triaging
@@ -2367,6 +2514,10 @@ export default function ReferralsSection({
           <>
             <div className="rfkpis">
               <Kpi
+                /* ⚠️ NO SCOPE SUFFIX HERE, ON PURPOSE. This counts PARTNERS,
+                   which the switcher has already cut; labelling it "· ODP"
+                   would imply their CASES were scoped too, which is a
+                   different claim and one this tile does not make. */
                 label="Sources"
                 value={kpis.totalSources}
                 desc={`${kpis.activeSources} referred in 90 days`}
@@ -2381,7 +2532,7 @@ export default function ReferralsSection({
                   and the description says what is missing rather than only what
                   is counted. */}
               <Kpi
-                label="Revenue from partners"
+                label={`Revenue from partners${scopeSuffix}`}
                 value={moneyMo(kpis.revenue)}
                 desc="won, monthly · excludes every non-referred case"
               />
@@ -2390,10 +2541,28 @@ export default function ReferralsSection({
                   revenue would imply the two belong to one scoreboard, which is
                   the exact confusion the separate count exists to prevent. */}
               {kpis.applicants ? (
+                /* 🔴 TASK 2 · §2 — DELIBERATELY UNSCOPED, AND IT SAYS SO.
+                   Every figure beside this one counts the division on screen;
+                   this one counts the account. Two reasons, and the second is
+                   the one that matters:
+
+                   divisionLabel("OLTL Caregiver Applicants") is "OLTL
+                   Caregiver", which is not a `Partner Division` value on any
+                   account — so scoping this list would not narrow the column,
+                   it would EMPTY it, for every viewer in every division.
+
+                   ⚠️ AND THE COLUMN EXISTS TO SHOW A CROSS-DIVISION FACT.
+                   Round 122 item 2 added it so a Private Pay manager can see
+                   that their hospital partner also sends caregivers. Scoping it
+                   would hide precisely that. An unscoped number beside scoped
+                   ones has to say it is deliberate, or it reads as the one that
+                   was forgotten. */
                 <Kpi
                   label="Applicants from partners"
                   value={`${kpis.applicants}`}
-                  desc={`${kpis.hired} hired · people, not revenue — never added to the figure beside this`}
+                  desc={`${kpis.hired} hired · people, not revenue — never added to the figure beside this${
+                    isScoped ? " · counted account-wide, not by division" : ""
+                  }`}
                 />
               ) : null}
               <Kpi
@@ -2480,7 +2649,11 @@ export default function ReferralsSection({
         <PartnerDrawer
           p={open}
           ssoBlob={ssoBlob}
-          referrals={data?.referrals || []}
+          // 🔴 `divisionRefs` — task 2 · §2. The drawer's attributed-case list
+          // and its "Events worked" block must agree with the row that opened
+          // it; the whole array would make the drawer contradict the table two
+          // pixels away.
+          referrals={divisionRefs}
           events={data?.events || []}
           attendees={data?.attendees || []}
           hostField={data?.meta.eventHostField || ""}

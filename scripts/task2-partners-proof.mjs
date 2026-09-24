@@ -145,18 +145,32 @@ const server = http.createServer((req, res) => {
     //   o_ghost  partner does not exist at all      → IS dangling, for everyone
     if (path === "/opportunities/search") {
       const pid = new URL(`http://x${u}`).searchParams.get("pipeline_id");
-      if (pid !== PP) return send(200, { opportunities: [], meta: { total: 0 } });
-      const opp = (id, partnerId) => ({
-        id, name: id, pipelineId: PP, pipelineStageId: "pp_s1",
+      const opp = (id, partnerId, pipelineId) => ({
+        id, name: id, pipelineId, pipelineStageId: `${pipelineId}_s1`,
         status: "won", monetaryValue: 1000,
         createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
         assignedTo: "", followers: [],
         customFields: [{ id: REF, fieldValue: partnerId }],
       });
-      return send(200, {
-        opportunities: [opp("o_pp", "p_pp"), opp("o_oltl", "p_oltl"), opp("o_ghost", "p_deleted")],
-        meta: { total: 3 },
-      });
+      // Private Pay — inside the PP rep's division.
+      if (pid === PP)
+        return send(200, {
+          opportunities: [
+            opp("o_pp", "p_pp", PP),          // partner VISIBLE  → never dangling
+            opp("o_ghost", "p_deleted", PP),  // partner GONE     → dangling, for everyone
+          ],
+          meta: { total: 2 },
+        });
+      // 🔴 OLTL — OUTSIDE IT, and this case is what makes §2 testable at all.
+      // With every case in one pipeline there is nothing for a DIVISION filter
+      // to withhold, and `referralsWithheld` would read 0 whether or not the
+      // filter existed. One pipeline's worth of cases cannot test it.
+      if (pid === OLTL)
+        return send(200, {
+          opportunities: [opp("o_oltl", "p_oltl", OLTL)],
+          meta: { total: 1 },
+        });
+      return send(200, { opportunities: [], meta: { total: 0 } });
     }
     if (/^\/contacts\/[^/]+\/notes/.test(path)) return send(200, { notes: [] });
     if (/^\/contacts\/[^/]+$/.test(path)) return send(200, { contact: { id: "p_pp" } });
@@ -210,8 +224,14 @@ ok("🔴 nor their email or phone",
 // aggregate — and section 2 scopes the case array itself, which removes most
 // of them. Asserted rather than left as an accident, so if it ever stops being
 // true somebody chose that.
-ok("⚠️ their opaque ID does remain on the case they sent — known, and bounded",
-   ppBody.includes("p_oltl"), "the join key is gone, which is a different change");
+// ✅ AND SECTION 2 CLOSED IT. Round 145 asserted the opposite — that the
+// withheld partner's opaque id DID still ride on the cases they sent — and
+// recorded the bound: no partner row meant no aggregate could reach it. §2
+// scopes the case array by division, so the case goes and the id goes with it.
+// The assertion is inverted rather than deleted, because "the id is gone" is
+// now the claim and a regression would put it back.
+ok("✅ and §2 removed the last trace — the withheld partner's id is gone too",
+   !ppBody.includes("p_oltl"), "the id still rides on a case");
 
 console.log("\n1c · 🔴 THE SHARED HALF — OWNED OUTSIDE YOUR DIVISION");
 const odp = (p.body.partners || []).find((x) => x.id === "p_odp");
@@ -297,11 +317,76 @@ ok("🔴 the withheld partner's case is NOT called deleted — this was the defe
 // pre-fix arithmetic would have read every one of their cases as orphaned.
 ok("🔴 and the recruiter — withheld three — still counts one",
    r.body.meta.danglingReferrals === 1, r.body.meta.danglingReferrals);
-// ⚠️ AND THE CASE ARRAY IS STILL WHOLE. Scoping it is section 2; if this
-// changes before then, something scoped the cases by accident.
-ok("⚠️ the case list is still unscoped — that is section 2, not this fix",
-   (p.body.referrals || []).length === 3 && (a.body.referrals || []).length === 3,
+// 🔴 THIS ASSERTION WAS WRITTEN IN 145 TO FAIL IF ANYTHING SCOPED THE CASES BY
+// ACCIDENT, and section 2 scoped them on purpose. Inverted, and the dangling
+// count beside it is the reason it still belongs here: `danglingCount` is
+// computed from `allReferrals`, BEFORE this filter, so scoping the cases must
+// not move it. If those two ever disagree, the ordering broke.
+ok("🔴 §2 scopes the case array — the PP rep sees 2 of the 3 cases",
+   (p.body.referrals || []).length === 2 && (a.body.referrals || []).length === 3,
    { rep: (p.body.referrals || []).length, admin: (a.body.referrals || []).length });
+ok("🔴 AND THE DANGLING COUNT DID NOT MOVE — it is computed before both filters",
+   p.body.meta.danglingReferrals === 1 && a.body.meta.danglingReferrals === 1,
+   { rep: p.body.meta.danglingReferrals, admin: a.body.meta.danglingReferrals });
+
+console.log("\n═══ 5 · 🔴 SECTION 2 — THE AGGREGATES ARE A DIVISION'S, NOT A VIEWER'S ═══");
+// 🔴 THE CLAIM ROUND 122 WOULD HAVE REFUSED, AND THE ONE THAT REPLACES IT:
+// an aggregate must never depend on WHO is asking. It may depend on WHICH
+// PROGRAMME is being asked about — and the test of that is two DIFFERENT
+// viewers asking about the same programme and getting the same number.
+console.log(`  admin     -> refs=${(a.body.referrals || []).length} withheld=${a.body.meta.referralsWithheld}`);
+console.log(`  pp rep    -> refs=${(p.body.referrals || []).length} withheld=${p.body.meta.referralsWithheld}`);
+console.log(`  recruiter -> refs=${(r.body.referrals || []).length} withheld=${r.body.meta.referralsWithheld}`);
+
+ok("🔴 the PP rep's case list holds only Private Pay cases",
+   (p.body.referrals || []).every((o) => o.pipelineName === "Private Pay Clients"),
+   (p.body.referrals || []).map((o) => o.pipelineName));
+ok("🔴 THE CONTROL — the admin's holds all three, from both pipelines",
+   new Set((a.body.referrals || []).map((o) => o.pipelineName)).size === 2,
+   (a.body.referrals || []).map((o) => o.pipelineName));
+ok("⚠️ and the withheld count says so rather than leaving a short list unexplained",
+   p.body.meta.referralsWithheld === 1 && a.body.meta.referralsWithheld === 0,
+   { rep: p.body.meta.referralsWithheld, admin: a.body.meta.referralsWithheld });
+
+// 🔴 THE FALSIFIABLE HALF OF THE ROUND-122 REPLACEMENT. Two viewers, neither an
+// admin, both entitled to Private Pay — if they ever saw different Private Pay
+// numbers under the same label, the whole argument for this section is wrong.
+// The recruiter holds no Private Pay, so the pair here is the PP rep and the
+// admin restricted to the same division, which is what the client's switcher
+// does; the server-side equivalent is that both lists carry the SAME case.
+const ppCases = (x) => (x.body.referrals || []).filter((o) => o.pipelineName === "Private Pay Clients").map((o) => o.id).sort();
+ok("🔴 THE ARGUMENT'S OWN TEST — admin and rep see the SAME Private Pay cases",
+   ppCases(a).join() === ppCases(p).join(), { admin: ppCases(a), rep: ppCases(p) });
+
+// ⚠️ THE CASE'S DIVISION COMES FROM ITS PIPELINE and must actually arrive.
+ok("⚠️ every case carries its pipeline name, or nothing could be placed at all",
+   (a.body.referrals || []).every((o) => !!o.pipelineName),
+   (a.body.referrals || []).map((o) => o.pipelineName));
+
+// 🔴 THE RECRUITER AGAIN — "OLTL Caregiver" matches no client pipeline either,
+// so their case list is empty AND SAYS SO. Empty-because-filtered and
+// empty-because-nothing must not look the same here either.
+ok("🔴 the recruiter's case list is empty, and the count explains it",
+   (r.body.referrals || []).length === 0 && r.body.meta.referralsWithheld === 3,
+   { refs: (r.body.referrals || []).length, withheld: r.body.meta.referralsWithheld });
+
+// ⚠️ viewerDivisions DECIDES A SENTENCE, NOT A FILTER — and 0 is the case
+// manager's state, which needs a different explanation from "some, not that
+// one". null for an admin, which never reaches that branch.
+console.log(`  viewerDivisions: admin=${JSON.stringify(a.body.meta.viewerDivisions)} pp=${JSON.stringify(p.body.meta.viewerDivisions)} rec=${JSON.stringify(r.body.meta.viewerDivisions)}`);
+ok("🔴 a viewer holding one division reports 1, not 0 — the sentence turns on this",
+   p.body.meta.viewerDivisions === 1, p.body.meta.viewerDivisions);
+ok("⚠️ an admin reports null — nothing is withheld from them to explain",
+   a.body.meta.viewerDivisions === null, a.body.meta.viewerDivisions);
+ok("🔴 and the recruiter reports 1 too — they HOLD a division, it just matches nothing",
+   r.body.meta.viewerDivisions === 1, r.body.meta.viewerDivisions);
+
+// 🔴 APPLICANTS ARE DELIBERATELY NOT SCOPED. divisionLabel of an applicant
+// pipeline is "OLTL Caregiver", which matches no Partner Division value — so
+// scoping would empty the column for everyone rather than narrow it.
+ok("🔴 the applicant list is NOT scoped — same for every viewer",
+   (a.body.applicantRefs || []).length === (p.body.applicantRefs || []).length,
+   { admin: (a.body.applicantRefs || []).length, rep: (p.body.applicantRefs || []).length });
 
 console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
 server.close();
