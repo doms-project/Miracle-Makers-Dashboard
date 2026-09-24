@@ -8,6 +8,7 @@ import {
   buildIdMap,
   runWithGrants,
   runWithExtraGrants,
+  runWithCaseManagers,
 } from "./pipelineAccess";
 
 // Loads the pipeline-access grants ONCE for this request and runs the handler
@@ -31,6 +32,10 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   // every API call for two rarely-changing maps.
   let folderGrants: Record<string, string[]> = {};
   let masterUsers: string[] = [];
+  // 🔴 TASK 1 — rides the SAME single read as folders and master, for the
+  // reason written above: a separate custom value would be a second GET on
+  // every API call in the app, for a map that changes a few times a year.
+  let caseManagers: Record<string, string[]> = {};
   let userIds: Set<string> | undefined;
   let pipelineIds: Set<string> | undefined;
 
@@ -39,6 +44,7 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
     stored = v2 ? v2.pipelines : null;
     folderGrants = v2?.folders ?? {};
     masterUsers = v2?.master ?? [];
+    caseManagers = v2?.caseManagers ?? {};
   } catch (e) {
     // ITEM 2 root-cause trail. This was a bare `catch {}`: when the custom-value
     // read failed, the request fell back to the env var with NOTHING said. If
@@ -111,6 +117,13 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   }
 
   return runWithGrants(grants, () =>
-    runWithExtraGrants(buildIdMap(folderGrants), new Set(masterUsers), fn),
+    runWithExtraGrants(buildIdMap(folderGrants), new Set(masterUsers), () =>
+      // ⚠️ NO ENV FALLBACK, unlike the pipeline grants. There is no
+      // CASE_MANAGER_MAP environment variable and there must not be: a frozen
+      // copy of who manages whom, on a second deployment, is a snapshot of a
+      // different company's staff — the same reasoning that has PIPELINE_ACCESS_MAP
+      // down as the last thing to fail closed. An unreadable value means an
+      // empty map, which by rule A means this feature does nothing at all.
+      runWithCaseManagers(buildIdMap(caseManagers), fn)),
   );
 }

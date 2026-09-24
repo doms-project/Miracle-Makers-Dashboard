@@ -88,11 +88,28 @@ const fake = http.createServer((req, res) => {
           c.contactName.toLowerCase().includes(needle));
         return send(200, { contacts: hits, total: hits.length });
       }
+      // 🔴 TWO PARTNERS, IN TWO DIFFERENT DIVISIONS — task 2 · §3.
+      //
+      // This returned one partner in OLTL. §3 derives the switcher's options
+      // from the records and hides the control below two divisions, so a
+      // one-division fixture made the control CORRECTLY disappear — and took
+      // section 18's four accessibility assertions with it. The control was not
+      // broken; it was not on screen, and a fixture that cannot produce it
+      // cannot test it.
+      //
+      // ⚠️ x2 IS PRIVATE PAY so the menu has something to switch between. Every
+      // figure below still hangs off x1, which owns all twelve cases.
       if (j?.filters?.[0]?.value === "Referral Partner")
-        return send(200, { contacts: [{ id: "x1", contactName: "Riddle Hospital",
-          customFields: [{ id: RT, value: "Referral Partner" },
-                         { id: CAT, value: "Hospital discharge" },
-                         { id: TIER, value: "A" }, { id: DIV, value: "OLTL" }] }], total: 1 });
+        return send(200, { contacts: [
+          { id: "x1", contactName: "Riddle Hospital",
+            customFields: [{ id: RT, value: "Referral Partner" },
+                           { id: CAT, value: "Hospital discharge" },
+                           { id: TIER, value: "A" }, { id: DIV, value: "OLTL" }] },
+          { id: "x2", contactName: "Riddle Memorial Rehab",
+            customFields: [{ id: RT, value: "Referral Partner" },
+                           { id: CAT, value: "SNF / rehab" },
+                           { id: TIER, value: "B" }, { id: DIV, value: "Private Pay" }] },
+        ], total: 2 });
       return send(200, { contacts: [], total: 0 });
     }
     if (u.startsWith("/opportunities/search"))

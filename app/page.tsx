@@ -606,6 +606,18 @@ function MaskedControl({
 // and no field ids are hardcoded.
 const PEOPLE_FIELDS = [
   "Onboarding Rep",
+  // ⚠️ TASK 1 — THIS ENTRY DOES NOTHING, AND THAT IS DELIBERATE.
+  //
+  // "Case Manager" is TEXT and on the read-only blocklist, so neither half of
+  // the picker's condition holds: `isPeopleField(name) && isOptionType` needs
+  // an option type, and `!def.editable` returns before it anyway. MEASURED, not
+  // reasoned — scripts/task1-picker-check.mjs renders it both ways and reads
+  // the control off the page.
+  //
+  // 🔴 KEPT ONLY SO THIS LIST STILL READS AS "THE FOUR PEOPLE-FIELDS". Removing
+  // it leaves three and the next reader wonders which was dropped and why; if
+  // the field ever goes back to an option type, this line makes it work again
+  // without anybody rediscovering the reason. The comment is the smaller lie.
   "Case Manager",
   "Sales Rep Assistant",
   "HR / Assigned Team",

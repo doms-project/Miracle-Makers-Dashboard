@@ -37,6 +37,24 @@ export const READ_ONLY_FIELDS: string[] = [
   // route accepts any field id a caller sends, so without this a direct API
   // write could corrupt the list and make a claim strip the wrong follower.
   "Reassign Followers",
+  // 🔴 TASK 1 — SYSTEM-OWNED. Written ONLY by `applyCaseManagers`, from the
+  // case-manager map on the Access tab, and rewritten from that map on every
+  // apply. There is no human value to preserve.
+  //
+  // ⚠️ IT IS BLOCKLISTED RATHER THAN HIDDEN, unlike "Reassign Followers".
+  // Reading it is the point — "who is watching this case" is exactly what a rep
+  // opening the panel wants to know. Only typing into it stops.
+  //
+  // 🔴 AND WITHOUT THIS THE PICKER WOULD HAVE ARGUED WITH THE MAPPING. A rep
+  // could pick a name, and the next owner change would overwrite it silently —
+  // the two-mechanisms failure this project has hit four times, arriving
+  // through a control nobody thought of as a mechanism.
+  "Case Manager",
+  // ⚠️ THE APPLY FUNCTION'S OWN RECORD of which followers it added, so its
+  // removal can be surgical. Same reasoning as "Reassign Followers" above and
+  // deliberately a SEPARATE field: the reassign claim CLEARS that one wholesale,
+  // so a shared field would have each mechanism wiping the other's list.
+  "Case Manager Followers",
 ];
 
 const norm = (s: string): string =>
