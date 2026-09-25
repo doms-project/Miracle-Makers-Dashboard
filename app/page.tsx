@@ -437,6 +437,16 @@ const asArr = (v: unknown): string[] =>
  *
  * ⚠️ The STORED value is untouched; this is display only. See lib/editable.ts.
  */
+/**
+ * 🔴 ROUND 152 — the ceiling on one relation-counts batch.
+ *
+ * The route's `maxDuration` is 60s, and without a client ceiling a hung batch
+ * held a connection for all sixty before failing. A 60-id batch at the route's
+ * CONCURRENCY of 6 measured ~4.5s on a good day and ~12.5s on a bad one, so
+ * this is clear of a slow success and well short of waiting for the lambda.
+ */
+const REL_COUNTS_TIMEOUT_MS = 20_000;
+
 const asUserNames = (
   v: unknown,
   users: { id: string; name: string }[],
@@ -2942,6 +2952,14 @@ export default function Dashboard() {
   // does not chase the badges down the page.
   // ═══════════════════════════════════════════════════════════════════════
   const [onScreenIds, setOnScreenIds] = useState<string[]>([]);
+  /**
+   * 🔴 ROUND 152 — THE IDS A REQUEST IS CURRENTLY ASKING ABOUT.
+   *
+   * The brake on re-requesting was `!(id in relCounts)`, and `relCounts` is
+   * only written when a response arrives. Between asking and answering an id
+   * was in neither set, so every re-render asked again.
+   */
+  const relInFlight = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") {
       // No observer (very old browser, or a test environment): fall back to the
@@ -3010,38 +3028,107 @@ export default function Dashboard() {
     // 🔴 THE ONE LINE THAT CHANGED: `onScreenIds`, not `visible`. Everything
     // below — the batch, the pagination through relCounts, the recorded zero —
     // is exactly as it was.
+    // ═══ ROUND 152 · 🔴 AN ID IS EXCLUDED ONLY ONCE RECORDED — NEVER IN FLIGHT ══
+    //
+    // This filter was `!(id in relCounts)` alone, and `relCounts` is written
+    // AFTER the response. So while a request hung — and these hung for the full
+    // sixty seconds — every re-render that changed `onScreenIds`, `sso` or
+    // `relCounts` fired ANOTHER request for the same ids. Scrolling accelerated
+    // it, because `onScreenIds` changes on every scroll.
+    //
+    // 🔴 THAT IS THE 13,851 TIMEOUTS IN TWO MINUTES, and the arithmetic says so:
+    // 60 ids at CONCURRENCY 6 is ten waves, a 360-record board is six such
+    // calls, and none of that reaches ~135 requests a second. Only re-asking
+    // for ids already in flight does.
+    //
+    // ⚠️ A REF, NOT STATE. Writing this to state would re-run the effect that
+    // reads it, which is the same loop wearing a different hat.
     const ids = [
-      ...new Set(onScreenIds.filter((id) => id && !(id in relCounts))),
+      ...new Set(
+        onScreenIds.filter(
+          (id) => id && !(id in relCounts) && !relInFlight.current.has(id),
+        ),
+      ),
     ].slice(0, 60);
     if (!ids.length) return;
-    let cancelled = false;
+    for (const id of ids) relInFlight.current.add(id);
+
+    // 🔴 AND A CEILING ON THE HANG. `apiFetch` already passes `signal` straight
+    // through to `fetch` — RequestInit carries it — so nothing in that file had
+    // to change for this; the caller had simply never sent one. The route's
+    // maxDuration is 60s, and a batch of 60 at concurrency 6 measured ~4.5s on
+    // a good day and ~12.5s on a bad one, so 20s is well clear of a slow
+    // success and well short of waiting for the lambda to die.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), REL_COUNTS_TIMEOUT_MS);
+
     (async () => {
       try {
-        const j = await apiFetch<{ counts?: RelationCounts }>(
+        const j = await apiFetch<{ counts?: RelationCounts; unknown?: string[] }>(
           "/api/relations/counts",
           {
             method: "POST",
             ssoBlob: sso.blob,
+            signal: ac.signal,
             body: JSON.stringify({
               ssoKey: sso.blob ?? undefined,
               contactIds: ids,
             }),
           },
         );
-        if (cancelled) return;
-        // Record a zero for every id asked about, not just the ones with links,
-        // so a contact with no relations is never re-requested on each render.
+        // 🔴 RECORDED EVEN IF THE EFFECT HAS SINCE RE-RUN, and that is a change.
+        // This used to bail on a `cancelled` flag — which threw the answer away
+        // while the request had already spent its budget. The comment above
+        // argues against aborting for exactly that reason ("aborting would
+        // waste it and re-request the same ids on close") and the code was
+        // doing the waste anyway, one line further down. The merge is a
+        // functional update of disjoint keys, and the in-flight set means no
+        // second request for these ids can be racing it.
+        const declaredUnknown = new Set(j.unknown ?? []);
         const next: RelationCounts = {};
-        for (const id of ids)
-          next[id] = j.counts?.[id] ?? { caregivers: 0, clients: 0 };
+        for (const id of ids) {
+          const c = j.counts?.[id];
+          // ⚠️ A COUNT IS USED ONLY IF IT IS PRESENT *AND* NOT DECLARED UNKNOWN.
+          // Absence is never turned into a zero — that was the defect: a
+          // contact the server could not read became "no links", permanently,
+          // because the recorded zero stopped it ever being asked about again.
+          next[id] = c && !declaredUnknown.has(id) ? c : { unknown: true };
+        }
         setRelCounts((prev) => ({ ...prev, ...next }));
       } catch {
-        // Badges are a nicety. Never surface this; never block the list.
+        // 🔴 RECORD `unknown`, NOT NOTHING. Recording nothing left the ids
+        // un-recorded, so the next render asked for them again — the failure
+        // path WAS the loop. An explicit unknown is both the brake and the
+        // honest answer, which is why it does two jobs at once.
+        //
+        // ⚠️ IT IS STICKY FOR THE SESSION, deliberately. Nothing clears
+        // `relCounts`, so a badge that reads "links unknown" stays that way
+        // until the page reloads. Clearing unknowns on a list refresh is the
+        // obvious retry path and is NOT built here: it re-opens the loop unless
+        // the refresh is genuinely user-initiated, and that is a separate
+        // question from the one this round is answering.
+        const next: RelationCounts = {};
+        for (const id of ids) next[id] = { unknown: true };
+        setRelCounts((prev) => ({ ...prev, ...next }));
+      } finally {
+        clearTimeout(timer);
+        for (const id of ids) relInFlight.current.delete(id);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+
+    // ⚠️ NO CLEANUP, AND BOTH HALVES OF THAT ARE DELIBERATE.
+    //
+    // No abort: the stand-down comment above is right that a batch which has
+    // already spent its budget should be allowed to finish, and now that its
+    // answer is recorded rather than discarded, finishing is worth something.
+    //
+    // 🔴 AND NO `clearTimeout` EITHER — I wrote one and it was a bug. The
+    // cleanup runs when the effect RE-RUNS, which on this effect means "the
+    // user scrolled". Clearing the timer there would leave the previous request
+    // with no ceiling at all, hanging forever with its ids stuck in
+    // `relInFlight` — so those contacts would never be re-asked and never get a
+    // badge. The `finally` owns the timer, because the `finally` is the only
+    // place that knows the request is over.
   }, [onScreenIds, sso, relCounts, selId]);
 
   // The badge text for one record: "1 caregiver" / "2 clients", or "" when the
@@ -3050,6 +3137,14 @@ export default function Dashboard() {
     (r: OpportunityRecord): string => {
       const c = relCounts[r.contactId];
       if (!c) return "";
+      // 🔴 ROUND 152 — THE THIRD STATE, SAID OUT LOUD. Not yet asked renders
+      // "" (nothing on screen at all), a counted zero renders "" as well —
+      // there is genuinely nothing to report — and a read that FAILED says so.
+      //
+      // ⚠️ THE TWO EMPTY CASES STAY EMPTY AND THAT IS NOT THE DEFECT. Neither
+      // of them is a wrong answer: one has not arrived, the other is a real
+      // zero. What was wrong was the third case wearing the second's clothes.
+      if (c.unknown) return "links unknown";
       const parts: string[] = [];
       if (c.caregivers)
         parts.push(`${c.caregivers} caregiver${c.caregivers === 1 ? "" : "s"}`);
@@ -8633,7 +8728,31 @@ export default function Dashboard() {
                 they can't go, so hiding the link and keeping the sentence would
                 just move the dead end one step further away.
                 Admins keep both: they need native for settings, pipelines and
-                everything the dashboard doesn't cover. */}
+                everything the dashboard doesn't cover.
+
+                ✅ ROUND 152 — "ARE HAVING TURNED OFF" WAS AN INFERENCE WHEN
+                THIS WAS WRITTEN. It is now established policy for new seats,
+                with a reason: GHL's own Opportunities view shows all 68 fields
+                with no per-pipeline sections and no division scoping, which is
+                what this dashboard exists to replace. The seats get
+
+                  on     contacts · conversations · phone · appointments · tags
+                  off    opportunities · dashboardStats · settings
+                         bulkRequests · workflows · triggers
+                  scopes contacts.write · conversations.readonly/.write
+                         conversations/message.readonly/.write
+                         calendars.readonly/.write · calendars/events.write
+
+                🔴 AND THE FACT TASK 1 DEPENDS ON: a seat with
+                `opportunitiesEnabled: false` can still be set as opportunity
+                OWNER and added as a FOLLOWER. Proven live on
+                SyXtlD4KkbmVZ0G9YL1v — `followersAdded` came back populated and
+                the read-back confirmed it. So round 151's follower assertion
+                will not start throwing as these seats roll out.
+
+                ⚠️ The other two outbound links stay open, because their
+                permissions are on: Message (conversations) at the panel head,
+                and the caregiver contact link in CaregiversSection. */}
             {isAdminViewer ? (
               <div className="panelfoot">
                 {/* 🔴 ROUND 124 · ITEM 3 — DELETE THE CASE, ADMIN ONLY.

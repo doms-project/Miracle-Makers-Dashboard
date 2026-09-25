@@ -59,6 +59,21 @@ export async function apiFetch<T = unknown>(
       },
     });
   } catch (e) {
+    // 🔴 ROUND 152 — AN ABORT IS OURS, NOT THE NETWORK'S.
+    //
+    // `signal` already reaches `fetch` — RequestInit carries it and it rides
+    // through the spread above, so nothing here had to change for a caller to
+    // be able to cancel. What DID have to change is this message: an aborted
+    // fetch rejects into this catch, and telling somebody to "check your
+    // connection" because WE cancelled on a timeout is a fault report for a
+    // decision the app made. Same family as every other blank-dressed-as-an-
+    // answer in this project, pointed at the person instead of the data.
+    if (e instanceof DOMException && e.name === "AbortError")
+      throw new ApiError(
+        `${method} ${url} was cancelled before it finished (timed out, or superseded).`,
+        0,
+        url,
+      );
     // Network-level: DNS, offline, CORS, a blocked request. `fetch` rejects
     // here with a message browsers deliberately keep vague, so say what we know.
     throw new ApiError(
