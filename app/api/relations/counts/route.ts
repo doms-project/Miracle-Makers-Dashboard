@@ -13,7 +13,18 @@ export const maxDuration = 60;
 //
 // WHY A BATCH ENDPOINT AND NOT THE MAIN LIST PAYLOAD.
 // GHL exposes relations per RECORD only — there is no bulk relations query — so
-// counts for N records means N upstream calls. Folding that into
+// counts for N records means N upstream calls.
+//
+// ⚠️ ROUND 152 — "THERE IS NO BULK RELATIONS QUERY" IS AN ASSUMPTION, NOT A
+// PROBE. Nothing in this tree has ever called `/associations/relations` without
+// a contact id; the only id-less use of that path is a POST that CREATES a
+// relation (lib/ghl.ts, createCaregiverRelation). A bulk GET may well exist —
+// it is a reasonable thing for an API to have — and if it does, one indexed
+// read for the location replaces sixty. That is a probe somebody has to run,
+// and until they have, this sentence is what we believe rather than what we
+// know. Round 138 is what an unprobed endpoint costs.
+//
+// Folding N upstream calls into
 // /api/opportunities would put 100+ sequential GHL round trips on the critical
 // path of the primary view, for a secondary signal, inside a 60s lambda.
 //
@@ -53,21 +64,45 @@ async function postHandler(request: Request) {
       );
 
     const counts: Record<string, { caregivers: number; clients: number }> = {};
+    // 🔴 ROUND 152 — THE IDS THAT COULD NOT BE READ, NAMED.
+    //
+    // This catch used to be empty, and its comment said the cost was "no badge,
+    // which is the same as having no links". 🔴 IT IS NOT THE SAME, and the
+    // client proved it: for every id missing from `counts` it recorded a hard
+    // `{caregivers:0, clients:0}` — so a failed upstream read became "no links"
+    // AND, because the zero is recorded, was never asked about again. One
+    // timeout pinned a wrong badge for the rest of the session.
+    //
+    // ⚠️ SENT EXPLICITLY RATHER THAN LEFT TO BE INFERRED FROM ABSENCE. Every id
+    // that succeeds is in `counts`, so absence DOES imply failure and the
+    // client could work it out — but "this list is missing an entry, therefore
+    // something failed" is exactly the inference this project keeps getting
+    // wrong. The route knows; it says so.
+    const unknown: string[] = [];
     for (let i = 0; i < ids.length; i += CONCURRENCY) {
       await Promise.all(
         ids.slice(i, i + CONCURRENCY).map(async (id) => {
           try {
             counts[id] = await countCaregiverRelations(id);
-          } catch {
-            // One contact failing must not lose the other 59. It simply gets
-            // no badge, which is the same as having no links.
+          } catch (e) {
+            // One contact failing must not lose the other 59.
+            unknown.push(id);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[relations] could not count ${id}: ${e instanceof Error ? e.message : String(e)}`,
+            );
           }
         }),
       );
     }
+    if (unknown.length)
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[relations] ${unknown.length} of ${ids.length} contact(s) could not be counted — their badges read "links unknown", not zero.`,
+      );
 
     return NextResponse.json(
-      { ok: true, counts },
+      { ok: true, counts, unknown },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {

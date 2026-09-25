@@ -316,10 +316,26 @@ export interface Caregiver {
 }
 
 // Caregiver/client link counts for the list + board badges, keyed by contactId.
-export type RelationCounts = Record<
-  string,
-  { caregivers: number; clients: number }
->;
+//
+// 🔴 ROUND 152 — `unknown` IS A THIRD STATE AND IT IS NOT A ZERO.
+//
+// The client recorded `{caregivers:0, clients:0}` for every id the server did
+// not answer for, and the route's own comment said that was fine: "It simply
+// gets no badge, which is the same as having no links." It is not the same. A
+// contact whose relations read FAILED is not a contact with no relations, and
+// because the zero is recorded it is never asked about again — so one upstream
+// failure pinned a wrong badge for the rest of the session.
+//
+// ⚠️ THE SAME SHAPE AS EVERY OTHER DEFECT IN THIS TASK: a blank rendered as an
+// answer. It is only worse here because nothing on screen said anything was
+// missing — a 504 loses every badge visibly; this lost one, silently, and
+// permanently.
+export type RelationCount =
+  | { caregivers: number; clients: number; unknown?: false }
+  /** The read failed or timed out. Never rendered as "no links". */
+  | { caregivers?: undefined; clients?: undefined; unknown: true };
+
+export type RelationCounts = Record<string, RelationCount>;
 
 // Task 5 — email send. A selectable recipient (client or caregiver contact).
 export interface EmailRecipient {
