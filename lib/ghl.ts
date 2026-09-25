@@ -5101,15 +5101,60 @@ export async function applyCaseManagers(
   // ⚠️ `null` AND `[]` STILL MEAN DIFFERENT THINGS TO THE TAB — never mapped
   // versus deliberately emptied. They converge on one behaviour only here, and
   // only when we hold a record.
-  const mapped = getCaseManagers(ownerId);
-  const want = mapped ?? [];
-
   try {
     // 🔴 READ FRESH UNLESS THE CALLER HANDS ONE OVER. On the transfer path the
     // caller's copy is the PRE-write one whose followers were cleared two steps
     // ago, so that path always re-reads.
     const rec = known ?? (await getOpportunityByIdUncached(oppId));
     if (!rec) return out({ skipped: true, why: "the record could not be read back" });
+
+    // ═══ ROUND 149 — CLIENT PIPELINES ONLY, AND IT ROUTES THROUGH RULE A ═════
+    //
+    // 🔴 A CASE MANAGER SUPERVISES ENROLMENTS; A RECRUITER SCREENS APPLICANTS.
+    // The product keeps those apart by construction and this rule did not: the
+    // map keys on the REP and nothing else, so a caregiver applicant assigned
+    // to an OLTL sales rep would have been followed by that rep's two case
+    // managers. Wrong division AND wrong kind of record — found live when a
+    // Private Pay caregiver applicant landed on an OLTL rep through a
+    // placeholder assignment.
+    //
+    // ⚠️ `scope` IS THE TEST BECAUSE IT IS ALREADY THE DISTINCTION. It is the
+    // field that separates the two boards, set deliberately on the screen that
+    // owns every other per-pipeline decision — the same argument that settled
+    // `role` and `group`. Every alternative was worse: the Case Manager field
+    // is location-wide so its presence proves nothing; `divisionLabel` mangles
+    // every caregiver pipeline name (see lib/division.ts); and a per-pipeline
+    // opt-in would do nothing until an admin visited a settings screen, which
+    // the `role` comment argues against in its own words.
+    //
+    // 🔴 IT SETS `mapped` TO null RATHER THAN RETURNING EARLY, AND THAT IS THE
+    // WHOLE POINT. An early return would strand a record that gained managers
+    // on a client pipeline and was later MOVED to a caregiver one — they would
+    // follow it for ever. `null` is already the rule-A state meaning "not
+    // managed by this system", and its four cases then do exactly the right
+    // thing with no new branch:
+    //
+    //   caregiver pipeline · no stored record    nothing touched, no write
+    //   caregiver pipeline · stored record       remove what we added, clear
+    //
+    // ⚠️ AND IT FAILS CLOSED. If the scope cannot be established the answer is
+    // "not client", because adding a manager to an applicant is the leak this
+    // closes while failing to add one is recoverable and visible. In practice
+    // getSelectedPipelines falls back to the env list rather than returning
+    // nothing, so a config blip does not reach this.
+    let onClientPipeline = false;
+    try {
+      const clientPipes = await getSelectedPipelines("client");
+      onClientPipeline = clientPipes.some((p) => p.id === rec.pipelineId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[casemgr] ${oppId}: could not establish whether ${rec.pipelineId} is client-scoped — treating it as NOT, so nothing is added. Case managers will not be applied here until the pipeline config reads.`,
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+    const mapped = onClientPipeline ? getCaseManagers(ownerId) : null;
+    const want = mapped ?? [];
 
     const defs = await getFieldDefinitions();
     const recordDef = findDefByName(defs, CASE_MANAGER_FOLLOWERS_FIELD);
@@ -5130,9 +5175,15 @@ export async function applyCaseManagers(
     if (mapped === null && mine.length === 0)
       return out({
         skipped: true,
-        why: ownerId
-          ? "that owner has no entry in the map and this function added nothing to this record"
-          : "the record has no owner",
+        // ⚠️ THREE REASONS, NOT TWO. "Unmapped" and "not a client pipeline"
+        // both arrive here as `mapped === null`, and an operator reading the
+        // log has to be able to tell them apart — one is 21 of 26 users, the
+        // other is a setting somebody can change on the Pipelines screen.
+        why: !ownerId
+          ? "the record has no owner"
+          : !onClientPipeline
+            ? "this pipeline is not client-scoped, so case managers do not apply to it"
+            : "that owner has no entry in the map and this function added nothing to this record",
         noRecordField,
       });
 
