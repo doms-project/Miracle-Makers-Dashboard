@@ -1552,22 +1552,30 @@ function normalizeOpportunity(
     pipelineId,
     pipelineName: pipelineNameById.get(pipelineId) || "",
     shared: false, // set true later by the access filter for non-home pipelines
-    // ITEM 2 — days-in-stage. ⚠️ THIS WAS NOT PREVIOUSLY IN THE PAYLOAD: nothing
-    // in the codebase read lastStageChangeAt, and RawOpportunity did not declare
-    // it, so the brief's "already in the API response" was true of GoHighLevel's
-    // response, not of ours. It is read here defensively — several plausible key
-    // spellings, and "" when GHL sends none — so an absent value renders nothing
-    // rather than "0 days", which would be a confident lie about a record we
-    // know nothing about. UNVERIFIED against live GHL: see
-    // scripts/stage-age-probe.mjs.
     // ITEM 5 — see OpportunityRecord.version.
     version: String(opp.updatedAt ?? opp.dateUpdated ?? ""),
-    stageChangedAt: String(
-      opp.lastStageChangeAt ??
-        opp.lastStageChangedAt ??
-        opp.lastStatusChangeAt ??
-        "",
-    ),
+    // ✅ DAYS-IN-STAGE — `lastStageChangeAt`, AND IT IS NOW VERIFIED LIVE.
+    //
+    // This read three plausible spellings because nothing had confirmed which
+    // one GoHighLevel sends. The probe has run: `lastStageChangeAt` is present
+    // on EVERY record, and one record shows a fifteen-day gap between creation
+    // and stage change — so it tracks real movement rather than echoing
+    // `createdAt`. The two speculative spellings are gone; a defensive fallback
+    // that is never taken is a claim nobody can check.
+    //
+    // ⚠️ `lastStatusChangeAt` IS PRESENT TOO AND IDENTICAL ON EVERY RECORD
+    // SAMPLED. It is deliberately NOT read: identical today is not the same as
+    // the same field, and falling back to it would silently substitute a
+    // different meaning the first time they diverge.
+    //
+    // 🔴 AND IT IS MOVED BY BULK WRITES, WHICH IS A REAL CAVEAT WHEREVER
+    // DAYS-IN-STAGE IS SHOWN. Fourteen records share a gap of exactly 2,880
+    // minutes — 48 hours — and all fourteen are still at NEW LEAD. That is one
+    // bulk correction touching the field without a stage move, most likely the
+    // 210-record Facebook remediation. So a tile reading "2 days in stage" on a
+    // record that has not moved since August is WRONG and has nothing on screen
+    // to say so. Anything rendering this number needs that sentence beside it.
+    stageChangedAt: String(opp.lastStageChangeAt ?? ""),
     createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
@@ -5941,6 +5949,22 @@ export interface ContactFieldsRead {
   firstName: string;
   lastName: string;
   /**
+   * 🔴 ROUND 150 — THE CONTACT'S OWNER, AND IT IS THE WEBHOOK'S WHOLE INPUT.
+   *
+   * GoHighLevel's workflow webhook carries `user { firstName, lastName, email }`
+   * and `owner` as a display string — NO USER ID ANYWHERE, confirmed across
+   * three payloads from two workflows and three pipelines. So the handler has
+   * to resolve the owner itself, and this is it.
+   *
+   * ⚠️ THE CONTACT'S, NOT THE OPPORTUNITY'S. The Assign step in those workflows
+   * writes the CONTACT owner and leaves the opportunity unassigned — proven on
+   * a live record, not inferred. A handler reading the opportunity finds nothing
+   * on every form-created lead, which is the common case.
+   *
+   * ⚠️ IT COSTS NOTHING EXTRA: this function already GETs the whole contact.
+   */
+  assignedTo: string;
+  /**
    * 🔴 ROUND 133 — THE TWO FIELDS THAT DECIDE WHETHER A PERSON CAN EXIST AT ALL.
    *
    * GoHighLevel will not create a contact without one of them: `/contacts/upsert`
@@ -5998,6 +6022,7 @@ export async function getContactCustomFields(
   }
   return {
     contactId,
+    assignedTo: String(rc.assignedTo ?? ""),
     values,
     version: String(rc.dateUpdated ?? rc.updatedAt ?? ""),
     firstName,
