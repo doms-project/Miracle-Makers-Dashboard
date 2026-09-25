@@ -58,6 +58,11 @@ const reset = (over = {}) => {
     // which is what made the child fail too, until the whole run was shaped.
     hasRecordField: SHAPE !== "norecordfield",
     hasNameField: true,
+    // 🔴 ROUND 151 — the silent-refusal modes. Not memoised anywhere, so unlike
+    // the field list these can be flipped mid-run and even mid-case (8c turns
+    // the DELETE refusal on between two applies).
+    refuseAdd: false,
+    refuseRemove: false,
     opps: {
       o1: {
         id: "o1", name: "Mary Malone", pipelineId: "p1", pipelineStageId: "p1_s1",
@@ -133,9 +138,39 @@ const server = http.createServer((req, res) => {
       const o = S.opps[oppId];
       const ids = (j?.followers || []).filter(Boolean);
       S.writes.push({ what: "followers", method: req.method, ids });
+      // ═══ ROUND 151 · 🔴 THE SILENT REFUSAL, BYTE FOR BYTE ═════════════════
+      //
+      // Driven live from PowerShell against the account: with the record's
+      // pipeline set to "Share with selected users", GoHighLevel answers the
+      // correct payload with
+      //
+      //     200 {"followers":[],"followersAdded":[[]],"traceId":"…"}
+      //
+      // and stores nothing. It does not refuse — it succeeds and writes
+      // nothing, which is worse than a refusal because every status check
+      // passes.
+      //
+      // 🔴 THIS FAKE ANSWERED EXACTLY WHAT GOHIGHLEVEL WAS REFUSING, which is
+      // rule 1 in its purest form: this file was 63/63 green for eleven rounds
+      // against an endpoint that did nothing. Without this mode the assertion
+      // that now guards it would itself be unproven.
+      if ((req.method === "POST" && S.refuseAdd) || (req.method === "DELETE" && S.refuseRemove))
+        return send(200, { followers: [], followersAdded: [[]] });
+
       // 🔴 A DELTA, BOTH WAYS. Neither verb replaces the array.
-      if (req.method === "POST") o.followers = [...new Set([...o.followers, ...ids])];
-      else if (req.method === "DELETE") o.followers = o.followers.filter((f) => !ids.includes(f));
+      if (req.method === "POST") {
+        o.followers = [...new Set([...o.followers, ...ids])];
+        // ⚠️ THE MINIMUM CONFIRMED SUCCESS SHAPE, DELIBERATELY NOT MORE. The
+        // live success echoed `followersAdded: [["V0gY…","WiFU…"]]` — NESTED —
+        // and what `followers` holds on a success was never probed. Sending
+        // only the observed key makes this HARDER than production: the
+        // assertion has to survive on `followersAdded` alone. It also pins the
+        // nesting, which the old declared type had wrong as `string[]`.
+        return send(200, { followersAdded: [ids] });
+      }
+      o.followers = o.followers.filter((f) => !ids.includes(f));
+      // ⚠️ THE DELETE's SUCCESS SHAPE IS UNPROBED — see removeOpportunityFollowers.
+      // Left as it was rather than invented; nothing asserts on it.
       return send(200, { followers: o.followers });
     }
     if (oppId && path === `/opportunities/${oppId}`) {
@@ -450,6 +485,64 @@ r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", UNMAPPED));
 console.log(`  -> "${r.why}"`);
 ok("🔴 THE CONTROL — a client pipeline with an unmapped owner blames the MAP",
    /no entry in the map/.test(r.why) && !/client-scoped/.test(r.why), r.why);
+
+console.log("\n═══ 8 · 🔴 ROUND 151 — A 200 THAT STORED NOTHING ═══");
+// 🔴 THE CASE THIS WHOLE FILE WAS GREEN AGAINST. Eleven rounds at 63/63 while
+// the live endpoint accepted every call and wrote nothing, because the fake
+// answered what GoHighLevel was refusing. The refusal is now a fixture mode and
+// these are the assertions that could not exist before it.
+
+console.log("\n8a · 🔴 THE CONTROL — WITHOUT THE REFUSAL, IT ALL STILL WORKS");
+// Paired in the same run, as every section here is: without this, 8b passes
+// just as well if applyCaseManagers has stopped doing anything at all.
+reset(); fresh();
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+ok("both managers follow", followers().includes(CARLA) && followers().includes(EDMARK), followers());
+ok("the record claims them", cf(CM_REC) === `${CARLA},${EDMARK}`, cf(CM_REC));
+ok("🔴 and `mismatch` is null when the read-back agrees", r.mismatch === null, r.mismatch);
+
+console.log("\n8b · 🔴 THE REFUSED ADD — IT MUST NOT REPORT SUCCESS");
+reset({ refuseAdd: true }); fresh();
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  -> skipped=${r.skipped} "${String(r.why).slice(0, 72)}…"`);
+ok("🔴 it does NOT come back as applied", r.skipped === true, r);
+ok("🔴 and the reason names the CAUSE, not just the symptom",
+   /shared with selected users/.test(r.why || ""), r.why);
+ok("nobody is following", !followers().includes(CARLA) && !followers().includes(EDMARK), followers());
+// 🔴 THE PHANTOM RECORD. Rule B removes ONLY what this field names, so writing
+// it after a refused add would claim two followers that do not exist.
+ok("🔴 the record was NOT written — no claim on followers that are not there",
+   cf(CM_REC) === null, cf(CM_REC));
+ok("⚠️ and the Case Manager NAME field was not written either — the throw " +
+   "lands before it, so the panel does not announce managers nobody has",
+   cf(CM_FIELD) === null, cf(CM_FIELD));
+
+console.log("\n8c · 🔴 THE REFUSED REMOVE — THE PERMANENT LEAK, AND THE ORDERING THAT CLOSES IT");
+// A refused REMOVE is worse than a refused add and it is why the read-back had
+// to move above the record write: the person is still following, and dropping
+// them from our record disowns them for ever — no later run can take them off.
+reset(); fresh();
+await withMap({ [ERN]: [CARLA, EDMARK] }, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  step 1 · both added, record=${JSON.stringify(cf(CM_REC))}`);
+S.refuseRemove = true; fresh();
+r = await withMap({ [ERN]: [CARLA] }, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  step 2 · dropped Edmark from the map, DELETE refused -> record=${JSON.stringify(cf(CM_REC))}`);
+ok("the removal did not take — Edmark is still following", followers().includes(EDMARK), followers());
+ok("🔴 `mismatch.lingering` names him", (r.mismatch?.lingering || []).includes(EDMARK), r.mismatch);
+ok("🔴 AND THE RECORD STILL CLAIMS HIM, so he stays removable next run",
+   (cf(CM_REC) || "").includes(EDMARK), cf(CM_REC));
+
+console.log("\n8d · 🔴 THE CONTROL FOR 8c — A REMOVE THAT TAKES *DOES* DROP HIM");
+// Without this, 8c passes if the record simply never changes.
+reset(); fresh();
+await withMap({ [ERN]: [CARLA, EDMARK] }, () => ghl.applyCaseManagers("o1", ERN));
+fresh();
+r = await withMap({ [ERN]: [CARLA] }, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  -> record=${JSON.stringify(cf(CM_REC))} followers=${JSON.stringify(followers())}`);
+ok("Edmark is gone from the record when the removal really happened",
+   cf(CM_REC) === CARLA, cf(CM_REC));
+ok("⚠️ and `mismatch` is null — the two cases are distinguishable",
+   r.mismatch === null, r.mismatch);
 
 // ── THE CHILD, for the shape this process cannot reach ────────────────────
 console.log("\n═══ 2c · IN A CHILD PROCESS, BECAUSE THE FIELD LIST IS MEMOISED ═══");

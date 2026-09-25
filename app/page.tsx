@@ -50,6 +50,7 @@ import AddCaregiverDialog from "@/components/AddCaregiverDialog";
 import ReferralsSection, { type Payload as ReferralsPayload } from "@/components/ReferralsSection";
 import ReferredBy from "@/components/ReferredBy";
 import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
+import { isUserIdListField } from "@/lib/editable";
 import { divisionLabel } from "@/lib/division";
 
 const LOCATION_ID =
@@ -428,6 +429,24 @@ const asStr = (v: unknown): string =>
   Array.isArray(v) ? v.map(String).join(", ") : v == null ? "" : String(v);
 const asArr = (v: unknown): string[] =>
   Array.isArray(v) ? v.map(String) : v == null || v === "" ? [] : [String(v)];
+/**
+ * 🔴 ROUND 151 — NEVER SHOW AN ID. A comma-separated list of user ids rendered
+ * as names, with the same "Former user" fallback the owner and follower chips
+ * already use (page.tsx:2556, page.tsx:4475) — an unresolvable id must read the
+ * same everywhere rather than leaking the raw value in one place.
+ *
+ * ⚠️ The STORED value is untouched; this is display only. See lib/editable.ts.
+ */
+const asUserNames = (
+  v: unknown,
+  users: { id: string; name: string }[],
+): string =>
+  asStr(v)
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((id) => users.find((u) => u.id === id)?.name || "Former user")
+    .join(", ");
 // ITEM 1 — these now go through lib/dates.ts, which handles the epoch-ms shape
 // the SEARCH endpoint returns. The old version fed "1787875200000" to
 // `new Date(string)`, got Invalid Date, and fell through to `s.slice(0,10)` —
@@ -659,9 +678,23 @@ function FieldControl({
       );
     // ITEM 1 — THE reported bug. Transferred Date is read-only, so it rendered
     // through `asStr(value)` and printed the raw epoch `1787875200000`.
+    //
+    // 🔴 ROUND 151 — AND THE SAME BRANCH WAS DOING IT AGAIN, WITH USER IDS.
+    // "Case Manager Followers" is read-only and TEXT, so it fell through to
+    // `asStr(value)` and printed `V0gYK3HpF1Tan7Uv0Jcp,WiFUXs6SShLwFB0Z5enR` on
+    // the panel. Identical shape to the epoch above: a read-only field whose
+    // stored value is machine-readable, rendered raw because this branch had
+    // one special case and needed two. ⚠️ It is DELIBERATELY VISIBLE rather
+    // than hidden — "who is watching this case" is what a rep opening the panel
+    // wants to know (lib/editable.ts) — which is exactly why it has to be
+    // legible.
     return (
       <div className="v ro">
-        {(t === "DATE" ? asDateText(value, def) : asStr(value)) || "—"}{" "}
+        {(t === "DATE"
+          ? asDateText(value, def)
+          : isUserIdListField(def.name)
+            ? asUserNames(value, users)
+            : asStr(value)) || "—"}{" "}
         <span className="readonly-note">read-only</span>
       </div>
     );

@@ -50,6 +50,12 @@ const USERS = [
   [SPARE, "Someone Unlisted"], ["u_admin", "Chris Tester"],
 ];
 
+// 🔴 ROUND 151 — A MANAGER WHO LEFT THE ACCOUNT, still in the map. This is the
+// live state on the account today (two departed people are still mapped), and
+// it is the branch that rendered a bare twenty-character id in a column of
+// people's names. Nothing else in this fixture reaches it.
+const GONE = "0IcvXMDmxEToQTM7VZ9w";
+
 const REAL_MAP = {
   [ERN]: [CARLA, EDMARK],
   [DARIUS]: [CARLA, EDMARK],
@@ -389,6 +395,52 @@ console.log(`  head now: ${JSON.stringify(v.head)}`);
 ok("🔴 the second pick makes it a real row", 
    v.rows.find((r) => r.who === "Someone Unlisted")?.chips.includes("marc barnes"), v.rows);
 ok("⚠️ and the count moves only now", /5\s*managers/.test(v.head), v.head);
+
+console.log("\n9 · 🔴 ROUND 151 — A DEPARTED MANAGER IS NOT A BARE ID");
+// ⚠️ THE STALE ENTRY ARRIVES HERE, NOT IN THE FIXTURE, AND THAT IS A MISTAKE I
+// MADE AND UNDID. Seeding it into REAL_MAP added a fifth manager and shifted
+// every count assertion in sections 7 and 8 by one — six correct assertions
+// went red because the FIXTURE had moved under them, which is round 148's rule
+// 5 arriving from the other direction. Injected after those have run instead,
+// by rewriting the stored value and reloading the tab.
+stored = JSON.stringify({
+  ...JSON.parse(stored),
+  caseManagers: { ...JSON.parse(stored).caseManagers, [SPARE]: [GONE] },
+});
+await page.reload({ waitUntil: "domcontentloaded" });
+const frame9 = await (await page.waitForSelector("iframe")).contentFrame();
+await frame9.waitForFunction(
+  () => !/Checking session/.test(document.querySelector(".viewas")?.textContent || ""),
+  { timeout: 90000 },
+);
+for (let i = 0; i < 12; i++) {
+  await frame9.evaluate(() => {
+    [...document.querySelectorAll("button")]
+      .find((x) => /^Access$/i.test((x.textContent || "").trim()))?.click();
+  });
+  await page.waitForTimeout(500);
+  if (await frame9.$(".cmhead")) break;
+}
+await frame9.waitForSelector(".cmhead", { timeout: 60000 });
+await page.waitForTimeout(400);
+// 🔴 IN THE BROWSER, NOT IN A UNIT ASSERTION. The complaint was about what is
+// on screen, and `nameOf` falling back to the raw id is only visible once a row
+// renders. Every other row here resolves to a person's name, which is exactly
+// what made a twenty-character token in the same column read as a fault.
+const ids = await frame9.evaluate(() =>
+  [...document.querySelectorAll(".cmwho, .cmof")].map((r) => r.textContent?.trim() || ""));
+console.log(`  rows: ${JSON.stringify(ids)}`);
+// ⚠️ THE PROPERTY, NOT THE SENTENCE — a GHL id is 20 chars of [A-Za-z0-9], and
+// what must hold is that no cell IS one, not how the replacement is worded.
+const bare = ids.filter((t) => /^[A-Za-z0-9]{20}$/.test(t));
+ok("🔴 NOT ONE cell on the tab is a bare id", bare.length === 0, bare);
+ok("🔴 the departed manager renders as a person-shaped label",
+   ids.some((t) => /Former user/.test(t)), ids);
+// ⚠️ THE CONTROL. Without this, the assertion above passes on a tab that has
+// stopped rendering the stale row at all — which would be worse than the id,
+// because the entry would be invisible AND unremovable.
+ok("🔴 THE CONTROL — and the id is still THERE, so it can still be removed",
+   ids.some((t) => t.includes(GONE)), ids);
 
 console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
 await browser.close();

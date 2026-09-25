@@ -798,6 +798,19 @@ export async function updateOpportunity(
     // ⚠️ `rec` IS FRESH — read uncached two lines above, after the PUT — so the
     // unmapped-and-unrecorded case costs no request at all on this path, which
     // is the common one.
+    //
+    // ⚠️ ROUND 151 — THE ONE CONSUMER THAT DROPS `mismatch`, ON PURPOSE AND
+    // RECORDED HERE. The other two carry it: `moveOpportunity` folds
+    // `cm.steps` into the transfer's step list, and the webhook refuses to
+    // report ACTED. This path returns an OpportunityRecord to a route that
+    // saves a field, and the rule three comments up is absolute — a follower
+    // failure must never make a completed save report itself as failed. So the
+    // mismatch reaches the LOG and not the panel.
+    //
+    // 🔴 WHAT THAT COSTS, SAID PLAINLY: a rep changing the owner from the panel
+    // sees a clean save while the managers may not have been applied. Closing
+    // it means a second channel on the save response — a warning that is not a
+    // failure — which is a UI contract, not a line here.
     await applyCaseManagers(id, String(body.assignedTo ?? ""), rec);
 
   return rec;
@@ -1965,6 +1978,35 @@ export async function setContactOwner(contactId: string, userId: string): Promis
   await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, {
     assignedTo: userId,
   });
+
+  // ═══ ROUND 151 — READ IT BACK ══════════════════════════════════════════════
+  //
+  // 🔴 SAME CLASS AS THE FOLLOWER WRITE: this asserts a USER's relationship to
+  // a record, and GoHighLevel validates those against that user's own access
+  // rather than the token's. The opportunity owner write fails loudly (400);
+  // the follower write returns 200 and stores nothing. Which of the two a
+  // CONTACT owner write behaves like has never been probed on this account —
+  // so this reads it back instead of assuming either.
+  //
+  // ⚠️ THE READ-BACK IS RIGHT WHICHEVER IT TURNS OUT TO BE. If GoHighLevel
+  // refuses loudly the throw above fires first and this never runs; if it
+  // refuses silently this catches it. It costs one GET on the promote path,
+  // which runs once per partner promotion, not in any loop.
+  const back = await getContactCustomFields(contactId).catch(() => null);
+  if (back && back.assignedTo && back.assignedTo !== userId)
+    throw new GhlError(
+      "GoHighLevel did not store the contact owner.",
+      502,
+      `The request was accepted but ${contactId} is still owned by someone else. ` +
+        `If this is the pipeline-sharing restriction, the fix is GoHighLevel → Settings → ` +
+        `Opportunities → Pipelines → the key icon.`,
+      { code: "CONTACT_OWNER_NOT_STORED" },
+    );
+  // ⚠️ AN EMPTY READ-BACK IS NOT TREATED AS A REFUSAL. A contact that comes
+  // back with no `assignedTo` at all is more likely a read that did not carry
+  // the field than a write that vanished, and throwing on it would break the
+  // promote path on an account whose contact payload differs. Narrow on
+  // purpose: only a DIFFERENT owner proves the write did not take.
 }
 
 /** A contact's notes, newest first, with their text. No opportunity filter. */
@@ -4961,22 +5003,94 @@ export async function moveOpportunity(args: {
 
 // ---------------------------------------------------------------------------
 // Followers (Task 5) — dedicated add/remove endpoints (no full-opportunity PUT).
-// GHL sends NO native notification to a newly added follower. Shapes follow
-// GHL v2; scripts/followers-probe.mjs confirms them live. Each returns the
-// response's follower array best-effort, but the route recomputes the final set
-// from the known current followers so it never depends on the response shape.
+// GHL sends NO native notification to a newly added follower.
+//
+// ═══ ROUND 151 · 🔴 A 200 HERE CAN MEAN "ACCEPTED AND STORED NOTHING" ═══════
+//
+// The shape was never the problem and `scripts/followers-probe.mjs` confirming
+// it live proved less than it looked like. Probed four ways against the account:
+//
+//   {followers:[…]}           200 — and stored NOTHING
+//   {followers, locationId}   422  "property locationId should not exist"
+//   {followerIds:[…]}         422  "property followerIds should not exist"
+//   bare array                400  not valid JSON
+//
+// GoHighLevel validates that exact key, so the shape is right. It still wrote
+// nothing, because the record's PIPELINE was set to "Share with selected users"
+// and the people being added were not among them.
+//
+// 🔴 THE RESTRICTION IS INVISIBLE FROM EVERY ENDPOINT WE HAVE. It lives on the
+// pipeline in the GoHighLevel UI and is not in the pipelines API (`showInFunnel`,
+// `showInPieChart`, `colorRenderMode` — nothing about users). The user objects
+// are identical for a permitted and a refused user: 139 scopes,
+// `opportunitiesEnabled: true`, `assignedDataOnly: false`. Nothing the dashboard
+// can read distinguishes them.
+//
+// ⚠️ AND THE PIT's LOCATION RIGHTS DO NOT OVERRIDE IT. Reading is unaffected;
+// WRITING an owner or a follower is an assertion about a USER's relationship to
+// a record, and GoHighLevel validates that against the user's own access
+// whatever token asked. Owner writes fail loudly (400, and explainGhlError
+// turns it into a sentence). Follower writes fail silently. That asymmetry is
+// what cost an hour to find, and it is why the echo is now asserted.
+//
+// ⚠️ THE FIX IS A TOGGLE IN SOMEBODY ELSE'S UI. "Share with all users" is not
+// visible to this code and nothing here would notice it being undone. The
+// caller reading the body is the only defence that survives a re-share.
 // ---------------------------------------------------------------------------
+
+/**
+ * Every follower id GoHighLevel echoed back, from whichever key it used.
+ *
+ * 🔴 `followersAdded` IS NESTED — `string[][]`, not `string[]`. Live:
+ *   success  {"followers":[…], "followersAdded":[["V0gY…","WiFU…"]]}
+ *   refusal  {"followers":[],  "followersAdded":[[]]}
+ * The old declared type said `string[]`, which was latent only because
+ * `followers` is always present and `??` never fell through to it. Flattened
+ * here rather than trusted, so neither nesting nor a key swap can put an array
+ * where an id belongs.
+ */
+function echoedFollowers(j: unknown): Set<string> {
+  const o = (j ?? {}) as Record<string, unknown>;
+  const out = new Set<string>();
+  for (const key of ["followers", "followersAdded", "followersRemoved"]) {
+    const v = o[key];
+    if (!Array.isArray(v)) continue;
+    for (const x of v.flat(2)) if (typeof x === "string" && x) out.add(x);
+  }
+  return out;
+}
+
 export async function addOpportunityFollowers(
   oppId: string,
   userIds: string[],
 ): Promise<string[]> {
   if (!userIds.length) return [];
-  const res = await ghlSend<{ followers?: string[]; followersAdded?: string[] }>(
-    "POST",
-    `/opportunities/${encodeURIComponent(oppId)}/followers`,
-    { followers: userIds },
-  );
-  return res.followers ?? res.followersAdded ?? [];
+  const res = await ghlSend<{
+    followers?: string[];
+    followersAdded?: string[][];
+  }>("POST", `/opportunities/${encodeURIComponent(oppId)}/followers`, {
+    followers: userIds,
+  });
+  const echoed = echoedFollowers(res);
+  const landed = userIds.filter((u) => echoed.has(u));
+
+  // 🔴 NONE OF THEM CAME BACK — that is the refusal signature above, and it is
+  // the ONE case this can call with certainty. A partial echo is left to the
+  // caller's read-back rather than guessed at: we have no probe saying GHL ever
+  // returns a partial, and inventing a meaning for one would be the same
+  // mistake as a fake that answers what GoHighLevel refuses.
+  if (!landed.length)
+    throw new GhlError(
+      "GoHighLevel stored no followers.",
+      502,
+      `The request was accepted (200) and none of the ${userIds.length} follower(s) were stored. ` +
+        `This is what GoHighLevel does when the record's pipeline is shared with selected users ` +
+        `only and the people being added are not among them — it does not refuse, it returns success ` +
+        `and writes nothing. Open GoHighLevel → Settings → Opportunities → Pipelines → the key icon ` +
+        `on this record's pipeline and either share it with these users or with all users.`,
+      { code: "FOLLOWERS_NOT_STORED" },
+    );
+  return landed;
 }
 
 export async function removeOpportunityFollowers(
@@ -4988,11 +5102,30 @@ export async function removeOpportunityFollowers(
   // said ghlSend excludes DELETE "because a DELETE has none"; this call site is
   // the counter-example that was sitting three lines below it.
   const j =
-    (await ghlDelete<{ followers?: string[]; followersRemoved?: string[] }>(
+    (await ghlDelete<{ followers?: string[]; followersRemoved?: string[][] }>(
       `/opportunities/${encodeURIComponent(oppId)}/followers`,
       { body: { followers: userIds }, what: "the followers" },
     )) ?? {};
-  return j.followers ?? j.followersRemoved ?? [];
+
+  // 🔴 DELIBERATELY NOT ASSERTED, AND THIS IS THE RULE APPLIED TO MYSELF.
+  //
+  // The add echo is asserted because BOTH of its shapes were probed live — a
+  // success that echoes the ids and a refusal that echoes none. The DELETE's
+  // success shape has never been probed. If GoHighLevel answers a successful
+  // removal with `{}` or with the REMAINING followers rather than the removed
+  // ones, an assertion here would throw on every working remove — a fake's
+  // guess about success, which is the exact failure rule 8 names.
+  //
+  // ⚠️ SO THE READ-BACK CARRIES IT INSTEAD, and it carries it completely:
+  // `applyCaseManagers` now verifies before writing its record, so a silently
+  // refused removal keeps the name in the record and stays removable. That
+  // failure — disowning a follower we added, permanently, on a 200 — is closed
+  // by the ordering rather than by this echo.
+  //
+  // The probe that would let this throw:
+  //   DELETE /opportunities/{id}/followers  {followers:["<a real follower>"]}
+  //   on a pipeline shared with all users — record which key comes back.
+  return [...echoedFollowers(j)].filter((u) => userIds.includes(u));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5048,6 +5181,20 @@ export interface CaseManagerResult {
   fieldValue: string | null;
   /** Rule B could not run: no "Case Manager Followers" field on this account. */
   noRecordField: boolean;
+  /**
+   * 🔴 ROUND 151 — WHAT THE READ-BACK FOUND, IN THE RETURN VALUE.
+   *
+   * The read-back has existed since task 1 and it caught this live, but it only
+   * ever reached `steps` and the log. A caller asking "did it work?" got
+   * `skipped:false` and a full `added` array — so the webhook printed
+   * `ACTED — +2 manager(s)` while GoHighLevel had stored none of them.
+   *
+   * `missing`   should be following and is not (a refused or lost add)
+   * `lingering` we removed it and it is still there (a refused remove)
+   *
+   * null when the read-back ran and agreed, or when there was nothing to verify.
+   */
+  mismatch: { missing: string[]; lingering: string[] } | null;
   steps: string[];
 }
 
@@ -5083,7 +5230,7 @@ export async function applyCaseManagers(
   const steps: string[] = [];
   const out = (r: Partial<CaseManagerResult>): CaseManagerResult => ({
     skipped: false, why: "", added: [], removed: [], fieldValue: null,
-    noRecordField: false, steps, ...r,
+    noRecordField: false, mismatch: null, steps, ...r,
   });
 
   // ── RULE A, IN ITS RESOLVED FORM ────────────────────────────────────────
@@ -5253,23 +5400,31 @@ export async function applyCaseManagers(
     // wanted appears in neither `added` (they are following) nor `removed`
     // (still in `want`) — dropping them would disown a manager we really did
     // add, and the next mapping change would leave them following forever.
-    const nowOurs = want.filter((u) => added.includes(u) || mine.includes(u));
-    if (recordDef) {
-      await putOpportunityVerified(
-        oppId,
-        { customFields: [{ id: recordDef.id, value: nowOurs.join(",") }] },
-        "casemgr-record",
-      );
-    }
-
     // 🔴 A 200 IS NOT A SUCCESS. Read back and check the managers are actually
     // following before this reports itself done.
+    //
+    // ═══ ROUND 151 — AND IT NOW RUNS BEFORE THE RECORD WRITE ═══════════════
+    //
+    // 🔴 THE ORDER WAS THE BUG, AND IT IS A PERMANENT LEAK ON A 200. The record
+    // below is the ONLY thing rule B consults when deciding whom it may remove.
+    // Written before the read-back, a silently refused REMOVE dropped the name
+    // from it while the person was still following — so we disowned a follower
+    // this function had added, and no later run could ever take them off. One
+    // success response, one follower on a case for ever.
+    //
+    // ⚠️ THAT IS WHY THE REMOVE ECHO IS NOT ASSERTED and does not need to be.
+    // The ordering closes it whatever the DELETE answers: a removal that did
+    // not take leaves the name in `lingering`, which is kept in the record and
+    // stays removable next time.
+    let missing: string[] = [];
+    let lingering: string[] = [];
+    let verified: Set<string> | null = null;
     if (added.length || removed.length) {
       invalidateOpportunity(oppId);
       const after = await getOpportunityByIdUncached(oppId);
-      const now = new Set(after?.followerIds ?? []);
-      const missing = want.filter((u) => u !== rec.ownerId && !now.has(u));
-      const lingering = removed.filter((u) => now.has(u));
+      verified = new Set(after?.followerIds ?? []);
+      missing = want.filter((u) => u !== rec.ownerId && !verified!.has(u));
+      lingering = removed.filter((u) => verified!.has(u));
       if (missing.length || lingering.length) {
         steps.push(
           `🔴 read-back MISMATCH — ${missing.length} manager(s) are still not following${
@@ -5285,12 +5440,44 @@ export async function applyCaseManagers(
       }
     }
 
-    return out({ added, removed, fieldValue, noRecordField });
+    // ⚠️ `lingering` IS ADDED BACK, NOT DROPPED. `want` excludes anyone we just
+    // removed, so the plain filter would disown a removal that did not take.
+    // And the whole set is then narrowed to who is ACTUALLY following, so an
+    // add that did not land is never recorded as ours.
+    const claimed = new Set([
+      ...want.filter((u) => added.includes(u) || mine.includes(u)),
+      ...lingering,
+    ]);
+    const nowOurs = verified
+      ? [...claimed].filter((u) => verified!.has(u))
+      : [...claimed];
+    if (recordDef) {
+      await putOpportunityVerified(
+        oppId,
+        { customFields: [{ id: recordDef.id, value: nowOurs.join(",") }] },
+        "casemgr-record",
+      );
+    }
+
+    return out({
+      added,
+      removed,
+      fieldValue,
+      noRecordField,
+      mismatch: missing.length || lingering.length ? { missing, lingering } : null,
+    });
   } catch (e) {
+    // ⚠️ THE DETAIL, NOT JUST THE MESSAGE. A GhlError's `message` is the one
+    // line ("GoHighLevel stored no followers."); everything actionable — which
+    // setting did this and where to change it — is in `detail`. Round 151's
+    // follower assertion throws exactly that error, and dropping the detail
+    // here would have thrown away the sentence it took an hour to learn.
+    const why =
+      e instanceof GhlError ? e.detail || e.message : e instanceof Error ? e.message : String(e);
     // eslint-disable-next-line no-console
     console.error(`[casemgr] ${oppId}: apply failed — the owner change stands.`, e);
-    steps.push(`🔴 failed: ${e instanceof Error ? e.message : String(e)}`);
-    return out({ skipped: true, why: "the apply failed — see the log" });
+    steps.push(`🔴 failed: ${why}`);
+    return out({ skipped: true, why: `the apply failed — ${why}` });
   }
 }
 
