@@ -39,6 +39,16 @@ export default function ReferredBy({
 }) {
   const [open, setOpen] = useState(false);
   const [partners, setPartners] = useState<Partner[] | null>(null);
+  /**
+   * 🔴 HOW MANY PARTNERS THIS VIEWER MAY NOT SEE — round 148.
+   *
+   * ⚠️ IT ONLY EVER CHANGES A SENTENCE, and that is the point: the list being
+   * empty is the same shape whether the account has no partners or this viewer
+   * holds no division, and those two need opposite advice. The route has sent
+   * this count since task 2 · §4; nothing read it until a sweep looked for
+   * consumers of a list that had started being filtered.
+   */
+  const [withheld, setWithheld] = useState(0);
   const [loadErr, setLoadErr] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,13 +78,17 @@ export default function ReferredBy({
     const seq = ++loadSeq.current;
     const isCurrent = () => seq === loadSeq.current;
     try {
-      const j = await apiFetch<{ partners: Partner[] }>(
+      // 🔴 `withheld` IS READ NOW — round 148. The route has sent it since 143
+      // and nothing consumed it, so this picker spent two rounds telling a
+      // scoped viewer that no referral partners exist on an account with five.
+      const j = await apiFetch<{ partners: Partner[]; withheld?: number }>(
         "/api/referrals?only=partners",
         { ssoBlob },
       );
       if (!isCurrent()) return;
       setLoadErr("");
       setPartners(j.partners || []);
+      setWithheld(j.withheld || 0);
     } catch (e) {
       if (!isCurrent()) return;
       // 🔴 NAMED, NOT SWALLOWED. Without this the row would read "—" for a
@@ -184,9 +198,27 @@ export default function ReferredBy({
               <div className="refbyempty">Couldn&apos;t load partners — {loadErr}</div>
             ) : !hits.length ? (
               <div className="refbyempty">
+                {/* 🔴 ROUND 148 — THREE STATES, BECAUSE THERE ARE THREE.
+                    This tested `partners.length` alone, which meant "the
+                    account has none" until task 2 · §4 filtered this endpoint
+                    by division. After that, zero meant "none IN YOUR SCOPE" —
+                    and the sentence still read "No referral partners exist
+                    yet. Add one in the Referrals section."
+
+                    ⚠️ THE ADVICE WAS WORSE THAN THE SENTENCE. Following it
+                    creates a duplicate of a partner that already exists and
+                    that this viewer simply cannot see.
+
+                    🔴 THIRD INSTANCE OF ONE PATTERN — after the dangling count
+                    and the Sources empty state. A client-side emptiness test
+                    whose meaning the server changed underneath it, and which
+                    the client cannot recover on its own: only the COUNT beside
+                    the list can tell an absence from a filter. */}
                 {partners.length
                   ? `No partner matches “${q.trim()}”.`
-                  : "No referral partners exist yet. Add one in the Referrals section."}
+                  : withheld > 0
+                    ? `No referral partner is in scope for you. ${withheld} ${withheld === 1 ? "is" : "are"} tracked on this account, in divisions you do not hold — ask an admin on Admin → Access.`
+                    : "No referral partners exist yet. Add one in the Referrals section."}
               </div>
             ) : (
               hits.slice(0, 40).map((p) => (

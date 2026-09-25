@@ -2182,12 +2182,35 @@ export default function ReferralsSection({
             ) : !events.length ? (
               <div className="rfpanel">
                 <div className="empty">
-                  <b>No events in {divLabel(division)}</b>
+                  {/* 🔴 ROUND 148 — "Shared with me" IS NOT A DIVISION.
+                      Task 2 · §3 made the events list EMPTY under that scope on
+                      purpose: an event has no owner on this screen, so none can
+                      be shared, and falling through to inDivision would have
+                      shown every event beside a partner list of one. But the
+                      sentence below still said "none of them in this division"
+                      — advice that happened to be right for a reason that was
+                      wrong. */}
+                  <b>
+                    {division === SHARED_SCOPE
+                      ? "Events are not shared"
+                      : `No events in ${divLabel(division)}`}
+                  </b>
                   <br />
-                  {data.events.length} event
-                  {data.events.length === 1 ? " exists" : "s exist"} in{" "}
-                  <b>{data?.meta.eventsPipelineName || "Events"}</b>, none of
-                  them in this division. Switch the heading above.
+                  {division === SHARED_SCOPE ? (
+                    <>
+                      <b>Shared with me</b> lists partners you own outside your
+                      divisions. An event belongs to a division rather than to a
+                      person, so none appears here — switch the heading above to
+                      see them.
+                    </>
+                  ) : (
+                    <>
+                      {data.events.length} event
+                      {data.events.length === 1 ? " exists" : "s exist"} in{" "}
+                      <b>{data?.meta.eventsPipelineName || "Events"}</b>, none of
+                      them in this division. Switch the heading above.
+                    </>
+                  )}
                 </div>
               </div>
             ) : (

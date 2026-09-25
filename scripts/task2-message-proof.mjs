@@ -30,9 +30,9 @@
 // Run: node scripts/task2-message-proof.mjs
 // ---------------------------------------------------------------------------
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { chromium } from "playwright-core";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync, rmSync } from "node:fs";
 import CryptoJS from "crypto-js";
 
 // 🔴 TWO FIXTURES, TWO RUNS — and the reason is §4 itself. The "no partners in
@@ -244,10 +244,7 @@ const browser = await chromium.launch({
 });
 
 /** Reach the Referrals board as `who` and read what is on it. No drawer. */
-const openBoardAs = async (who, role = "user") => {
-  const d = await openDialogAs(who, role, { board: true });
-  return d;
-};
+const openBoardAs = (who, role = "user") => openDialogAs(who, role, { board: true });
 
 /** Open the app as `who`, reach Referrals, and open "Log a referral". */
 const openDialogAs = async (who, role = "user", opts = {}) => {
@@ -306,8 +303,19 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
       foots,
       withheldBox: (document.querySelector(".rfwithheld")?.textContent || "")
         .replace(/\s+/g, " ").trim(),
+      // ⚠️ `.empty` IS INSIDE A ROW, so a table showing only the empty state
+      // still reports one <tr>. `rowCount` counts REAL rows — the ones with a
+      // partner id on them — or "the table is empty" and "the table has one
+      // partner" would be the same number.
+      emptyText: (document.querySelector(".rftable .empty")?.textContent || "")
+        .replace(/\s+/g, " ").trim(),
+      rowCount: document.querySelectorAll('.rftable tbody tr[role="button"]').length,
     };
   });
+  // 🔴 THE BOARD-ONLY PATH. The "no partners in scope" state has no row, so no
+  // drawer and no dialog — waiting for one there is waiting for something the
+  // fixture deliberately does not have.
+  if (opts.board) return { page, frame, ...board, board };
   // ⚠️ "Log a referral" IS IN THE DRAWER, not on the row — `onLogReferral` is a
   // prop of the partner drawer (ReferralsSection.tsx:2301, button at :2939). My
   // first run clicked around the table for thirty seconds and timed out on
@@ -315,9 +323,11 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
   // UI being wrong.
   for (let i = 0; i < 12; i++) {
     await frame.evaluate(() => {
-      const el = [...document.querySelectorAll(".rftable tbody .rforg, .rftable tbody td")]
-        .find((x) => /Riddle Hospital/.test(x.textContent || ""));
-      (el?.closest("tr") ?? el)?.click();
+      // ⚠️ WHICHEVER ROW THIS VIEWER CAN REACH, not a named partner. Naming one
+      // made the test depend on that partner being visible to everybody, and §4
+      // stopped that being true — the ungranted viewer met an empty table and
+      // the proof timed out on its own fixture.
+      document.querySelector('.rftable tbody tr[role="button"]')?.click();
     });
     await page.waitForTimeout(600);
     if (await frame.$(".rfdrawer")) break;
@@ -393,8 +403,17 @@ if (!BLANK_PARTNER) {
   ok("🔴 THE CONTROL — the admin sees both partners on the same fixture",
      zc.rowCount === 2, zc.rowCount);
   say(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed  (no-blank-partner shape)`);
-  await browser.close(); dev.kill("SIGTERM"); fake.close();
-  setTimeout(() => process.exit(fail ? 1 : 0), 300);
+  await browser.close(); fake.close();
+  dev.kill("SIGTERM");
+  // 🔴 `process.exit` MUST BE REACHED, NOT SCHEDULED. This was
+  // `setTimeout(() => process.exit(...), 800)`, which schedules an exit and
+  // lets everything after this block run anyway — so the child sailed on into
+  // the parent's section 1 and crashed on the browser it had just closed. Its
+  // own five assertions had already passed; the failure was entirely after the
+  // work was done, and it reported as "the child shape failed".
+  await new Promise((r) => setTimeout(r, 300));
+  try { dev.kill("SIGKILL"); } catch {}
+  process.exit(fail ? 1 : 0);
 }
 
 console.log("\n═══ 1 · 🔴 THE CONTROL — A GRANTED REP CAN STILL FILE ═══");
@@ -477,7 +496,52 @@ await adm.page.close();
 await g.page.close();
 await u.page.close();
 await browser.close();
-dev.kill("SIGTERM");
 fake.close();
-console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
+
+// 🔴 WAIT FOR THE DEV SERVER TO ACTUALLY BE GONE BEFORE SPAWNING THE CHILD.
+// `dev.kill("SIGTERM")` returns immediately; the next-server worker takes a
+// moment to go, and Next 16 permits ONE dev server per directory. The first run
+// of this split raced its own parent and the child died on the lock — which my
+// own lock detection reported accurately, against a server I had just killed.
+//
+// ⚠️ SIGKILL AND THE LOCK FILE AS A BACKSTOP. A worker that ignores SIGTERM
+// would otherwise make the child fail for a reason that has nothing to do with
+// the code under test.
+const stopDev = async () => {
+  dev.kill("SIGTERM");
+  await new Promise((r) => {
+    const t = setTimeout(() => { try { dev.kill("SIGKILL"); } catch {} r(); }, 4000);
+    dev.on("exit", () => { clearTimeout(t); r(); });
+  });
+  for (let i = 0; i < 20; i++) {
+    const gone = await tryFetch(base, 800);
+    if (typeof gone !== "number") break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  try { rmSync(".next/dev/lock", { force: true }); } catch {}
+};
+await stopDev();
+
+// ── THE CHILD, for the fixture this run cannot hold ───────────────────────
+// 🔴 ONE RUN CANNOT BE BOTH. The "no partners in scope" empty state needs a
+// viewer who sees ZERO partners; the dialog assertions need that same viewer to
+// reach a DRAWER, which needs a row. Rule (iii) makes a blank-division partner
+// universal, so the two requirements are mutually exclusive in one fixture.
+// Same answer as task2-scope-proof's child, for the same reason.
+say("\n═══ 5 · IN A CHILD PROCESS, BECAUSE ONE FIXTURE CANNOT BE BOTH ═══");
+let childOut = "", childOk = true;
+try {
+  childOut = execFileSync("node", ["scripts/task2-message-proof.mjs"], {
+    env: { ...process.env, SHAPE: "nopartners" }, encoding: "utf8",
+  });
+} catch (e) {
+  childOut = String(e.stdout || "") + String(e.stderr || "");
+  childOk = false;
+}
+for (const line of childOut.split("\n"))
+  if (/^\s{2}(ok|FAIL)|no-blank-partner shape|^5 ·|empty state:|withheld:|admin rows:/.test(line))
+    console.log(`  ${line.trim()}`);
+ok("🔴 the zero-partners shape passes in its own process", childOk, childOut.slice(-500));
+
+console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed  (+ the child's)`);
 setTimeout(() => process.exit(fail ? 1 : 0), 300);

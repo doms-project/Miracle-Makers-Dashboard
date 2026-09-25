@@ -582,6 +582,34 @@ export async function GET(request: Request) {
         lastTouch: null, // resolved below, for the ids asked for
       }));
 
+      // ═══════════════════════════════════════════════════════════════════
+      // 🔴 THE STANDING RULE, AND IT IS WRITTEN HERE BECAUSE HERE IS WHERE IT
+      // IS BROKEN:
+      //
+      //   A ROUTE THAT STARTS FILTERING A LIST OWES ITS CONSUMERS A COUNT, IN
+      //   THE SAME CHANGE — AND THE SWEEP FOR CONSUMERS IS PART OF THAT CHANGE.
+      //
+      // Three defects have come from ignoring it, all one shape: a client-side
+      // emptiness test that meant "the account has none" before a filter
+      // existed and means "you may see none" after it.
+      //
+      //   danglingReferrals   a withheld partner read as a DELETED one
+      //   the Sources table   "No referral partners yet · add one"  on 5
+      //   ReferredBy          the same sentence, and following its advice
+      //                       creates a duplicate of a partner you cannot see
+      //
+      // 🔴 THE CLIENT CANNOT RECOVER THE DISTINCTION. It receives only what it
+      // may see, so "absent" is all it can observe. Every one of those three is
+      // fixable only because a count travels beside the list — and the third
+      // stayed broken for two rounds because the count was sent and never read.
+      //
+      // ⚠️ THE COROLLARY, WHICH IS WHAT MAKES THE RULE CHEAP: count the
+      // consumers BEFORE you filter. `/api/referrals` has exactly two
+      // (ReferralsSection and ReferredBy), so its sweep is ten minutes. A list
+      // with twenty consumers is a round of its own, and knowing that up front
+      // is the difference between scheduling it and discovering it.
+      // ═══════════════════════════════════════════════════════════════════
+
       // ═══ TASK 2 · SECTION 4 — PARTNER ROWS GET AN ACCESS TEST ══════════════
       //
       // 🔴 THEY HAD NONE AT ALL. Round 100 found `isMine` only in the touch
