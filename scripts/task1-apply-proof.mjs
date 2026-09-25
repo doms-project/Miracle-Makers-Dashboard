@@ -99,9 +99,32 @@ const server = http.createServer((req, res) => {
         { id: ROI, name: "Roi Navarte" }, { id: UNMAPPED, name: "Nobody Mapped" },
         { id: HUMAN_ADDED, name: "A Co-Rep" },
       ] });
+    // ⚠️ TWO PIPELINES, p1 CLIENT-SCOPED AND p2 CAREGIVER — exactly the
+    // distinction round 149 turns on. p2's name is also the one divisionLabel
+    // mangles ("OLTL Caregiver Applicants" → "OLTL Caregiver"), which is why
+    // scope and not divisionLabel is the test.
+    //
+    // 🔴 AND THE SCOPE COMES FROM THE STORED CONFIG BELOW, NOT THE ENV LIST.
+    // This fake served no customValues, so getSelectedPipelines fell through to
+    // its PIPELINE_IDS fallback and the proof exercised the fallback path while
+    // the live account uses the stored one. Green on the wrong road — the
+    // production-shape rule, met in my own fixture.
     if (path === "/opportunities/pipelines")
-      return send(200, { pipelines: [{ id: "p1", name: "OLTL Enrollment",
-        stages: [{ id: "p1_s1", name: "NEW LEAD", position: 0 }] }] });
+      return send(200, { pipelines: [
+        { id: "p1", name: "OLTL Enrollment",
+          stages: [{ id: "p1_s1", name: "NEW LEAD", position: 0 }] },
+        { id: "p2", name: "OLTL Caregiver Applicants",
+          stages: [{ id: "p2_s1", name: "APPLIED", position: 0 }] },
+      ] });
+    if (path === `/locations/${LOC}/customValues`)
+      return send(200, { customValues: [{ id: "cv1", name: "MM Pipeline Folders",
+        value: JSON.stringify({
+          seeded: true, folderNames: {},
+          pipelines: {
+            p1: { scope: "client", folders: [] },
+            p2: { scope: "caregiver", folders: [], group: "caregiver" },
+          },
+        }) }] });
     if (path === "/opportunities/search")
       return send(200, { opportunities: Object.values(S.opps), meta: { total: 1 } });
 
@@ -370,6 +393,63 @@ reset(); fresh();
 r = await ghl.applyCaseManagers("o1", ERN);
 ok("🔴 an unfilled store reads as unmapped — the feature is simply inert",
    r.skipped === true && S.writes.length === 0, { r, writes: S.writes });
+
+console.log("\n═══ 7 · 🔴 ROUND 149 — CLIENT PIPELINES ONLY, AND THE MOVED CASE ═══");
+// 🔴 THE CASE AN EARLY RETURN WOULD STRAND FOR EVER. A record gains managers on
+// a client pipeline, is later moved to a caregiver one, and must LOSE them on
+// arrival. `if (!client) return;` leaves them following a job applicant; routing
+// through `mapped = null` removes them, because that is already what rule A
+// means.
+
+console.log("\n7a · (setup) A CLIENT CASE STILL GETS ITS MANAGERS");
+// ⚠️ ALSO THE CONTROL FOR EVERYTHING BELOW. "Nothing is added on a caregiver
+// pipeline" passes just as well when the whole rule is switched off.
+reset(); fresh();
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  p1 (client) -> added=${JSON.stringify(r.added)} record=${JSON.stringify(cf(CM_REC))}`);
+ok("🔴 THE CONTROL — on a client pipeline both managers are still added",
+   followers().includes(CARLA) && followers().includes(EDMARK), followers());
+ok("⚠️ and recorded as ours", cf(CM_REC) === `${CARLA},${EDMARK}`, cf(CM_REC));
+
+console.log("\n7b · 🔴 THE MOVE — SAME RECORD, SAME OWNER, CAREGIVER PIPELINE");
+fresh();
+S.opps.o1.pipelineId = "p2";          // moved; the owner has not changed
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  p2 (caregiver) -> skipped=${r.skipped} removed=${JSON.stringify(r.removed)} followers=${JSON.stringify(followers())}`);
+ok("🔴 THE CLAIM — the managers are REMOVED on arrival, not stranded",
+   !followers().includes(CARLA) && !followers().includes(EDMARK), followers());
+ok("🔴 it does NOT skip — there is a record of ours to undo",
+   r.skipped === false, r);
+ok("⚠️ and the human-added co-rep is untouched, as everywhere else",
+   followers().includes(HUMAN_ADDED), followers());
+ok("⚠️ our own record is cleared with them", cf(CM_REC) === "", cf(CM_REC));
+ok("⚠️ and the Case Manager name field too", cf(CM_FIELD) === "", cf(CM_FIELD));
+
+console.log("\n7c · 🔴 A CASE THAT WAS NEVER ON A CLIENT PIPELINE — NOT ONE WRITE");
+// The common case once this ships: every applicant, every day. It must cost
+// nothing and say why.
+reset(); fresh();
+S.opps.o1.pipelineId = "p2";
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  -> skipped=${r.skipped} "${r.why}"`);
+ok("🔴 it skips", r.skipped === true, r);
+ok("🔴 AND NOT ONE WRITE WAS SENT", !S.writes.some((w) => w.what === "followers" || w.what === "put"), S.writes);
+// ⚠️ THE REASON IS DISTINGUISHABLE FROM "unmapped". Both arrive as
+// `mapped === null`; one is 21 of 26 users and the other is a setting.
+ok("🔴 and the reason names the PIPELINE, not the map",
+   /not client-scoped/.test(r.why), r.why);
+ok("⚠️ the co-rep is untouched and no field is written",
+   followers().join() === HUMAN_ADDED && cf(CM_FIELD) === null,
+   { f: followers(), cm: cf(CM_FIELD) });
+
+console.log("\n7d · ⚠️ AND AN UNMAPPED OWNER ON A CLIENT PIPELINE STILL SAYS SO");
+// The control for 7c's wording: if every skip said "not client-scoped" the
+// assertion above would pass while the message had stopped meaning anything.
+reset(); fresh();
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", UNMAPPED));
+console.log(`  -> "${r.why}"`);
+ok("🔴 THE CONTROL — a client pipeline with an unmapped owner blames the MAP",
+   /no entry in the map/.test(r.why) && !/client-scoped/.test(r.why), r.why);
 
 // ── THE CHILD, for the shape this process cannot reach ────────────────────
 console.log("\n═══ 2c · IN A CHILD PROCESS, BECAUSE THE FIELD LIST IS MEMOISED ═══");

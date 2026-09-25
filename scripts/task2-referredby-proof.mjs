@@ -258,6 +258,17 @@ ok("🔴 by name, so the picker genuinely works",
    ad.hits);
 ok("⚠️ and no empty-state sentence is shown to them at all", ad.empty === "", ad.empty);
 
+// ⚠️ ONE BRANCH IS DELIBERATELY NOT DRIVEN, AND IT IS NOT AN OVERSIGHT.
+//
+// "No referral partners exist yet" — the genuinely-empty account — needs a
+// fixture with NO partners at all, and the control above needs a viewer who can
+// see two. One run cannot be both, the same mutual exclusion that split
+// task2-message-proof into two shapes.
+//
+// 🔴 IT IS LEFT BECAUSE THAT BRANCH IS UNCHANGED CODE. Round 148 inserted a
+// state ABOVE it and did not touch it; what could break it is ordering, and
+// section 3 below tests the ordering directly. If that branch is ever edited,
+// this needs a child shape.
 say("\n═══ 3 · ⚠️ THE THIRD STATE — A SEARCH THAT MATCHES NOTHING ═══");
 // `partners.length > 0 && hits.length === 0` is the branch that was always
 // correct, and it must stay reachable: the fix added a state above it, and a
