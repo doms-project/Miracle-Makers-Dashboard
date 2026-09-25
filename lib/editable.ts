@@ -57,8 +57,39 @@ export const READ_ONLY_FIELDS: string[] = [
   "Case Manager Followers",
 ];
 
+// ═══ ROUND 151 — FIELDS WHOSE STORED VALUE IS A LIST OF USER IDS ═══════════
+//
+// 🔴 THE STORED VALUE STAYS IDS. That is deliberate and it is the whole point
+// of "Case Manager Followers": it is the machine-readable record rule B reads
+// when deciding whom it may remove, and names would be ambiguous the first time
+// two people shared one. Only the RENDERING changes.
+//
+// It was rendering as `V0gYK3HpF1Tan7Uv0Jcp,WiFUXs6SShLwFB0Z5enR` on the record
+// panel, to whoever opened the case. "Case Manager" beside it looked right for
+// a reason that is worth knowing: it is not resolved at render time either —
+// `applyCaseManagers` writes NAMES into that one. There was no id-resolving
+// render path anywhere, so this is new behaviour rather than a wiring-up.
+//
+// ⚠️ MATCHED BY NAME, like READ_ONLY_FIELDS and HIDDEN_NAMES above, and NOT by
+// guessing at the shape of the value. A twenty-character alphanumeric string is
+// not reliably an id, and "looks like an id" would eventually mangle somebody's
+// real data.
+//
+// "Reassign Followers" is hidden entirely (lib/fieldFolders.ts) so it never
+// reaches a renderer — listed anyway, because the day it stops being hidden is
+// not the day anyone will remember this.
+const USER_ID_LIST_FIELDS = ["Case Manager Followers", "Reassign Followers"];
+
 const norm = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const USER_ID_LIST_SET = new Set(USER_ID_LIST_FIELDS.map(norm));
+
+/** True if a field's stored value is a comma-separated list of user ids. */
+export function isUserIdListField(fieldName: string | undefined | null): boolean {
+  if (!fieldName) return false;
+  return USER_ID_LIST_SET.has(norm(fieldName));
+}
 
 const READ_ONLY_SET = new Set(READ_ONLY_FIELDS.map(norm));
 

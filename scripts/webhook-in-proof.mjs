@@ -37,8 +37,14 @@ const PP = "pipe_pp", APPS = "pipe_apps";
 /** Every request the fake saw, so "did it write" is read, not assumed. */
 let seen = [];
 let opp, contactOwner;
+/** 🔴 ROUND 151 — GoHighLevel accepts the follower POST and stores nothing. */
+let refuseFollowers = false;
+/** 🔴 ROUND 151 — and the DELETE half, which does NOT throw: see 8c. */
+let refuseRemoveFollowers = false;
 const reset = () => {
   seen = [];
+  refuseFollowers = false;
+  refuseRemoveFollowers = false;
   contactOwner = ERN;
   opp = {
     id: "o1", name: "New Lead", pipelineId: PP, pipelineStageId: "pp_s1",
@@ -98,8 +104,16 @@ const server = http.createServer((req, res) => {
       return send(200, { opportunities: [opp], meta: { total: 1 } });
     if (path === `/opportunities/${opp.id}/followers`) {
       const ids = (j?.followers || []).filter(Boolean);
-      if (req.method === "POST") opp.followers = [...new Set([...opp.followers, ...ids])];
-      else if (req.method === "DELETE") opp.followers = opp.followers.filter((f) => !ids.includes(f));
+      // 🔴 ROUND 151 — the live silent refusal: 200, and nothing stored. See
+      // scripts/task1-apply-proof.mjs section 8 for the probe this came from.
+      if (req.method === "POST" && refuseFollowers)
+        return send(200, { followers: [], followersAdded: [[]] });
+      if (req.method === "POST") {
+        opp.followers = [...new Set([...opp.followers, ...ids])];
+        return send(200, { followersAdded: [ids] });
+      }
+      if (refuseRemoveFollowers) return send(200, { followers: [], followersAdded: [[]] });
+      opp.followers = opp.followers.filter((f) => !ids.includes(f));
       return send(200, { followers: opp.followers });
     }
     if (path === `/opportunities/${opp.id}`) {
@@ -260,6 +274,52 @@ ok("🔴 and nothing was read", seen.length === 0, seen.map((s) => s.path));
 ok("🔴 THE CONTROL — the same payload with the right secret DOES act",
    (await (async () => { reset(); const g = await post(WORKFLOW); return g.body.acted; })()) === true,
    "the right secret was refused too — verifyInbound may be rejecting everything");
+
+console.log("\n═══ 8 · 🔴 ROUND 151 — `ACTED` MUST NOT SURVIVE A SILENT REFUSAL ═══");
+// 🔴 THE CONSUMER SIDE OF `mismatch`. The read-back has caught this since task
+// 1, but only in the log: `applyCaseManagers` returned `skipped:false` with a
+// full `added` array, so this handler printed `ACTED — +2 manager(s)` while
+// GoHighLevel had stored none of them. That is the line under test.
+reset();
+refuseFollowers = true;
+r = await post(WORKFLOW);
+console.log(`  -> ${r.status} acted=${r.body.acted} "${String(r.body.reason).slice(0, 78)}…"`);
+ok("🔴 it does NOT report ACTED", r.body.acted === false, r.body);
+// ⚠️ THIS ASSERTION WAS WRONG FIRST TIME AND THE CODE WAS RIGHT. I looked for
+// the `mismatch` wording; a refused ADD THROWS, so it takes the skipped path
+// and carries the cause in `why` instead. The two arms are different on
+// purpose — 8b is the throw, 8c below is the mismatch — and what matters for
+// both is that the sharing setting is named rather than "nothing to do".
+ok("🔴 and the reason names the CAUSE, not a bare 'nothing to do'",
+   /shared with selected users/.test(r.body.reason || ""), r.body.reason);
+ok("⚠️ still a 202 — a retry cannot fix a sharing setting", r.status === 202, r.status);
+ok("nobody is following", !opp.followers.includes(CARLA), opp.followers);
+
+console.log("\n8c · 🔴 THE REFUSED REMOVE — THE `mismatch` BRANCH ITSELF");
+// The add throws; the remove does not, so this is the only path that reaches
+// the handler's `if (r.mismatch)` arm. Two steps: apply normally, then take the
+// owner off the map so the managers must come off, and refuse the DELETE.
+reset();
+r = await post(WORKFLOW);
+console.log(`  step 1 · acted=${r.body.acted} followers=${JSON.stringify(opp.followers)}`);
+contactOwner = "u_unmapped";       // rule A: no entry, but our record names two
+refuseRemoveFollowers = true;
+r = await post(WORKFLOW);
+console.log(`  step 2 · acted=${r.body.acted} "${String(r.body.reason).slice(0, 72)}…"`);
+ok("🔴 it does NOT report ACTED on a removal that did not take",
+   r.body.acted === false, r.body);
+ok("🔴 and the reason says the record DISAGREES — the mismatch arm",
+   /disagrees|NOT applied/.test(r.body.reason || ""), r.body.reason);
+ok("they are both still following, which is what made it a mismatch",
+   opp.followers.includes(CARLA) && opp.followers.includes(EDMARK), opp.followers);
+ok("🔴 AND THE RECORD STILL CLAIMS THEM — they stay removable next run",
+   (cf(CM_REC) || "").includes(EDMARK), cf(CM_REC));
+// ⚠️ THE CONTROL, in the same run: the refusal is what changed the answer, not
+// a handler that has stopped acting on anything.
+reset();
+r = await post(WORKFLOW);
+ok("🔴 THE CONTROL — the same payload without the refusal still ACTS",
+   r.body.acted === true && opp.followers.includes(CARLA), r.body);
 
 console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
 server.close();

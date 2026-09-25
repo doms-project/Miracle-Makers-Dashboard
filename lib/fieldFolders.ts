@@ -127,6 +127,25 @@ const SYSTEM_INFO_NAMES = [
   "APP - Compliance Cleared",
   "Transferred From",
   "Transferred Date",
+  // 🔴 ROUND 151 — AN OPPORTUNITY ID IN THE PEER ACCOUNT, RENDERED RAW in the
+  // middle of the panel. Same complaint as "Case Manager Followers": an id on
+  // screen means nothing to a rep and reads as a fault.
+  //
+  // ⚠️ MOVED HERE RATHER THAN HIDDEN OR RESOLVED, and the two reasons are
+  // different from that one. It CANNOT be resolved — it names a record in a
+  // sub-account this deployment does not read, so there is no name to show.
+  // And it must not be hidden: it is the only machine-readable pointer to the
+  // other side of a transfer, which is exactly what someone chasing one needs.
+  // "Airtable Record ID" set this precedent and this is the same kind of thing
+  // — an external id, collapsed, available when looked for.
+  //
+  // All four spellings the transfer route accepts (see PEER_ID_FIELD in
+  // app/api/opportunities/[id]/transfer/route.ts:125), because an account that
+  // named the field differently would otherwise keep rendering it inline.
+  "Peer Record Id",
+  "Peer Opportunity Id",
+  "Transferred To Id",
+  "Transferred Record Id",
 ];
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");

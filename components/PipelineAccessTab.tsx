@@ -204,10 +204,22 @@ export default function PipelineAccessTab({
     () => new Map(users.map((u) => [u.id, u])),
     [users],
   );
-  // ⚠️ AN ID WITH NO USER IS STILL SHOWN, as the id. A manager who left the
-  // account would otherwise vanish from the screen while still following every
-  // one of their reps' cases — invisible, and unremovable from here.
-  const nameOf = (id: string) => userById.get(id)?.name || id;
+  // ⚠️ AN ID WITH NO USER IS STILL SHOWN. A manager who left the account would
+  // otherwise vanish from the screen while still following every one of their
+  // reps' cases — invisible, and unremovable from here.
+  //
+  // 🔴 ROUND 151 — BUT NOT AS A BARE ID, WHICH IS WHAT IT WAS. A row reading
+  // `0IcvXMDmxEToQTM7VZ9w` where every other row has a person's name reads as a
+  // fault rather than as information, and this account has two stale entries
+  // that hit it today.
+  //
+  // ⚠️ THE ID STAYS, DELIBERATELY, AND IT IS THE ONE PLACE IN THE SWEEP THAT
+  // KEEPS ONE. "Former user" alone would make two departed managers render as
+  // two identical rows, and an admin could not tell which was which to remove
+  // the right one. The word is what the id was missing: it says why there is no
+  // name instead of leaving a token that looks broken.
+  const nameOf = (id: string) =>
+    userById.get(id)?.name || `Former user (${id})`;
 
   const cmManagerCount = Object.keys(cmByManager).length;
   const cmRepCount = Object.keys(caseManagers).length;

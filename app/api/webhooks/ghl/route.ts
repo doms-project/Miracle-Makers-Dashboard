@@ -137,6 +137,24 @@ export async function POST(request: Request) {
     // second thing to keep in step. The cost is one contact GET before a
     // caregiver-pipeline event is declined, which is the right trade.
     const r = await applyCaseManagers(oppId, ownerId);
+
+    // 🔴 ROUND 151 — `acted` MUST NOT BE TRUE ON A READ-BACK MISMATCH. This
+    // line printed `ACTED — +2 manager(s)` while GoHighLevel had stored none of
+    // them: `added` is what we ASKED for, and it is non-empty whether or not
+    // the write landed. The read-back knew; it just had no way to say so until
+    // `mismatch` was added to the result.
+    if (r.mismatch)
+      return done(
+        `🔴 ${oppId}: NOT applied — GoHighLevel accepted the write and the record disagrees. ` +
+          `${r.mismatch.missing.length} manager(s) are not following` +
+          (r.mismatch.lingering.length
+            ? `, ${r.mismatch.lingering.length} removal(s) did not take`
+            : "") +
+          ". Check whether this record's pipeline is shared with selected users only.",
+        false,
+        r.steps.join(" · "),
+      );
+
     return done(
       r.skipped
         ? `nothing to do for ${oppId}: ${r.why}`
