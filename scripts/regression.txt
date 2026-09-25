@@ -1,6 +1,7 @@
 # The standing regression set. `node scripts/run-proofs.mjs --file scripts/regression.txt`
 # A proof that prints no tally FAILS — see the note at the top of run-proofs.mjs.
 task1-apply
+webhook-in
 task1-tab
 task2-partners
 task2-scope
