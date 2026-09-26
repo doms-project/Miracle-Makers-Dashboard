@@ -160,7 +160,57 @@ async function buildResponse(
   // Division scoping + per-viewer `shared` tagging.
   const visible = applyAccess(records, { userId: session.userId, isAdmin: admin });
 
+  // ═══ ROUND 155 — THE PIPELINE NAMES ARE SCOPED AT THE PAYLOAD ═════════════
+  //
+  // 🔴 THE CLIENT GATE IS A SECOND LINE, NOT THE ONLY ONE. `meta.pipelines` was
+  // the full selected list for the account, so a viewer holding no grant
+  // received every pipeline NAME whatever the UI then did with them. Task 2 §1
+  // settled this shape for `clientPipelines` in the referrals route: the
+  // disclosure is closed in the response body, and the proof asserts the name
+  // appears nowhere in it.
+  //
+  // ⚠️ GRANTED **UNION WHAT THEY CAN ALREADY SEE**, not granted alone.
+  // applyAccess admits a record you own, follow, or that is unassigned in your
+  // home, and the owner/follower arms never consult a grant — so a viewer can
+  // hold no grant and still have records here. Sending only granted ids would
+  // name no pipeline for records already on their screen, and the Recruiting
+  // board (which is per-pipeline) would render nothing at all.
+  //
+  // 🔴 IT CANNOT WIDEN ANYTHING: every id in the union either is granted, or
+  // belongs to a record in `visible` — a record this viewer is already being
+  // sent in full.
+  const allowedPipelineIds = new Set<string>([
+    ...getUserHomePipelines(session.userId),
+    ...visible.map((r) => r.pipelineId).filter(Boolean),
+  ]);
+  const scopedPipelines = admin
+    ? pipelines
+    : pipelines.filter((p) => allowedPipelineIds.has(p.id));
+  // 🔴 THE COUNT SHIPS WITH THE FILTER, IN THE SAME CHANGE — the standing rule,
+  // and here it is load-bearing rather than courtesy. `recruitingEmpty` says
+  // "N pipelines exist, but none is yours yet" and derived that N from this
+  // list; narrowing it without a count would have turned that sentence into
+  // "no pipelines are set up yet", which is false and sends an admin to create
+  // a pipeline that already exists.
+  const pipelinesWithheld = pipelines.length - scopedPipelines.length;
+  // ⚠️ THE STAGE MAP TOO. Stage names for a pipeline you cannot see are the
+  // same disclosure one level down, and nothing renders stages for a pipeline
+  // that is not in the list above.
+  const scopedStages = admin
+    ? stagesByPipeline
+    : Object.fromEntries(
+        Object.entries(stagesByPipeline).filter(([id]) => allowedPipelineIds.has(id)),
+      );
+
   const body: OpportunitiesResponse = {
+    // 🔴 `...meta` FIRST, AND THE SCOPED VALUES AFTER IT. It carries the
+    // UNSCOPED `pipelines` and `stagesByPipeline`, so spreading it last — which
+    // is what this did — silently overwrote the narrowing below and made the
+    // whole change a no-op that would have shipped green.
+    ...meta,
+    pipelines: scopedPipelines,
+    stagesByPipeline: scopedStages,
+    pipelinesWithheld,
     records: visible,
     // Passed through so the UI can name a pipeline whose fetch failed. Without
     // it a half-failed load is indistinguishable from an empty division.
@@ -185,7 +235,6 @@ async function buildResponse(
       // were GRANTED the view, not through an exception in the access rule.
       canSeeMaster: hasMasterView(session.userId, admin),
     },
-    ...meta,
   };
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }

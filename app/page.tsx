@@ -1710,6 +1710,8 @@ export default function Dashboard() {
     Record<string, { id: string; name: string }[]>
   >({});
   const [cgHomeIds, setCgHomeIds] = useState<string[]>([]);
+  /** 🔴 ROUND 155 — pipelines scoped out of the payload. A count, never names. */
+  const [cgPipelinesWithheld, setCgPipelinesWithheld] = useState(0);
   const [cgLoading, setCgLoading] = useState(false);
   const [cgErr, setCgErr] = useState<ApiError | null>(null);
   const [cgLoaded, setCgLoaded] = useState(false);
@@ -2034,6 +2036,7 @@ export default function Dashboard() {
       setCgPipelines(b.pipelines || []);
       setCgStagesByPipeline(b.stagesByPipeline || {});
       setCgHomeIds(b.viewer?.homePipelineIds || []);
+      setCgPipelinesWithheld(b.pipelinesWithheld || 0);
       if (b.pipelineGroups) setPipelineGroups(b.pipelineGroups);
       setCgLoaded(true);
     } catch (e) {
@@ -2491,6 +2494,31 @@ export default function Dashboard() {
     !isAdminViewer &&
     homePipelineIds.length === 0 &&
     data.length === 0;
+
+  /**
+   * 🔴 ROUND 155 — RECRUITING'S VERSION, AND IT IS A COPY ON PURPOSE.
+   *
+   * The Recruiting tab decided "no access" from `cgVisiblePipelines.length ===
+   * 0` — a DERIVED list — and that list fell open, so the test could never
+   * fire. This is the same positive test `noPipelineAccess` makes one screen
+   * over: it asks the grant list itself, which cannot fall open.
+   *
+   * ⚠️ A POSITIVE TEST FOR "HOLDS NOTHING" CANNOT FALL OPEN; A `.length === 0`
+   * ON A LIST THAT FELL OPEN ALREADY HAS. That is the difference between the
+   * two tabs and it is the only reason one worked.
+   *
+   * 🔴 AND `cgData.length === 0` IS CARRIED ACROSS WHOLE, NOT IN PART. Without
+   * it a recruiter who holds no grant but OWNS three applicants — visible
+   * through applyAccess's owner/follower/unassigned arms, which never consult
+   * a grant — would be told they have no access over three records on their
+   * screen. Copying the condition in part would have planted the same bug in a
+   * new place.
+   */
+  const noRecruitingAccess =
+    sso.status === "ready" &&
+    !isAdminViewer &&
+    cgHomeIds.length === 0 &&
+    cgData.length === 0;
 
   const headerLabel = useMemo(() => {
     if (adminPipeline !== "all")
@@ -3605,10 +3633,52 @@ export default function Dashboard() {
   // neither.
   const cgVisiblePipelines = useMemo(() => {
     const home = new Set(cgHomeIds);
-    const mine =
-      isAdminViewer || !home.size
-        ? cgPipelines
-        : cgPipelines.filter((p) => home.has(p.id));
+    // ═══ ROUND 155 — `|| !home.size` IS GONE, AND IT WAS THE WHOLE BUG ═══════
+    //
+    // 🔴 IT FELL OPEN FOR EXACTLY THE PERSON IT SHOULD HAVE CLOSED FOR. A
+    // viewer holding no grant has `home.size === 0`, so this handed them EVERY
+    // caregiver pipeline on the account: the picker rendered with every name in
+    // it, and `cgVisiblePipelines.length === 0` — the condition guarding the
+    // "no pipelines assigned yet" screen — could never be true for them. Good
+    // text, unreachable, above a board that was empty only because applyAccess
+    // had filtered the RECORDS server-side.
+    //
+    // ⚠️ THE CLAUSE WAS ALMOST CERTAINLY MEANT AS "no access map is configured
+    // at all, so do not blank the app for everybody". It cannot tell that apart
+    // from "this person has nothing", and those two need opposite answers.
+    //
+    // 🔴 THE CASE IT WAS PROTECTING IS ALREADY PROTECTED, TWO FILES AWAY, AND
+    // THAT IS WHY THIS IS WRITTEN DOWN RATHER THAN REDISCOVERED. In open/setup
+    // mode — no GHL_SSO_SECRET configured — `app/api/opportunities/route.ts`
+    // fills `viewer.homePipelineIds` with EVERY selected pipeline id (see the
+    // comment there: "Open/setup mode behaves like an admin"). So `home` is
+    // full, not empty, and dropping the fall-open changes nothing for that
+    // mode. Anyone tempted to restore this clause should read that line first.
+    //
+    // Clients has never had the fall-open — see `selectablePipelines` above,
+    // which filters unconditionally and returns [] for a zero-grant viewer.
+    //
+    // 🔴 AND THE UNION WITH `inData` IS NOT OPTIONAL — DROPPING THE FALL-OPEN
+    // WITHOUT IT WOULD HAVE HIDDEN RECORDS THE VIEWER CAN SEE.
+    //
+    // This tab is per-pipeline: `cgActivePipeline` is `cgVisiblePipelines[0]`,
+    // so an empty list means an empty BOARD, not just a missing picker. Clients
+    // does not have that problem because its list defaults to "all" and renders
+    // `data` whatever the pipeline list says.
+    //
+    // applyAccess admits a record you OWN, FOLLOW, or that is unassigned in
+    // your home — and the owner and follower arms never consult a grant. So a
+    // recruiter holding no grant can legitimately have applicants on screen,
+    // and with grants alone their own three records would have vanished.
+    //
+    // ⚠️ IT CANNOT WIDEN ANYTHING. Every id here already appears in `cgData`,
+    // which the server filtered for this viewer — it names a pipeline they are
+    // already looking at records in. Same shape as `shared` on the partner
+    // rows: admitted because you hold the RECORD, not the division.
+    const inData = new Set(cgData.map((r) => r.pipelineId));
+    const mine = isAdminViewer
+      ? cgPipelines
+      : cgPipelines.filter((p) => home.has(p.id) || inData.has(p.id));
     // 🔴 ROUND 120 · ITEM 1 — THE SWITCHER FILTERS HERE AND NOWHERE ELSE.
     //
     // ⚠️ THIS IS THE SOURCE. `cgActivePipeline` derives from this list, and
@@ -3649,6 +3719,42 @@ export default function Dashboard() {
         : cgPipelines.filter(
             (p) => (pipelineGroups[p.id] === "staff" ? "staff" : "caregiver") === cgGroup,
           );
+    // 🔴 ROUND 155 — "HOLDS NOTHING AT ALL" IS ITS OWN SENTENCE, AND IT COMES
+    // FROM A POSITIVE TEST. `noRecruitingAccess` asks the grant list directly;
+    // every other branch here reasons about a DERIVED list, which is what let
+    // the whole block go unreachable in the first place.
+    //
+    // ⚠️ IT GOES FIRST because it is the biggest fact about the screen. A
+    // brand-new seat should not read "3 staff pipelines exist, but none is
+    // yours yet" — true, and it buries the part they need, which is that this
+    // is normal and somebody else has to act. Wording follows Clients'
+    // NoAccessNotice so the two tabs say the same thing to the same person.
+    if (noRecruitingAccess)
+      return (
+        <>
+          <b>No pipelines assigned yet</b>
+          <br />
+          An admin controls which pipelines you can see. Nothing is wrong with
+          your sign-in — you&apos;ll see {cgNoun.many} here once you are given
+          access to one in the Access tab.
+        </>
+      );
+    // 🔴 `pipelinesWithheld` IS WHY THIS BRANCH IS STILL HONEST. `cgPipelines`
+    // is now scoped at the payload, so "none in this group" and "none you are
+    // allowed to know about" both arrive as an empty `inGroup`. Without the
+    // count this would say "no pipelines are set up yet" to somebody whose
+    // account has five — and send an admin to create a duplicate.
+    if (!inGroup.length && cgPipelinesWithheld > 0)
+      return (
+        <>
+          <b>No {label} pipelines assigned yet</b>
+          <br />
+          {cgPipelinesWithheld} pipeline{cgPipelinesWithheld === 1 ? "" : "s"} on
+          this account {cgPipelinesWithheld === 1 ? "is" : "are"} not yours to
+          see. You&apos;ll see records here once an admin gives you access to one
+          in the Access tab.
+        </>
+      );
     if (!inGroup.length)
       return (
         <>
@@ -3676,7 +3782,7 @@ export default function Dashboard() {
         one in the Access tab.
       </>
     );
-  }, [cgGroup, cgNoun, cgPipelines, pipelineGroups]);
+  }, [cgGroup, cgNoun, cgPipelines, pipelineGroups, noRecruitingAccess, cgPipelinesWithheld]);
 
   const cgActivePipeline = useMemo(
     () =>

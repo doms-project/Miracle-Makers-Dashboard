@@ -228,7 +228,23 @@ for (let i = 0; i < 8; i++) {
   await frame.evaluate(scrollTo, i * 260);
   await page.waitForTimeout(220);
 }
-await page.waitForTimeout(6000); // let the 4s batch land
+// 🔴 WAIT FOR THE CONDITION, NOT FOR A DURATION — AND THIS PROOF TAUGHT ME
+// WHY. It was `waitForTimeout(6000)` and it passed 11/11 standalone and 9/11
+// inside the 21-proof runner, where the machine is busy and a 4s fake plus a
+// cold dev-server compile does not fit in six seconds. A proof that fails on
+// load rather than on behaviour trains you to ignore its reds, which is worse
+// than not having it.
+//
+// ⚠️ THE CONDITION IS A POSITIVE ONE: c1 and c3 both render a `.rellink`
+// (a count and an unknown), so their presence means the batch landed. c2 is
+// deliberately not waited for — it renders nothing, and waiting for an absence
+// is what got this wrong in the first place.
+await frame.waitForFunction(
+  () =>
+    !!document.querySelector('[data-cid="c1"] .rellink') &&
+    !!document.querySelector('[data-cid="c3"] .rellink'),
+  { timeout: 60000 },
+);
 
 const dupes = [...new Set(batches.flat())].filter((id) => timesAsked(id) > 1);
 console.log(`  batches: ${batches.length}  sizes: ${JSON.stringify(batches.map((b) => b.length))}`);
@@ -240,9 +256,20 @@ ok("🔴 NOT ONE contact was asked about twice while a request was in flight",
 ok("🔴 THE CONTROL — it did ask, and for the rows that were on screen",
    batches.length > 0 && batches.flat().length >= 10,
    { batches: batches.length, total: batches.flat().length });
-ok("⚠️ and every id it asked about reached the fake",
-   batches.flat().every((id) => relReads.includes(id)),
-   { asked: batches.flat().length, read: relReads.length });
+// 🔴 THE SAME CLAIM MEASURED AT THE DESTINATION, WHICH IS WHERE THE 13,851
+// WERE COUNTED. This assertion used to be "every id the browser asked about
+// reached the fake" — which RACES: later batches are still in flight when it
+// runs, so it failed for a reason that had nothing to do with the code. It was
+// also weak, checking plumbing rather than the finding.
+//
+// ⚠️ THIS ONE IS STABLE UNDER PARTIAL COMPLETION. Requests still outstanding
+// only mean fewer entries in `relReads`; "no contact was read upstream twice"
+// holds at every moment in between. Under the reverted filter it goes red hard
+// — 117 upstream reads for 20 contacts.
+const dupeReads = relReads.filter((id, i) => relReads.indexOf(id) !== i);
+console.log(`  upstream reads: ${relReads.length} for ${new Set(relReads).size} contacts`);
+ok("🔴 AND NO CONTACT WAS READ UPSTREAM TWICE — the amplification, at the fake",
+   dupeReads.length === 0, { total: relReads.length, dupes: [...new Set(dupeReads)] });
 
 // ═══ 2 · THE THREE STATES ══════════════════════════════════════════════════
 console.log("\n═══ 2 · 🔴 A FAILED READ IS NOT A ZERO ═══");
@@ -308,7 +335,12 @@ await frame4.waitForFunction(
   { timeout: 90000 },
 );
 await frame4.waitForSelector("[data-cid]", { timeout: 60000 });
-await page.waitForTimeout(2500);
+// Same again: wait for the badge to exist rather than for a clock. The 504 is
+// fulfilled instantly by page.route, but the dev server still has to render.
+await frame4.waitForFunction(
+  () => !!document.querySelector('[data-cid="c1"] .rellink'),
+  { timeout: 60000 },
+);
 const after504 = await frame4.evaluate((c) => {
   const row = document.querySelector(`[data-cid="${c}"]`);
   return row?.querySelector(".rellink")?.textContent?.trim() ?? "";
