@@ -150,5 +150,38 @@ ok("and it is still addressable as \"none\"", noneIds.includes("pipe_events"), n
 ok("exclusionsFor reads the set back", C.exclusionsFor(round, PIPE).has("fld_block"), [...C.exclusionsFor(round, PIPE)]);
 ok("and is empty for a pipeline that hides nothing", C.exclusionsFor(round, "pipe_other").size === 0, [...C.exclusionsFor(round, "pipe_other")]);
 
+console.log("\n9 · 🔴 ROUND 157 — \"Case Manager Followers\" IS NOT RENDERED AT ALL");
+// 🔴 IT IS RULE B's MACHINE RECORD: a comma-separated list of user ids, read
+// back on every apply so a removal can be surgical. It was visible on the
+// panel because "who is watching this case" is a real question — but "Case
+// Manager" answers it in names, the Followers control answers it from the live
+// list, and `[casemgr]`'s steps beat raw ids for anyone debugging a removal.
+//
+// ⚠️ HIDDEN ENTIRELY, NOT MOVED TO System info. This asserts the difference,
+// because "collapsed" and "absent" are easy to confuse in a grouping function
+// and only one of them is what was asked for.
+const cmfDefs = [
+  ...defs,
+  { id: "fld_cmf",  name: "Case Manager Followers", parentId: SHARED, dataType: "TEXT", position: 60 },
+  { id: "fld_peer", name: "Peer Record Id",         parentId: SHARED, dataType: "TEXT", position: 70 },
+];
+const cmfValues = Object.fromEntries(cmfDefs.map((d) => [d.id, "x"]));
+const g9 = F.groupFieldsForPipeline(cmfDefs, PIPE, folders, { values: cmfValues });
+const sysNames9 = (g9.systemInfo || []).map((f) => f.name);
+console.log(`  sections: ${JSON.stringify(names(g9))}`);
+console.log(`  system info: ${JSON.stringify(sysNames9)}`);
+ok("🔴 it is in NO section", !names(g9).includes("Case Manager Followers"), names(g9));
+ok("🔴 and NOT in System info either — hidden, not collapsed",
+   !sysNames9.includes("Case Manager Followers"), sysNames9);
+// 🔴 THE CONTROLS. Without these the two above pass on a grouping function
+// that has stopped returning anything, or one that hides everything.
+ok("🔴 THE CONTROL — \"Case Manager\" is still rendered, in names, for people to read",
+   names(g9).includes("Case Manager"), names(g9));
+ok("🔴 THE CONTROL — \"Peer Record Id\" still goes to System info, so the two " +
+   "treatments really are different",
+   sysNames9.includes("Peer Record Id"), sysNames9);
+ok("⚠️ and the Pipelines screen agrees it is intercepted, so no folder tickbox offers it",
+   F.fieldIsAlwaysIntercepted("Case Manager Followers"), "fieldIsAlwaysIntercepted said no");
+
 console.log(`\n${pass} passed, ${fail} failed.`);
 if (fail) process.exit(1);

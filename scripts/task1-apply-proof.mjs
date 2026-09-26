@@ -63,6 +63,13 @@ const reset = (over = {}) => {
     // the DELETE refusal on between two applies).
     refuseAdd: false,
     refuseRemove: false,
+    refuseRemoveEcho: false,
+    // 🔴 ROUND 156 — GoHighLevel applies some writes asynchronously. 17 of 27
+    // permission writes read back UNCHANGED one second after a 200, and all 27
+    // were correct minutes later. This serves the PRE-write follower list on
+    // the next read, which is what that looks like from here.
+    staleReadback: false,
+    staleSnapshot: null,
     opps: {
       o1: {
         id: "o1", name: "Mary Malone", pipelineId: "p1", pipelineStageId: "p1_s1",
@@ -168,10 +175,18 @@ const server = http.createServer((req, res) => {
         // nesting, which the old declared type had wrong as `string[]`.
         return send(200, { followersAdded: [ids] });
       }
+      // 🔴 ROUND 156 — A REFUSAL THAT ECHOES THE KEY. Distinct from
+      // `refuseRemove` above, which answers with no `followersRemoved` at all.
+      // Both happen and they take different paths through the code: this one
+      // is caught by the echo assertion, that one by the record ordering.
+      if (S.refuseRemoveEcho) return send(200, { followers: [...o.followers], followersRemoved: [] });
       o.followers = o.followers.filter((f) => !ids.includes(f));
-      // ⚠️ THE DELETE's SUCCESS SHAPE IS UNPROBED — see removeOpportunityFollowers.
-      // Left as it was rather than invented; nothing asserts on it.
-      return send(200, { followers: o.followers });
+      // ✅ THE PROBED SUCCESS SHAPE, from a live DELETE against the account:
+      //     200 {"followers":[],"followersRemoved":["<id>"]}
+      // Note `followersRemoved` is FLAT here where `followersAdded` is nested.
+      // Left as GoHighLevel sends it rather than tidied, because the asymmetry
+      // is real and the code has to survive it.
+      return send(200, { followers: [], followersRemoved: ids });
     }
     if (oppId && path === `/opportunities/${oppId}`) {
       const o = S.opps[oppId];
@@ -188,6 +203,12 @@ const server = http.createServer((req, res) => {
         for (const [k, v] of Object.entries(j)) if (k !== "customFields") o[k] = v;
         return send(200, { opportunity: o });
       }
+      // 🔴 ROUND 156 — THE STALE READ. Serves the follower list as it was
+      // BEFORE the writes, which is what an asynchronously-applied write looks
+      // like to a read-back taken a second later. Everything else about the
+      // record is current, because it is only the write that lags.
+      if (S.staleReadback && S.staleSnapshot)
+        return send(200, { opportunity: { ...o, followers: [...S.staleSnapshot] } });
       return send(200, { opportunity: o });
     }
     if (/^\/contacts\/[^/]+$/.test(path)) return send(200, { contact: { id: "c1" } });
@@ -543,6 +564,60 @@ ok("Edmark is gone from the record when the removal really happened",
    cf(CM_REC) === CARLA, cf(CM_REC));
 ok("⚠️ and `mismatch` is null — the two cases are distinguishable",
    r.mismatch === null, r.mismatch);
+
+console.log("\n8e · 🔴 ROUND 156 — THE REFUSED REMOVE THAT *DOES* ECHO ═══");
+// The probe came back `{"followers":[],"followersRemoved":["<id>"]}`, so a
+// removal can now be asserted from GoHighLevel's own answer. A refusal that
+// echoes `followersRemoved: []` is caught HERE, loudly, rather than by the
+// record ordering — the two defences cover different answers and 8c is the
+// other one (no echo key at all).
+reset(); fresh();
+await withMap({ [ERN]: [CARLA, EDMARK] }, () => ghl.applyCaseManagers("o1", ERN));
+S.refuseRemoveEcho = true; fresh();
+r = await withMap({ [ERN]: [CARLA] }, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  -> skipped=${r.skipped} "${String(r.why).slice(0, 70)}…"`);
+ok("🔴 it does NOT report a clean apply", r.skipped === true, r);
+ok("🔴 and the reason names the CAUSE", /shared with selected users/.test(r.why || ""), r.why);
+ok("Edmark is still following, because the removal was refused",
+   followers().includes(EDMARK), followers());
+// 🔴 THE SAME PROTECTION AS 8c, REACHED A DIFFERENT WAY: the throw lands
+// before the record write, so the record still names him and he stays
+// removable. Either defence alone keeps him ours.
+ok("🔴 AND THE RECORD STILL CLAIMS HIM — the throw lands before the record write",
+   (cf(CM_REC) || "").includes(EDMARK), cf(CM_REC));
+
+console.log("\n═══ 9 · 🔴 ROUND 156 — A STALE READ-BACK MUST NOT CLEAR THE RECORD ═══");
+// 🔴 THE TRAP ROUND 151 SET FOR ITSELF. `nowOurs` was narrowed to whoever the
+// read-back showed following. GoHighLevel applies some writes asynchronously —
+// your 17-of-27 — so on a stale read `verified` is the PRE-write set, the
+// narrowing drops both managers, and the record is written EMPTY while they
+// are really following. Rule B then has no name to remove and they follow the
+// case for ever: the permanent leak of round 151, re-entering through 151.
+
+console.log("\n9a · 🔴 THE CONTROL — AN IMMEDIATE READ STILL RECORDS THEM");
+// Same fixture, staleness off. Without this, 9b passes if the record is simply
+// never written at all.
+reset(); fresh();
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+ok("both are recorded when the read-back is current",
+   cf(CM_REC) === `${CARLA},${EDMARK}`, cf(CM_REC));
+
+console.log("\n9b · 🔴 THE STALE READ — THEY ARE FOLLOWING, AND THE RECORD SAYS SO");
+reset(); fresh();
+S.staleSnapshot = [...S.opps.o1.followers];   // the pre-write list: just the co-rep
+S.staleReadback = true;
+r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", ERN));
+console.log(`  followers really: ${JSON.stringify(followers())}`);
+console.log(`  read-back saw:    ${JSON.stringify(S.staleSnapshot)}`);
+console.log(`  record written:   ${JSON.stringify(cf(CM_REC))}`);
+ok("the managers really were added", followers().includes(CARLA) && followers().includes(EDMARK), followers());
+ok("🔴 AND THE RECORD CLAIMS THEM ANYWAY — a stale read cannot disown them",
+   (cf(CM_REC) || "").includes(CARLA) && (cf(CM_REC) || "").includes(EDMARK), cf(CM_REC));
+// ⚠️ The mismatch is still REPORTED — the read-back has not stopped being
+// evidence, it has stopped being the last word. A caller that wants to know
+// still can.
+ok("⚠️ and the mismatch is still reported to the caller",
+   (r.mismatch?.missing || []).length === 2, r.mismatch);
 
 // ── THE CHILD, for the shape this process cannot reach ────────────────────
 console.log("\n═══ 2c · IN A CHILD PROCESS, BECAUSE THE FIELD LIST IS MEMOISED ═══");

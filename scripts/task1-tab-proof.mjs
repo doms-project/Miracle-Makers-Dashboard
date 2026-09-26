@@ -70,6 +70,10 @@ let stored = JSON.stringify({
   folders: {},
   master: [],
   caseManagers: REAL_MAP,
+  // 🔴 ROUND 162 — a granted division whose pipeline does not exist here. The
+  // fixture has one pipeline, "OLTL Enrollment", so "ODP" is an orphan: it is
+  // in the stored map and not in the choices the tab derives from pipelines.
+  referralAccess: { [SPARE]: { mode: "divisions", divisions: ["ODP"] } },
 });
 const puts = [];
 
@@ -187,8 +191,15 @@ for (let i = 0; i < 12; i++) {
 await frame.waitForSelector(".cmhead", { timeout: 60000 });
 await page.waitForTimeout(400);
 
+// ⚠️ ROUND 162 — THE ROW SELECTORS ARE SCOPED TO `.cmlist`, AND THEY WERE NOT.
+// `.cmrow:not(.cmnew)` addressed rows across the WHOLE document, which was true
+// until a second section on the same tab used the same class: this file started
+// counting 17 rows instead of 5. The product was fixed too (that section now has
+// its own classes), but an unscoped selector is a latent version of the same
+// break, so it is scoped here as well — a proof should not depend on a class
+// being unique everywhere.
 const shape = () => frame.evaluate(() => {
-  const rows = [...document.querySelectorAll(".cmrow:not(.cmnew)")].map((r) => ({
+  const rows = [...document.querySelectorAll(".cmlist .cmrow:not(.cmnew)")].map((r) => ({
     who: r.querySelector(".cmwho")?.textContent?.trim(),
     chips: [...r.querySelectorAll(".cmchip")].map((c) => c.textContent.replace(/×\s*$/, "").trim()),
   }));
@@ -359,7 +370,7 @@ await frame.evaluate(() => {
 });
 await page.waitForTimeout(250);
 let mid = await frame.evaluate(() => ({
-  rows: [...document.querySelectorAll(".cmrow:not(.cmnew)")].map((r) => r.querySelector(".cmwho")?.textContent?.trim()),
+  rows: [...document.querySelectorAll(".cmlist .cmrow:not(.cmnew)")].map((r) => r.querySelector(".cmwho")?.textContent?.trim()),
   pickerOpen: !!document.querySelector(".cmpick"),
   head: document.querySelector(".cmhead")?.textContent || "",
 }));
@@ -375,7 +386,7 @@ await frame.evaluate(() => {
 });
 await page.waitForTimeout(200);
 mid = await frame.evaluate(() => ({
-  rows: [...document.querySelectorAll(".cmrow:not(.cmnew)")].map((r) => r.querySelector(".cmwho")?.textContent?.trim()),
+  rows: [...document.querySelectorAll(".cmlist .cmrow:not(.cmnew)")].map((r) => r.querySelector(".cmwho")?.textContent?.trim()),
 }));
 ok("🔴 cancelling takes the half-made row away — no empty manager is left behind",
    !mid.rows.includes("Someone Unlisted"), mid.rows);
@@ -395,6 +406,32 @@ console.log(`  head now: ${JSON.stringify(v.head)}`);
 ok("🔴 the second pick makes it a real row", 
    v.rows.find((r) => r.who === "Someone Unlisted")?.chips.includes("marc barnes"), v.rows);
 ok("⚠️ and the count moves only now", /5\s*managers/.test(v.head), v.head);
+
+console.log("\n10 · 🔴 ROUND 162 — A GRANTED DIVISION WITH NO PIPELINE IS STILL SHOWN");
+// 🔴 The choices come from the live pipelines, so a division whose pipeline was
+// renamed falls out of that list while staying in the stored map. The GRANT is
+// safe — the save sends the state object, not a re-derivation — but the SCREEN
+// was not: no chip, and no "none selected" hint either, so the row read as
+// "Divisions, nothing ticked" for somebody who really was seeing ODP referrals.
+const rfa = await frame.evaluate(() => {
+  const row = [...document.querySelectorAll(".rfarow")]
+    .find((r) => /Someone Unlisted/.test(r.querySelector(".rfawho")?.textContent || ""));
+  return {
+    chips: [...(row?.querySelectorAll(".rfachip") || [])].map((c) => c.textContent.trim()),
+    onChips: [...(row?.querySelectorAll(".rfachip.on") || [])].map((c) => c.textContent.trim()),
+    hint: row?.textContent?.includes("none selected") || false,
+  };
+});
+console.log(`  chips: ${JSON.stringify(rfa.chips)}`);
+ok("🔴 the orphaned division is ON SCREEN, not silently absent",
+   rfa.chips.some((c) => /^ODP/.test(c)), rfa.chips);
+ok("🔴 and marked as having no pipeline, so it reads as a fact not a typo",
+   rfa.chips.some((c) => /ODP — no pipeline/.test(c)), rfa.chips);
+ok("🔴 it is TICKED — it is a live grant, not an offer",
+   rfa.onChips.some((c) => /^ODP/.test(c)), rfa.onChips);
+// ⚠️ THE CONTROL: the row must not ALSO claim they see nothing. That sentence
+// beside a live grant is the contradiction this fix exists to remove.
+ok("⚠️ THE CONTROL — and it does NOT say 'none selected'", !rfa.hint, rfa);
 
 console.log("\n9 · 🔴 ROUND 151 — A DEPARTED MANAGER IS NOT A BARE ID");
 // ⚠️ THE STALE ENTRY ARRIVES HERE, NOT IN THE FIXTURE, AND THAT IS A MISTAKE I
