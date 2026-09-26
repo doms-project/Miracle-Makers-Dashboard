@@ -156,24 +156,46 @@ async function patchHandler(
     // of two landing is caught here instead, with both halves named.
     const missing = confirmed ? add.filter((u) => !stored.has(u)) : [];
     const lingering = confirmed ? remove.filter((u) => stored.has(u)) : [];
-    if (missing.length || lingering.length)
-      return NextResponse.json(
-        {
-          error: "GoHighLevel did not store the change.",
-          detail:
-            (missing.length
-              ? `${missing.length} follower(s) were not added. `
-              : "") +
-            (lingering.length
-              ? `${lingering.length} follower(s) were not removed. `
-              : "") +
-            "GoHighLevel accepted the request and the record does not show it. " +
-            "This happens when the pipeline is shared with selected users only — " +
-            "Settings → Opportunities → Pipelines → the key icon.",
-          status: 502,
-        } as ApiError,
-        { status: 502 },
+
+    // ═══ ROUND 156 — A DISAGREEING READ-BACK IS UNCONFIRMED, NOT FAILED ══════
+    //
+    // 🔴 THIS WAS A 502 AND THAT WAS THE MIRROR OF THE BUG IT WAS BUILT FOR.
+    // GoHighLevel applies some writes asynchronously — 17 of 27 permission
+    // writes read back unchanged one second after a 200, all 27 correct
+    // minutes later. A read-back cannot tell "did not land" from "has not
+    // landed yet", so a 502 here tells a rep their change failed when it
+    // worked, and sends them to do it again.
+    //
+    // ⚠️ THE ECHO IS THE DEFENCE, NOT THIS. `addOpportunityFollowers` throws
+    // when GoHighLevel's own response says nothing was stored, and
+    // `removeOpportunityFollowers` now does the same on `followersRemoved` —
+    // both judge the WRITE's own answer, which cannot be stale. By the time
+    // this runs the write has already been vouched for; what is in doubt is
+    // only whether a later read has caught up.
+    //
+    // 🔴 SO IT REPORTS THE THIRD STATE, exactly as the relation badges do:
+    // `confirmed:false` with the ids named, and the list we have reason to
+    // believe is right. Not a success dressed as certainty, not a failure.
+    const unconfirmed = [...missing, ...lingering];
+    if (unconfirmed.length) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[followers] ${id}: the write was vouched for by GoHighLevel's own response, but the ` +
+          `read-back does not show ${unconfirmed.join(", ")}. Reporting unconfirmed rather than ` +
+          `failed — GoHighLevel applies some writes asynchronously.`,
       );
+      // ⚠️ THE OPTIMISTIC LIST IS THE RIGHT ANSWER HERE, and only here. The
+      // echo said the write landed, so what we asked for is the better
+      // description of the record than a read that has not caught up.
+      const removeSet2 = new Set(remove);
+      const believed = Array.from(
+        new Set([...target.followerIds.filter((f) => !removeSet2.has(f)), ...add]),
+      );
+      return NextResponse.json(
+        { ok: true, followers: believed, confirmed: false, unconfirmed },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
 
     return NextResponse.json(
       { ok: true, followers: finalIds, confirmed },

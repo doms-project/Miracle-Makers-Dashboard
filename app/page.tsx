@@ -7681,6 +7681,25 @@ export default function Dashboard() {
           // "No pipeline exists for OLTL_CHC" would become a lie the moment a
           // pipeline existed and was merely filtered out of view. The list
           // stays whole; what follows the add is the record.
+          //
+          // ═══ ROUND 155/156 — AND IT IS NOW NARROWED BY GRANTS, WHICH IS NOT
+          // THE SAME THING. Both arguments are kept because they are about
+          // different controls and the next person should read both.
+          //
+          // 🔴 A GRANT IS NOT A VIEW. Round 123 above is right that a VIEW must
+          // not make a DATA decision — the switcher is a view filter, and
+          // filing depends on the person's division, a fact about them. A grant
+          // is the server's decision about what this person may touch, already
+          // applied to everything they can see and move. `cgPipelines` is now
+          // scoped at the payload (app/api/opportunities/route.ts), so this list
+          // arrives narrowed rather than being narrowed here.
+          //
+          // ⚠️ AND THE CONSEQUENCE IS THE ARGUMENT FOR IT: filing into a
+          // pipeline you hold no grant for creates a record you then cannot
+          // see. That is the unreachable-record shape Task 2 §1 closed for
+          // `clientPipelines` — the picker offering something the save would
+          // strand. Narrowing by the SWITCHER would still be wrong and is still
+          // not done.
           pipelines={cgPipelines.map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setAddCgOpen(false)}
           onAdded={(landedIn) => {
