@@ -157,6 +157,7 @@ export async function GET(request: Request) {
         // TASK 1 — the case-manager map, from the same single read. The tab
         // renders it from the LIVE user list, so only ids travel here.
         caseManagers: stored?.caseManagers ?? {},
+        referralAccess: stored?.referralAccess ?? {},
         publicFolderId: (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim(),
         // true => nothing readable is stored yet, so the env var is what's
         // actually in force until the first save.
@@ -179,6 +180,8 @@ export async function PUT(request: Request) {
       masterUsers?: string[];
       /** TASK 1 — rep user id → the managers who follow their cases. */
       caseManagers?: Record<string, string[]>;
+      /** ROUND 161 — user id → their referral-visibility override. */
+      referralAccess?: Record<string, unknown>;
     };
     const denied = gate(request, body.ssoKey);
     if (denied) return denied;
@@ -207,6 +210,41 @@ export async function PUT(request: Request) {
     // `applyCaseManagers` still removes what it added because the test is its
     // own stored record, not the map. The `[]` state stays meaningful in the
     // storage model and is simply not something this screen can produce.
+    // ═══ ROUND 161 — ITS OWN NORMALISER, AND `norm` WOULD HAVE BROKEN IT ═════
+    //
+    // 🔴 `norm` DROPS AN EMPTY ARRAY (see its comment above). For case managers
+    // that is right; here it is the bug this feature exists to avoid. "Divisions,
+    // none selected" is the way an admin says "this person sees NO referrals" —
+    // run it through `norm` and it saves as absent, reads back as DERIVED, and
+    // the person falls straight to their pipeline grants. The one thing the
+    // three states are for, deleted on save.
+    //
+    // ⚠️ AND AN UNRECOGNISED MODE IS DROPPED RATHER THAN WIDENED. Anything that
+    // is not "agency" or "divisions" becomes absent — derived — because guessing
+    // "agency" would hand out access nobody granted.
+    const normReferral = (
+      g: Record<string, unknown> | undefined,
+    ): Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }> | undefined => {
+      if (g === undefined) return undefined;
+      if (!g || typeof g !== "object" || Array.isArray(g)) return undefined;
+      const clean: Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }> = {};
+      for (const [userId, raw] of Object.entries(g)) {
+        if (!userId || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+        const e = raw as Record<string, unknown>;
+        if (e.mode === "agency") clean[userId] = { mode: "agency" };
+        else if (e.mode === "divisions")
+          clean[userId] = {
+            mode: "divisions",
+            // 🔴 KEPT WHEN EMPTY. This is the whole point.
+            divisions: Array.isArray(e.divisions)
+              ? [...new Set(e.divisions.map(String).filter(Boolean))]
+              : [],
+          };
+      }
+      return clean;
+    };
+
+    const referralAccessPatch = normReferral(body.referralAccess);
     const caseManagersPatch = norm(body.caseManagers);
     const pipelinesPatch = norm(body.grants);
     const foldersPatch = norm(body.folderGrants);
@@ -229,6 +267,7 @@ export async function PUT(request: Request) {
       ...(foldersPatch ? { folders: foldersPatch } : {}),
       ...(masterPatch ? { master: masterPatch } : {}),
       ...(caseManagersPatch ? { caseManagers: caseManagersPatch } : {}),
+      ...(referralAccessPatch ? { referralAccess: referralAccessPatch } : {}),
     });
     // Echo the MERGED state, not just what was sent — the caller needs to see
     // what is actually stored now, including the scopes it didn't touch.
@@ -241,6 +280,7 @@ export async function PUT(request: Request) {
         folderGrants: saved?.folders ?? {},
         masterUsers: saved?.master ?? [],
         caseManagers: saved?.caseManagers ?? {},
+        referralAccess: saved?.referralAccess ?? {},
       },
       { headers: { "Cache-Control": "no-store" } },
     );

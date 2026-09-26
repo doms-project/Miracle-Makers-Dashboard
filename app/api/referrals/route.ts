@@ -27,7 +27,7 @@ import { divisionLabel } from "@/lib/division";
 import {
   applyAccess,
   getUserHomePipelines,
-  userDivisions,
+  referralDivisions,
 } from "@/lib/pipelineAccess";
 import { isAdminSession } from "@/lib/visibility";
 import { emit } from "@/lib/webhooks";
@@ -506,12 +506,14 @@ export async function GET(request: Request) {
           listPipelines(),
         ]);
         const pickerAdmin = !session || isAdminSession(session.role, session.type);
-        const pickerDivisions = pickerAdmin
-          ? null
-          : userDivisions(
-              session?.userId || "",
-              new Map(pipesForPicker.map((p) => [p.id, p.name])),
-            );
+        // 🔴 ROUND 161 — the resolver, not `userDivisions`. Same `null = all`
+        // convention, so this reads identically; what changed is that an admin
+        // can now override the derived answer per user. Absent = derived.
+        const pickerDivisions = referralDivisions(
+          session?.userId || "",
+          new Map(pipesForPicker.map((p) => [p.id, p.name])),
+          pickerAdmin,
+        );
         const rows = res.rows
           .map((c) => ({
             id: c.id,
@@ -621,9 +623,11 @@ export async function GET(request: Request) {
       // an ownership flag and round 122 settled that aggregates must not be cut
       // by it. This is a different question — which PROGRAMME's partners you
       // work with — and it has a different answer.
-      const partnerDivisions = isAdmin
-        ? null
-        : userDivisions(session?.userId || "", pipelineNameById);
+      const partnerDivisions = referralDivisions(
+        session?.userId || "",
+        pipelineNameById,
+        isAdmin,
+      );
       const scoped = allPartners.map((p) => {
         // Blank and "All" are UNIVERSAL FOR DISPLAY — see inDivision, and the
         // decision recorded there. Blank is counted below rather than hidden.

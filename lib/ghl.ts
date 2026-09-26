@@ -2870,13 +2870,45 @@ export interface AccessGrantsV2 {
    * reasoning written at lib/withGrants.ts:28 for folders and master.
    */
   caseManagers: AccessGrants;
+  /**
+   * 🔴 ROUND 161 — WHICH DIVISIONS' REFERRALS A USER SEES, WHEN THE DERIVED
+   * ANSWER IS NOT THE ONE WANTED.
+   *
+   * Derived stays the default and is right for most people: a grant on OLTL
+   * Enrollment should mean OLTL referrals without anyone saying so twice. This
+   * is the per-user override, and it has THREE states:
+   *
+   *   absent               derived — divisions from their client-pipeline grants
+   *   {mode:"divisions"}   an explicit list. `divisions: []` means NO referrals
+   *   {mode:"agency"}      every division, regardless of grants
+   *
+   * 🔴 ABSENT AND `{mode:"divisions", divisions:[]}` ARE DIFFERENT ANSWERS, the
+   * same distinction `getCaseManagers` documents for null vs []. Collapse them
+   * and an admin can never say "this person sees no referrals" — only "this
+   * person is unmanaged", which falls straight back to their pipeline grants.
+   *
+   * ⚠️ A RECORD OF OBJECTS, NOT `AccessGrants`. A sentinel inside a list of
+   * division names — "*" for agency — was the cheaper-looking option and is a
+   * trap: every consumer must remember to check for it, and one that forgets
+   * filters partners by a division literally called "*", which matches nothing.
+   * An agency-wide grant showing zero partners, looking exactly like a working
+   * filter. With a discriminated union, a consumer that forgets `agency` gets a
+   * type error instead of an empty screen.
+   */
+  referralAccess: Record<string, ReferralAccess>;
 }
+
+/** One user's referral-visibility override. See `referralAccess`. */
+export type ReferralAccess =
+  | { mode: "agency" }
+  | { mode: "divisions"; divisions: string[] };
 
 const emptyV2 = (): AccessGrantsV2 => ({
   pipelines: {},
   folders: {},
   master: [],
   caseManagers: {},
+  referralAccess: {},
 });
 
 function asIdMap(v: unknown): AccessGrants {
@@ -2890,6 +2922,37 @@ function asIdMap(v: unknown): AccessGrants {
 }
 
 /** Parse either shape. Returns null only when there is nothing usable at all. */
+/**
+ * 🔴 VALIDATES THE UNION, AND KEEPS `divisions: []`.
+ *
+ * `asIdMap` cannot be reused here: it is built for `Record<string, string[]>`
+ * and would drop every entry. The important half is what this does NOT do —
+ * it does not discard an empty `divisions`, because that is the state meaning
+ * "sees no referrals" and discarding it would silently mean "derived".
+ *
+ * ⚠️ AN UNRECOGNISED `mode` IS DROPPED, not coerced. A value hand-edited to
+ * {mode:"all"} becomes absent — derived — rather than being guessed at as
+ * agency, because guessing wider is the one direction that hands out access
+ * nobody granted.
+ */
+function asReferralAccess(v: unknown): Record<string, ReferralAccess> {
+  const out: Record<string, ReferralAccess> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [userId, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!userId || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const e = raw as Record<string, unknown>;
+    if (e.mode === "agency") out[userId] = { mode: "agency" };
+    else if (e.mode === "divisions")
+      out[userId] = {
+        mode: "divisions",
+        divisions: Array.isArray(e.divisions)
+          ? [...new Set(e.divisions.map(String).filter(Boolean))]
+          : [],
+      };
+  }
+  return out;
+}
+
 export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   let parsed: unknown;
   try {
@@ -2908,7 +2971,10 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   // as a flat pipeline map — every rep id becoming a grant of the manager ids
   // as though they were pipelines. Only reachable on a fresh account, which is
   // exactly the kind of thing that bites once and is never explained.
-  if ("pipelines" in o || "folders" in o || "master" in o || "caseManagers" in o) {
+  if (
+    "pipelines" in o || "folders" in o || "master" in o ||
+    "caseManagers" in o || "referralAccess" in o
+  ) {
     return {
       pipelines: asIdMap(o.pipelines),
       folders: asIdMap(o.folders),
@@ -2917,6 +2983,7 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
       // non-array values are dropped rather than stored as a string that later
       // code would iterate character by character.
       caseManagers: asIdMap(o.caseManagers),
+      referralAccess: asReferralAccess(o.referralAccess),
     };
   }
 
@@ -2979,13 +3046,14 @@ export async function saveAccessGrantsV2(
   // `caseManagers` was that key until this commit: storing the map and then
   // ticking one box on the Access tab would have erased it.
   //
-  // ⚠️ IF YOU ADD A FIFTH KEY, ADD IT IN FOUR PLACES — the interface, emptyV2,
+  // ⚠️ IF YOU ADD A SIXTH KEY, ADD IT IN FOUR PLACES — the interface, emptyV2,
   // the parseAccessValue branch AND here — and extend round135-proof.
   const next: AccessGrantsV2 = {
     pipelines: patch.pipelines ?? current.pipelines,
     folders: patch.folders ?? current.folders,
     master: patch.master ?? current.master,
     caseManagers: patch.caseManagers ?? current.caseManagers,
+    referralAccess: patch.referralAccess ?? current.referralAccess,
   };
   const body = JSON.stringify(next);
   const existing = await findAccessCustomValue();
@@ -5199,6 +5267,128 @@ export async function removeOpportunityFollowers(
 export const CASE_MANAGER_FIELD = "Case Manager";
 /** Rule B's own record: the ids THIS function added. Never the live list. */
 export const CASE_MANAGER_FOLLOWERS_FIELD = "Case Manager Followers";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 159/163 — THE STAGE RECORDER.
+//
+// 🔴 GOHIGHLEVEL HAS NO STAGE HISTORY. `lastStageChangeAt` is one value, not a
+// log, so "two stages a month per case manager" needs something to write every
+// transition down as it happens. This is that something.
+//
+// ⚠️ PER-RECORD, AND THE CONCURRENCY ARGUMENT IS WHY — not preference. A shared
+// location custom value would mean read-modify-write with no compare-and-swap:
+// a bulk edit firing fourteen events in one second would lose thirteen rows,
+// and a bulk edit is exactly the thing this log needs to be able to show. Here
+// fourteen events write fourteen DIFFERENT records and nothing contends.
+//
+// ✅ AND THE CAP IS NOT A CONSTRAINT. Probed live against a LARGE_TEXT
+// opportunity field: 4 / 30 / 120 / 400 / 1,200 rows — 243 B to 73,199 B — read
+// back byte-identical every time. A record's real life is 4-8 moves, so
+// trimming never arises and no history is ever dropped.
+// ═══════════════════════════════════════════════════════════════════════════
+export const STAGE_HISTORY_FIELD = "Stage History";
+
+/**
+ * One recorded transition.
+ *
+ * 🔴 `from` IS NOT STORED, IT IS DERIVED — and `null` is a real answer.
+ *
+ * The previous stage is the previous row's `to`, so storing it as well would be
+ * a second copy of one fact that could disagree with the first. The exception
+ * is the FIRST row for a record: the case was already in some stage when the
+ * recorder started, and nothing knows which. That is `from: null` — an
+ * explicit unknown, not a zero and not an empty string, because a reader
+ * computing days-in-stage must be able to tell "no origin" from "origin blank".
+ */
+export interface StageHistoryRow {
+  at: string;
+  from: string | null;
+  to: string;
+  ownerId: string;
+  managerIds: string[];
+}
+
+/** `2026-09-26T12:04:11Z|stg_cao|u_ern|u_carla,u_edmark` — one row per line. */
+function encodeStageRow(at: string, to: string, ownerId: string, managerIds: string[]): string {
+  return [at, to, ownerId, managerIds.join(",")].join("|");
+}
+
+/**
+ * Parse the stored field. Tolerant by design: a malformed line is SKIPPED
+ * rather than throwing, because this log is read to produce a number and one
+ * bad row must not take the whole KPI down with it.
+ */
+export function parseStageHistory(raw: unknown): StageHistoryRow[] {
+  const text = Array.isArray(raw) ? raw.join("\n") : String(raw ?? "");
+  const out: StageHistoryRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    const [at, to, ownerId, managers] = t.split("|");
+    if (!at || !to) continue;
+    out.push({
+      at,
+      // 🔴 THE PREVIOUS ROW'S DESTINATION, AND null FOR THE FIRST.
+      from: out.length ? out[out.length - 1].to : null,
+      to,
+      ownerId: ownerId || "",
+      managerIds: (managers || "").split(",").map((x) => x.trim()).filter(Boolean),
+    });
+  }
+  return out;
+}
+
+export interface StageRecordResult {
+  recorded: boolean;
+  why: string;
+  row?: string;
+  rows?: number;
+}
+
+/**
+ * Append one transition for `oppId`.
+ *
+ * 🔴 THE STAGE COMES FROM THE RECORD, NOT THE PAYLOAD. GoHighLevel's workflow
+ * webhook sends `pipleline_stage` — its own typo, and a stage NAME. Names get
+ * edited; ids do not. The record has to be read anyway for the owner, so the
+ * id comes from there and the payload field is used for nothing.
+ *
+ * 🔴 MANAGERS ARE FROZEN AT THE MOMENT OF THE MOVE. The map changes — a manager
+ * joined this morning — so resolving at read time would credit them with moves
+ * they were not watching. Same rule as `Case Manager Followers` recording what
+ * this system DID rather than what the map says.
+ */
+export async function appendStageHistory(oppId: string): Promise<StageRecordResult> {
+  const rec = await getOpportunityByIdUncached(oppId);
+  if (!rec) return { recorded: false, why: "the record could not be read back" };
+
+  const defs = await getFieldDefinitions();
+  const def = findDefByName(defs, STAGE_HISTORY_FIELD);
+  if (!def)
+    return {
+      recorded: false,
+      why: `no "${STAGE_HISTORY_FIELD}" custom field on this account — create it (LARGE_TEXT, opportunity)`,
+    };
+
+  const to = String(rec.stageId || "");
+  if (!to) return { recorded: false, why: "the record has no stage id" };
+
+  const rows = parseStageHistory(rec.cf[def.id]);
+  // 🔴 IDEMPOTENT, BECAUSE GOHIGHLEVEL RETRIES. A redelivery of the same event
+  // finds the record already in that stage with that stage as the last row, and
+  // writes nothing. A genuine A→B→A still records: the last row is B when the
+  // second move arrives.
+  const last = rows[rows.length - 1];
+  if (last && last.to === to)
+    return { recorded: false, why: `already the last recorded stage (${to})`, rows: rows.length };
+
+  const managers = getCaseManagers(rec.ownerId || "") ?? [];
+  const row = encodeStageRow(new Date().toISOString(), to, rec.ownerId || "", managers);
+  const next = [...rows.map((r) => encodeStageRow(r.at, r.to, r.ownerId, r.managerIds)), row].join("\n");
+
+  await putOpportunityVerified(oppId, { customFields: [{ id: def.id, value: next }] }, "stage-history");
+  return { recorded: true, why: `${rows.length ? "appended" : "first row"} for ${oppId}`, row, rows: rows.length + 1 };
+}
 
 export interface CaseManagerResult {
   /** True when rule A applied — no entry in the map, so nothing was touched. */

@@ -2073,3 +2073,25 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .cmpickmail{font-size:11px;color:var(--ink-3);overflow-wrap:anywhere;}
 .cmpicknone{font-size:12px;color:var(--ink-3);padding:8px 9px;}
 .cmpickclose{margin-top:7px;font-size:11.5px;}
+
+/* ROUND 162 — referral access. Three states per user, on the Access tab.
+   🔴 ITS OWN CLASSES, NOT `.cmlist`/`.cmrow`/`.cmchip`. Reusing those for their
+   layout broke task1-tab, which addresses case-manager rows by class across the
+   whole document: `.cmrow:not(.cmnew)` started returning 17 rows instead of 5.
+   A class a proof selects on carries identity, not just style. */
+.rfalist{display:flex;flex-direction:column;gap:6px;margin-top:14px;}
+.rfarow{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px;padding:7px 0;
+  border-top:1px solid var(--line);}
+.rfawho{min-width:150px;font-size:12.5px;font-weight:700;color:var(--ink);}
+.rfmodes{display:inline-flex;gap:4px;flex-wrap:wrap;}
+.rfachips{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.rfalevel,.rfachip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
+  font-weight:600;color:var(--ink-soft);background:var(--paper);
+  border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;}
+/* 🔴 THE SELECTED STATE IS NOT COLOUR ALONE — the label text carries it
+   ("Derived" / "Divisions" / "Agency — all") and the control is a real radio or
+   checkbox, so a screen reader and a colour-blind reader both get the answer. */
+.rfalevel.on,.rfachip.on{color:var(--plum);background:var(--plum-soft);border-color:var(--plum-line);}
+.rfalevel input,.rfachip input{margin:0;}
+/* A granted division whose pipeline is gone: visible, removable, and marked. */
+.rfachip.orphan{border-style:dashed;color:var(--ink-soft);}

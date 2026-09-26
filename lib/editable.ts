@@ -54,7 +54,26 @@ export const READ_ONLY_FIELDS: string[] = [
   // removal can be surgical. Same reasoning as "Reassign Followers" above and
   // deliberately a SEPARATE field: the reassign claim CLEARS that one wholesale,
   // so a shared field would have each mechanism wiping the other's list.
+  //
+  // 🔴 ROUND 157 — IT IS NOW HIDDEN AS WELL AS BLOCKLISTED, WHICH REVERSES THE
+  // PARAGRAPH THAT USED TO SIT HERE. That paragraph said it was "BLOCKLISTED
+  // RATHER THAN HIDDEN, unlike Reassign Followers — reading it is the point",
+  // and it was wrong about the reading being useful: "Case Manager" answers the
+  // same question in names, the Followers control answers it from the live
+  // list, and `[casemgr]`'s steps beat the raw ids for anyone debugging a
+  // removal. The reasoning lives at HIDDEN_NAMES in lib/fieldFolders.ts.
+  //
+  // ⚠️ IT STAYS IN THIS LIST TOO, AND THAT IS NOT REDUNDANT. Hidden stops the
+  // panel rendering it; blocklisted stops the PATCH route accepting a write to
+  // it, and that route takes any field id a caller sends. "Reassign Followers"
+  // is in both lists for exactly this reason.
   "Case Manager Followers",
+  // 🔴 ROUND 163 — THE STAGE LOG. Machine-written, append-only, and the input
+  // to Jack's "two stages a month" KPI. A rep typing into it corrupts a metric
+  // nobody would think to re-check, and the PATCH route accepts any field id a
+  // caller sends — so blocklisted here as well as hidden in fieldFolders.ts,
+  // for the same two reasons "Reassign Followers" is in both lists.
+  "Stage History",
 ];
 
 // ═══ ROUND 151 — FIELDS WHOSE STORED VALUE IS A LIST OF USER IDS ═══════════
@@ -78,6 +97,33 @@ export const READ_ONLY_FIELDS: string[] = [
 // "Reassign Followers" is hidden entirely (lib/fieldFolders.ts) so it never
 // reaches a renderer — listed anyway, because the day it stops being hidden is
 // not the day anyone will remember this.
+//
+// ═══ ROUND 157 — DORMANT AS OF THIS ROUND, AND ONLY AS OF THIS ROUND ════════
+//
+// 🔴 SAID OUT LOUD RATHER THAN LEFT TO BE DISCOVERED. "Case Manager Followers"
+// joined HIDDEN_NAMES in round 157, and it was the only one of these two that
+// ever reached `renderField`. Nothing on the panel calls `asUserNames` today.
+//
+// ⚠️ IT WAS LIVE UNTIL ROUND 157 AND THE WORDING MATTERS. On v155 in production
+// the panel rendered that field as "Mahagony Stewart - Case Manager, Lamarr
+// Wesley -Sale" — resolved names, from this code, doing its job. This is a
+// consequence of hiding the field, NOT a discovery that the resolver never had
+// a consumer. Anyone reading "no consumer" as "always dead" and deleting it
+// would be removing working code on a misreading.
+//
+// ⚠️ AND ONE CORRECTION WORTH HAVING IN WRITING, because the instruction that
+// hid the field described this as "the name resolution for Case Manager".
+// It is not, and never was. "Case Manager" renders people's names because
+// `applyCaseManagers` WRITES names into it — there is no resolution on that
+// path and removing this code would not touch it. What this resolves is a
+// comma-separated list of raw USER IDS, which only these two fields hold.
+//
+// 🔴 KEPT ANYWAY, DELIBERATELY. It is the correct rendering for the day either
+// field is unhidden or a third id-list field appears, and round 151 exists
+// because a field holding ids was rendered raw to whoever opened the case. The
+// cost of keeping it is a few lines; the cost of deleting it is that the next
+// id-list field gets `asStr` again. ⚠️ But it is dormant, not load-bearing,
+// and a proof that claimed to exercise it would be testing nothing.
 const USER_ID_LIST_FIELDS = ["Case Manager Followers", "Reassign Followers"];
 
 const norm = (s: string): string =>

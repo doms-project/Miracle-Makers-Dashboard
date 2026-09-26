@@ -119,7 +119,34 @@ export const LOST_REASON_OVERRIDES: Record<string, string[]> = {
 // bookkeeping, not information: to a rep it is a string of meaningless ids that
 // reads as a fault. Hidden ENTIRELY — not in System info either — while staying
 // visible in native GoHighLevel for debugging.
-const HIDDEN_NAMES = ["Transfer Reason", "Reassign Followers"];
+// 🔴 ROUND 157 — "Case Manager Followers" JOINS THEM, AND IT IS THE SAME KIND
+// OF THING AS "Reassign Followers" ABOVE: this function's own machine record of
+// which followers it added, written so rule B's removal can be surgical. It is
+// bookkeeping, not information.
+//
+// ⚠️ THIS REVERSES A DELIBERATE DECISION, SO THE ARGUMENT IT LOST TO IS HERE.
+// It was kept visible (see lib/editable.ts) because "who is watching this case"
+// is what a rep opening the panel wants to know. That need is real and it is
+// already met TWICE over, by things that answer it better:
+//
+//   "Case Manager"        the same people, as NAMES, written from the map
+//   the Followers control the live follower list, which is the actual answer
+//
+// 🔴 AND THE DEBUGGING ARGUMENT FOR System info DOES NOT HOLD EITHER. The case
+// for a collapsed section would be "an admin chasing a removal needs to see
+// what rule B will act on" — but `[casemgr]`'s step list says what it added,
+// what it removed, and WHY, which is strictly more than the raw field shows.
+// A row of user ids is the worst available answer to that question.
+//
+// ⚠️ THE FIELD STAYS AND IS STILL WRITTEN. Only the rendering goes. Rule B
+// reads it back on every apply and removing it would break the one thing that
+// keeps a removal surgical — see CASE_MANAGER_FOLLOWERS_FIELD in lib/ghl.ts.
+// 🔴 ROUND 163 — "Stage History" joins them, and it is the clearest case yet:
+// a newline-separated list of timestamps and ids, meaningless to a rep and
+// growing on every move. Read by the KPI, not by people.
+const HIDDEN_NAMES = [
+  "Transfer Reason", "Reassign Followers", "Case Manager Followers", "Stage History",
+];
 const HIDDEN_SET = new Set(HIDDEN_NAMES.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")));
 
 const SYSTEM_INFO_NAMES = [
