@@ -25,3 +25,4 @@ zero-grant
 stale-readback
 backfill
 referral-access
+stage-recorder

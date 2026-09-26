@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
+import { divisionLabel } from "@/lib/division";
 
 type User = { id: string; name: string; email: string; role: string };
 type Pipeline = {
@@ -44,6 +45,14 @@ export default function PipelineAccessTab({
   // section — not a new tab. Rendered entirely from the live user list; only
   // ids are stored, so a renamed user needs nothing here.
   const [caseManagers, setCaseManagers] = useState<Grants>({});
+  /**
+   * 🔴 ROUND 161 — the per-user referral override. THREE states, and the absent
+   * key is one of them: no entry means DERIVED, which is the default and is
+   * right for most people. See AccessGrantsV2.referralAccess.
+   */
+  const [referralAccess, setReferralAccess] = useState<
+    Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }>
+  >({});
   /** Which way round the list reads. Both counts in the header flip it. */
   const [cmView, setCmView] = useState<"manager" | "rep">("manager");
   /** The row whose "add" picker is open — a rep id, or a manager id in manager-first. */
@@ -101,6 +110,7 @@ export default function PipelineAccessTab({
       setFolderGrants(j.folderGrants || {});
       setMasterUsers(j.masterUsers || []);
       setCaseManagers(j.caseManagers || {});
+      setReferralAccess(j.referralAccess || {});
       setPublicFolderId(j.publicFolderId || "");
       setUsingEnvFallback(!!j.usingEnvFallback);
       setDirty(false);
@@ -169,6 +179,7 @@ export default function PipelineAccessTab({
           folderGrants,
           masterUsers,
           caseManagers,
+          referralAccess,
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -178,6 +189,7 @@ export default function PipelineAccessTab({
       setFolderGrants(j.folderGrants || {});
       setMasterUsers(j.masterUsers || []);
       setCaseManagers(j.caseManagers || {});
+      setReferralAccess(j.referralAccess || {});
       setUsingEnvFallback(false);
       setDirty(false);
       setSaveMsg("✓ Saved to GoHighLevel.");
@@ -222,6 +234,16 @@ export default function PipelineAccessTab({
     userById.get(id)?.name || `Former user (${id})`;
 
   const cmManagerCount = Object.keys(cmByManager).length;
+
+  /**
+   * ⚠️ DERIVED FROM THE PIPELINES ALREADY LOADED, not a hardcoded list. The
+   * same `divisionLabel` every other division decision uses, so a new pipeline
+   * brings its division with it and nothing has to be edited here.
+   */
+  const referralDivisionChoices = useMemo(
+    () => [...new Set(pipelines.map((p) => divisionLabel(p.name)).filter(Boolean))].sort(),
+    [pipelines],
+  );
   const cmRepCount = Object.keys(caseManagers).length;
 
   /**
@@ -677,6 +699,113 @@ export default function PipelineAccessTab({
             />
           ) : null}
         </div>
+      </div>
+
+      {/* ═══ ROUND 161 — REFERRAL ACCESS, A LAYER ON TOP OF DERIVED ═══════════
+          🔴 THREE STATES, AND "Derived" IS A REAL ONE RATHER THAN THE ABSENCE
+          OF A SETTING. Without it an admin could only say "this person is
+          unmanaged" — which falls straight back to their pipeline grants — and
+          never "this person sees no referrals at all". */}
+      <div className="rfalist">
+        <div className="cmhead">
+          <b>Referral access</b>{" "}
+          <span className="ihint">
+            Which divisions&apos; referrals each person sees. <b>Derived</b> is the
+            default and is right for most people — a grant on OLTL Enrollment
+            already means OLTL referrals. Change it only to override that.
+          </span>
+        </div>
+        {users.map((u) => {
+          const entry = referralAccess[u.id];
+          const mode = !entry ? "derived" : entry.mode;
+          const picked = entry && entry.mode === "divisions" ? entry.divisions : [];
+          const setMode = (m: "derived" | "divisions" | "agency") => {
+            setDirty(true);
+            setReferralAccess((prev) => {
+              const next = { ...prev };
+              // 🔴 "Derived" DELETES THE KEY. That is what makes it a state
+              // rather than a default: absent is read as derived everywhere.
+              if (m === "derived") delete next[u.id];
+              else if (m === "agency") next[u.id] = { mode: "agency" };
+              else next[u.id] = { mode: "divisions", divisions: picked };
+              return next;
+            });
+          };
+          const toggleDiv = (d: string) => {
+            setDirty(true);
+            setReferralAccess((prev) => {
+              const cur = prev[u.id];
+              const list = cur && cur.mode === "divisions" ? cur.divisions : [];
+              const has = list.includes(d);
+              return {
+                ...prev,
+                // ⚠️ AN EMPTY LIST IS KEPT, NOT DELETED. Unticking the last
+                // division means "sees no referrals" — an instruction. The
+                // server preserves it too; `norm` would not, which is why that
+                // key has its own normaliser.
+                [u.id]: { mode: "divisions", divisions: has ? list.filter((x) => x !== d) : [...list, d] },
+              };
+            });
+          };
+          return (
+            <div className="rfarow" key={u.id}>
+              <span className="rfawho">{u.name}</span>
+              <span className="rfmodes">
+                {(["derived", "divisions", "agency"] as const).map((m) => (
+                  <label key={m} className={`rfalevel${mode === m ? " on" : ""}`}>
+                    <input
+                      type="radio"
+                      name={`rfa-${u.id}`}
+                      checked={mode === m}
+                      onChange={() => setMode(m)}
+                    />
+                    {m === "derived" ? "Derived" : m === "agency" ? "Agency — all" : "Divisions"}
+                  </label>
+                ))}
+              </span>
+              {mode === "divisions" ? (
+                <span className="rfachips">
+                  {/* 🔴 STORED DIVISIONS THAT NO LONGER HAVE A PIPELINE ARE STILL
+                      SHOWN. The choices come from the live pipelines, so a
+                      division that was granted and whose pipeline was later
+                      renamed or removed falls out of that list — while staying
+                      in the stored map, because the save sends this state
+                      object rather than re-deriving it from what rendered.
+                      The GRANT is therefore safe; what was not safe was the
+                      SCREEN: no chip, and no "none selected" hint either, so
+                      the row read as "Divisions, nothing ticked" for somebody
+                      who really was seeing ODP referrals. An absence rendered
+                      as an answer, one more time.
+                      ⚠️ Shown as a chip so it is visible AND removable — an
+                      orphan an admin can see but not untick would be worse. */}
+                  {[
+                    ...referralDivisionChoices,
+                    ...picked.filter((d) => !referralDivisionChoices.includes(d)),
+                  ].map((d) => {
+                    const orphan = !referralDivisionChoices.includes(d);
+                    return (
+                      <label
+                        key={d}
+                        className={`rfachip${picked.includes(d) ? " on" : ""}${orphan ? " orphan" : ""}`}
+                        title={orphan ? "No pipeline on this account has this division any more." : undefined}
+                      >
+                        <input type="checkbox" checked={picked.includes(d)} onChange={() => toggleDiv(d)} />
+                        {d}{orphan ? " — no pipeline" : ""}
+                      </label>
+                    );
+                  })}
+                  {/* 🔴 SAYS SO RATHER THAN LOOKING UNSET. An empty selection is
+                      a decision, and a row that renders as blank chips is the
+                      "absence that looks like an answer" this project keeps
+                      finding. */}
+                  {picked.length === 0 ? (
+                    <span className="ihint">— none selected: sees no referrals</span>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
 
       <div className="imeta">

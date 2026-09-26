@@ -231,6 +231,64 @@ export function runWithCaseManagers<T>(map: AccessMap, fn: () => T): T {
  * ⚠️ COLLAPSING THEM WOULD BLANK THE Case Manager FIELD ON EVERY UNMANAGED
  * REP'S CASES, on every owner change — 21 of 26 users' records, silently.
  */
+// ═══ ROUND 161 — REFERRAL ACCESS: A LAYER ON TOP OF DERIVED, NOT A REPLACEMENT ══
+//
+// 🔴 A SEPARATE RESOLVER, AND `userDivisions` IS UNTOUCHED BELOW IT. That
+// function has five call sites and only two are about referrals:
+//
+//   referrals/route.ts:511   the partner picker      ← visibility
+//   referrals/route.ts:626   the main scoping        ← visibility
+//   opportunities/route.ts:48  "Name — DIV" labels   ← provenance
+//   notes/route.ts:135         the [DIVISION] prefix ← provenance
+//   move/route.ts:68           the transfer division ← provenance
+//
+// ⚠️ THE LAST THREE SHARE A WORD WITH THIS FEATURE, NOT A QUESTION. Somebody
+// granted agency-wide REFERRAL access must not start writing a different
+// [DIVISION] prefix on their notes, or relabel themselves in every picker.
+// Changing `userDivisions` would move all five; this moves the two that mean
+// "what may this person see".
+type ReferralAccessEntry =
+  | { mode: "agency" }
+  | { mode: "divisions"; divisions: string[] };
+
+const referralAccessStore = new AsyncLocalStorage<Map<string, ReferralAccessEntry>>();
+
+export function runWithReferralAccess<T>(
+  map: Map<string, ReferralAccessEntry>,
+  fn: () => T,
+): T {
+  return referralAccessStore.run(map, fn);
+}
+
+/**
+ * The divisions whose referrals this viewer may see.
+ *
+ *   null              EVERY division — an agency grant, or an admin
+ *   string[]          exactly these. An EMPTY array means none, and it is a
+ *                     real answer rather than a missing one
+ *
+ * 🔴 `null` IS "ALL" AND `[]` IS "NONE", which is the convention the two
+ * referral call sites already use for admins (`pickerDivisions = null`). Kept
+ * deliberately so this drops into them without inverting a test.
+ */
+export function referralDivisions(
+  userId: string,
+  pipelineNameById: Map<string, string>,
+  isAdmin: boolean,
+): string[] | null {
+  if (isAdmin) return null;
+  const entry = userId ? referralAccessStore.getStore()?.get(userId) : undefined;
+  // 🔴 ABSENT IS DERIVED, AND IT IS THE DEFAULT ON PURPOSE. Anyone an admin has
+  // never touched keeps the behaviour that already works: a grant on OLTL
+  // Enrollment means OLTL referrals, with nobody saying so twice.
+  if (!entry) return userDivisions(userId, pipelineNameById);
+  if (entry.mode === "agency") return null;
+  // ⚠️ AND AN EXPLICIT EMPTY LIST IS RETURNED AS SUCH. `[]` here means "sees no
+  // referrals" — an instruction, not an absence. Falling back to derived on an
+  // empty list is the one bug this whole three-state design exists to prevent.
+  return [...entry.divisions];
+}
+
 export function getCaseManagers(repId: string): string[] | null {
   const store = caseManagerStore.getStore();
   if (!store || !repId) return null;

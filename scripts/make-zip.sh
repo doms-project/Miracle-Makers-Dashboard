@@ -52,9 +52,23 @@ cd "$(dirname "$0")/.."
 # that silently drops a file is worse than a truncation, because a truncation
 # announces itself. The count below is checked against the single-archive
 # listing, and the build fails if they disagree.
+#
+# ═══ ROUND 164 — THE SINGLE ARCHIVE IS NOW KEPT, NOT DELETED ════════════════
+#
+# 🔴 IT WAS ALREADY BEING BUILT EVERY ROUND AND THROWN AWAY. The split check
+# needs a reference listing, so a complete archive existed at /tmp for the
+# length of one `rm -f`. Asking for the full repo was therefore asking for a
+# file the script had just deleted — and the reflex answer, a hand-typed `zip`
+# at the prompt, is exactly the retyped-exclusion-list failure round 153 exists
+# to stop. It is the same bytes either way; only the `rm` changes.
+#
+# ⚠️ ALL THREE ARE EMITTED EVERY ROUND, and which one to send is the reader's
+# choice, not the script's: FULL when it lands, the two halves when it does not.
+# The halves keep their reason — four truncations across three rounds, at sizes
+# that ruled out a size limit — so this adds an option rather than retiring one.
 CODE="miracle-makers-round${ROUND}-code.zip"
 DOCS="miracle-makers-round${ROUND}-docs.zip"
-ALL="/tmp/mm-round${ROUND}-all.zip"
+ALL="miracle-makers-round${ROUND}-full.zip"
 
 EXCLUDES=(
   -x 'node_modules/*' '*/node_modules/*'
@@ -69,7 +83,8 @@ EXCLUDES=(
 
 rm -f "$CODE" "$DOCS" "$ALL"
 
-# The reference archive — never sent, only counted against.
+# The whole tree in one file. Built FIRST so the two halves are checked against
+# it, and `-x '*.zip'` keeps it out of them.
 zip -rq "$ALL" . "${EXCLUDES[@]}"
 
 # docs: the proofs and the round reports.
@@ -82,18 +97,20 @@ zip -rq "$CODE" . "${EXCLUDES[@]}" 'scripts/*' 'V2-REPORT-*.md'
 
 count() { unzip -l "$1" | tail -1 | awk '{print $2}'; }
 C=$(count "$CODE"); D=$(count "$DOCS"); A=$(count "$ALL")
-for f in "$CODE" "$DOCS"; do
+for f in "$ALL" "$CODE" "$DOCS"; do
   echo "$f"
   echo "  bytes  $(stat -c %s "$f")"
   echo "  sha256 $(sha256sum "$f" | cut -d' ' -f1)"
   echo "  files  $(count "$f")"
+  # ⚠️ `unzip -t` READS EVERY ENTRY BACK AND CHECKS ITS CRC. A zip that
+  # truncated in transfer fails this, which is the whole point of printing the
+  # byte count and the hash beside it: the receiving end can check the same two
+  # numbers without unpacking anything.
   unzip -tq "$f" >/dev/null && echo "  integrity OK"
 done
-echo "  split check: $C code + $D docs = $((C + D)) · single archive $A"
+echo "  split check: $C code + $D docs = $((C + D)) · full archive $A"
 if [ "$((C + D))" != "$A" ]; then
   echo "  🔴 THE SPLIT LOST OR DUPLICATED A FILE — do not send these."
-  rm -f "$ALL"
   exit 1
 fi
-rm -f "$ALL"
-echo "  ✅ every file is in exactly one half"
+echo "  ✅ every file is in exactly one half, and FULL has all $A"
