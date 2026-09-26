@@ -185,6 +185,21 @@ export interface OpportunitiesResponse {
   pipelineExclusions?: Record<string, string[]>;
   /** ITEM 1 — pipelines explicitly marked "staff". Absent = caregiver. */
   pipelineGroups?: Record<string, "caregiver" | "staff">;
+  /**
+   * 🔴 ROUND 155 — HOW MANY PIPELINES ARE NOT IN `pipelines`.
+   *
+   * `pipelines` is now scoped to what this viewer holds a grant for, plus the
+   * pipelines of records they can already see. This says how many were left
+   * out, and it is NOT courtesy: `recruitingEmpty` says "N pipelines exist, but
+   * none is yours yet" and used to derive that N by counting the full list.
+   * Without this the same screen would read "no pipelines are set up yet" —
+   * false, and it sends an admin off to create one that already exists.
+   *
+   * ⚠️ A COUNT, NEVER NAMES. That is the whole point of the scoping; the number
+   * says an access decision was made, which is the thing a reader cannot
+   * otherwise tell from an empty list.
+   */
+  pipelinesWithheld?: number;
   // folderId -> its NAME. The only place a folder name can live: GoHighLevel
   // returns parentName empty on every field and refuses the folder endpoint
   // for opportunity/contact objects.
