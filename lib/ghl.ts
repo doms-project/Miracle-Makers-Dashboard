@@ -1994,13 +1994,28 @@ export async function setContactOwner(contactId: string, userId: string): Promis
   // which runs once per partner promotion, not in any loop.
   const back = await getContactCustomFields(contactId).catch(() => null);
   if (back && back.assignedTo && back.assignedTo !== userId)
-    throw new GhlError(
-      "GoHighLevel did not store the contact owner.",
-      502,
-      `The request was accepted but ${contactId} is still owned by someone else. ` +
-        `If this is the pipeline-sharing restriction, the fix is GoHighLevel → Settings → ` +
-        `Opportunities → Pipelines → the key icon.`,
-      { code: "CONTACT_OWNER_NOT_STORED" },
+    // ═══ ROUND 156 — IT WARNS. IT USED TO THROW. ════════════════════════════
+    //
+    // 🔴 A DIFFERENT OWNER DOES NOT PROVE THE WRITE FAILED. Round 151 narrowed
+    // this to "only a DIFFERENT owner counts" thinking that was the strict
+    // reading — and a stale read returns exactly that, the OLD owner. So the
+    // narrowing protected against nothing, and on an eventually-consistent
+    // account this threw on every successful promotion.
+    //
+    // ⚠️ THE ASYMMETRY, WHICH IS THE RULE THIS ROUND IS BUILT ON: a read-back
+    // may CONFIRM a success and must never, on its own, establish a failure.
+    // It cannot tell "did not land" from "has not landed yet", and picking one
+    // is how a working write gets reported as broken — which sends somebody to
+    // redo something that worked.
+    //
+    // The log line is the deliverable. If contact owner writes turn out to be
+    // genuinely refused rather than merely slow, this is where the evidence
+    // will be, and it can become a throw then — with a probe behind it.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[contact-owner] ${contactId}: wrote assignedTo=${userId} and the read-back still says ` +
+        `${back.assignedTo}. Either GoHighLevel has not applied it yet (it applies some writes ` +
+        `asynchronously) or the write was refused. NOT treated as a failure — the promote stands.`,
     );
   // ⚠️ AN EMPTY READ-BACK IS NOT TREATED AS A REFUSAL. A contact that comes
   // back with no `assignedTo` at all is more likely a read that did not carry
@@ -5107,24 +5122,38 @@ export async function removeOpportunityFollowers(
       { body: { followers: userIds }, what: "the followers" },
     )) ?? {};
 
-  // 🔴 DELIBERATELY NOT ASSERTED, AND THIS IS THE RULE APPLIED TO MYSELF.
+  // ═══ ROUND 156 — NOW ASSERTED, BECAUSE THE PROBE CAME BACK ════════════════
   //
-  // The add echo is asserted because BOTH of its shapes were probed live — a
-  // success that echoes the ids and a refusal that echoes none. The DELETE's
-  // success shape has never been probed. If GoHighLevel answers a successful
-  // removal with `{}` or with the REMAINING followers rather than the removed
-  // ones, an assertion here would throw on every working remove — a fake's
-  // guess about success, which is the exact failure rule 8 names.
+  // Round 151 left this unasserted on purpose: the add's success AND refusal
+  // shapes were both known, the DELETE's success shape was not, and guessing it
+  // would have thrown on every working remove. The probe settles it:
   //
-  // ⚠️ SO THE READ-BACK CARRIES IT INSTEAD, and it carries it completely:
-  // `applyCaseManagers` now verifies before writing its record, so a silently
-  // refused removal keeps the name in the record and stays removable. That
-  // failure — disowning a follower we added, permanently, on a 200 — is closed
-  // by the ordering rather than by this echo.
+  //     DELETE /opportunities/{id}/followers  {followers:["<id>"]}
+  //     → 200 {"followers":[],"followersRemoved":["<id>"]}
   //
-  // The probe that would let this throw:
-  //   DELETE /opportunities/{id}/followers  {followers:["<a real follower>"]}
-  //   on a pipeline shared with all users — record which key comes back.
+  // 🔴 ASSERTED ON `followersRemoved` ALONE, NOT ON THE UNION, and that
+  // narrowness is the point. `echoedFollowers` also reads `followers`, and the
+  // REFUSAL shape for a DELETE was not probed. If a refused removal answers
+  // `{"followers":["<id>"]}` — the id still present, because it was not
+  // removed — the union would find it and call that a success. Reading only
+  // the key the probe showed carrying removals cannot be fooled that way.
+  //
+  // ⚠️ AND AN ABSENT `followersRemoved` IS "CANNOT TELL", NOT "FAILED". An
+  // account or version that omits the key falls through to the old behaviour —
+  // no throw — rather than breaking every removal on a shape nobody has seen.
+  const removedEcho = Array.isArray(j.followersRemoved)
+    ? new Set(j.followersRemoved.flat(2).filter((x): x is string => typeof x === "string" && !!x))
+    : null;
+  if (removedEcho && !userIds.some((u) => removedEcho.has(u)))
+    throw new GhlError(
+      "GoHighLevel removed no followers.",
+      502,
+      `The request was accepted (200) and none of the ${userIds.length} follower(s) were removed. ` +
+        `As with adding, this is what GoHighLevel does when the record's pipeline is shared with ` +
+        `selected users only. Open GoHighLevel → Settings → Opportunities → Pipelines → the key ` +
+        `icon on this record's pipeline.`,
+      { code: "FOLLOWERS_NOT_REMOVED" },
+    );
   return [...echoedFollowers(j)].filter((u) => userIds.includes(u));
 }
 
@@ -5448,9 +5477,32 @@ export async function applyCaseManagers(
       ...want.filter((u) => added.includes(u) || mine.includes(u)),
       ...lingering,
     ]);
-    const nowOurs = verified
-      ? [...claimed].filter((u) => verified!.has(u))
-      : [...claimed];
+    // ═══ ROUND 156 — THE READ-BACK NO LONGER NARROWS THIS ════════════════════
+    //
+    // 🔴 IT WAS `[...claimed].filter((u) => verified.has(u))` AND THAT WAS A
+    // TRAP OF MY OWN MAKING. GoHighLevel applies some writes asynchronously —
+    // 17 of 27 permission writes read back UNCHANGED one second after a 200 and
+    // all 27 were correct minutes later. If a follower read-back is stale the
+    // same way, `verified` is the PRE-write set, the narrowing drops both
+    // managers, and the record is written EMPTY while they are really
+    // following. Rule B then has no name to remove and they follow the case for
+    // ever — the exact permanent leak round 151 existed to close, re-entering
+    // through 151's own fix.
+    //
+    // ⚠️ THE ASYMMETRY IS WHAT MAKES THIS SAFE, AND IT IS WHY ONLY HALF WENT.
+    // `lingering` stays: it can only ADD a name to the record. A stale read
+    // after a removal shows the person still present, so we keep them, and if
+    // the removal really did land the next run finds them absent from `current`
+    // and the record cleans itself. Self-correcting, and it errs towards
+    // keeping a name we are entitled to remove. The narrowing erred the other
+    // way — towards dropping a name we could then never remove.
+    //
+    // 🔴 THE PRICE IS SMALL AND WORTH NAMING: an add that GoHighLevel really
+    // did refuse now gets recorded as ours. Rule B only ever REMOVES what this
+    // field names, and removing somebody who is not following is a no-op, so
+    // the cost is one wasted name in a field. The cost of the other direction
+    // was a follower nobody can take off.
+    const nowOurs = [...claimed];
     if (recordDef) {
       await putOpportunityVerified(
         oppId,
