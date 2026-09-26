@@ -199,9 +199,33 @@ const src = readFileSync("lib/ghl.ts", "utf8")
   .split("\n")
   .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
   .join("\n");
-const stray = [...src.matchAll(/"(\/custom-fields\/[^"]*)"/g)].map((m) => m[1]);
+// ═══ ROUND 160 — THE SCANNER COULD NOT SEE WHAT IT FORBIDS ══════════════════
+//
+// 🔴 THIS WAS /"(\/custom-fields\/[^"]*)"/ — DOUBLE QUOTES ONLY. Every other
+// URL in lib/ghl.ts is a TEMPLATE LITERAL, because they all interpolate an id:
+// `/opportunities/${encodeURIComponent(oppId)}/followers`. So the one form a
+// re-introduced call site would almost certainly take was invisible to the
+// check forbidding it, and this assertion would have stayed green for ever.
+//
+// ⚠️ RULE 14, IN ITS PUREST FORM: `stray.length === 0` means "none survive" AND
+// "the scanner cannot see". Nothing here could tell those apart.
+const scan = (text) => [
+  ...text.matchAll(/["'`](\/custom-fields\/[^"'`]*)/g),
+].map((m) => m[1]);
+const stray = scan(src);
 console.log(`  remaining call sites: ${stray.join(", ") || "(none)"}`);
 ok("🔴 no /custom-fields/ call site survives", stray.length === 0, stray);
+// 🔴 THE CONTROL THE ZERO NEEDED. Runs the same scanner over the three forms a
+// call site could take, and requires it to find all three. Without this, a
+// regex that matches nothing at all is indistinguishable from a clean file.
+const canary = [
+  'ghlGet("/custom-fields/" + id)',
+  "ghlGet(`/custom-fields/${id}`)",
+  "ghlGet('/custom-fields/' + id)",
+].map((c) => scan(c).length);
+console.log(`  scanner control — double/template/single: ${JSON.stringify(canary)}`);
+ok("🔴 THE CONTROL — the scanner finds a call site in ALL THREE quote forms",
+   canary.every((n) => n === 1), canary);
 ok("⚠️ and `fieldKeyFromName` is gone with it — the other API's vocabulary",
    !/function fieldKeyFromName/.test(src), "it survives");
 
