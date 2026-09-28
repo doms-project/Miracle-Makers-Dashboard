@@ -1337,9 +1337,33 @@ interface RawOpportunity {
 // empty-but-present fieldValueString/fieldValue can never shadow it. The
 // `fieldValue*` fallback stays: it is what caught this, and it will catch the
 // next typed variant (fieldValueNumber, …) instead of silently blanking it.
+//
+// ═══ ROUND 165 — fieldValueNumber JOINS THEM, AND fieldValueString ALREADY HAD
+//
+// ⚠️ THE WARNING ABOVE PREDICTED ITS OWN SUCCESSOR BY NAME ("fieldValueNumber,
+// …") and then fired on every request for weeks with nobody acting on it:
+//
+//   [ghl] custom-field value found under the unhandled key "fieldValueNumber"
+//         (field Bemu4kJCe4HjWuFAOS9W). It is being read, but add it to
+//         KNOWN_CF_KEYS.
+//
+// The value was always being read correctly — the fallback is what makes that
+// true — so this changes no number on any screen. It stops a log line that has
+// been trained into the background for weeks, which is the only way the NEXT
+// unhandled key will be noticed.
+//
+// 🔴 PLACED WITH fieldValueDate, AHEAD OF THE GENERIC PAIR, for the reason
+// already given above: a typed key must not be shadowed by an
+// empty-but-present fieldValueString or fieldValue.
+//
+// ✅ AND fieldValueString WAS ALREADY HERE, which is worth stating because the
+// round-164 probe raised the opposite worry. Stage History reads back through
+// the KNOWN path and logs nothing — verified live: search returns the full
+// value under `fieldValueString`, 35 records, no truncation.
 const KNOWN_CF_KEYS = [
   "fieldValueArray",
   "fieldValueDate",
+  "fieldValueNumber",
   "fieldValueString",
   "fieldValue",
   "value",
@@ -5268,75 +5292,22 @@ export const CASE_MANAGER_FIELD = "Case Manager";
 /** Rule B's own record: the ids THIS function added. Never the live list. */
 export const CASE_MANAGER_FOLLOWERS_FIELD = "Case Manager Followers";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 159/163 — THE STAGE RECORDER.
+// ═══ ROUND 159/163/165 — THE STAGE RECORDER ═══════════════════════════════
 //
-// 🔴 GOHIGHLEVEL HAS NO STAGE HISTORY. `lastStageChangeAt` is one value, not a
-// log, so "two stages a month per case manager" needs something to write every
-// transition down as it happens. This is that something.
-//
-// ⚠️ PER-RECORD, AND THE CONCURRENCY ARGUMENT IS WHY — not preference. A shared
-// location custom value would mean read-modify-write with no compare-and-swap:
-// a bulk edit firing fourteen events in one second would lose thirteen rows,
-// and a bulk edit is exactly the thing this log needs to be able to show. Here
-// fourteen events write fourteen DIFFERENT records and nothing contends.
-//
-// ✅ AND THE CAP IS NOT A CONSTRAINT. Probed live against a LARGE_TEXT
-// opportunity field: 4 / 30 / 120 / 400 / 1,200 rows — 243 B to 73,199 B — read
-// back byte-identical every time. A record's real life is 4-8 moves, so
-// trimming never arises and no history is ever dropped.
-// ═══════════════════════════════════════════════════════════════════════════
-export const STAGE_HISTORY_FIELD = "Stage History";
-
-/**
- * One recorded transition.
- *
- * 🔴 `from` IS NOT STORED, IT IS DERIVED — and `null` is a real answer.
- *
- * The previous stage is the previous row's `to`, so storing it as well would be
- * a second copy of one fact that could disagree with the first. The exception
- * is the FIRST row for a record: the case was already in some stage when the
- * recorder started, and nothing knows which. That is `from: null` — an
- * explicit unknown, not a zero and not an empty string, because a reader
- * computing days-in-stage must be able to tell "no origin" from "origin blank".
- */
-export interface StageHistoryRow {
-  at: string;
-  from: string | null;
-  to: string;
-  ownerId: string;
-  managerIds: string[];
-}
-
-/** `2026-09-26T12:04:11Z|stg_cao|u_ern|u_carla,u_edmark` — one row per line. */
-function encodeStageRow(at: string, to: string, ownerId: string, managerIds: string[]): string {
-  return [at, to, ownerId, managerIds.join(",")].join("|");
-}
-
-/**
- * Parse the stored field. Tolerant by design: a malformed line is SKIPPED
- * rather than throwing, because this log is read to produce a number and one
- * bad row must not take the whole KPI down with it.
- */
-export function parseStageHistory(raw: unknown): StageHistoryRow[] {
-  const text = Array.isArray(raw) ? raw.join("\n") : String(raw ?? "");
-  const out: StageHistoryRow[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const [at, to, ownerId, managers] = t.split("|");
-    if (!at || !to) continue;
-    out.push({
-      at,
-      // 🔴 THE PREVIOUS ROW'S DESTINATION, AND null FOR THE FIRST.
-      from: out.length ? out[out.length - 1].to : null,
-      to,
-      ownerId: ownerId || "",
-      managerIds: (managers || "").split(",").map((x) => x.trim()).filter(Boolean),
-    });
-  }
-  return out;
-}
+// The ROW FORMAT now lives in lib/stageHistory.ts, which imports nothing — see
+// the banner there for why it had to leave this file. Re-exported so every
+// existing caller and proof keeps its import path.
+export {
+  STAGE_HISTORY_FIELD,
+  parseStageHistory,
+  encodeStageRow,
+  type StageHistoryRow,
+} from "@/lib/stageHistory";
+import {
+  STAGE_HISTORY_FIELD,
+  parseStageHistory,
+  encodeStageRow,
+} from "@/lib/stageHistory";
 
 export interface StageRecordResult {
   recorded: boolean;

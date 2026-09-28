@@ -29,6 +29,13 @@ import { useGhlSession, ssoResolved, ssoWaiting } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import { BUILD, BUILD_LABEL } from "@/lib/build";
+import {
+  stageAge,
+  stageKpi,
+  monthWindow,
+  type StageAge,
+  type StageKpiResult,
+} from "@/lib/stageKpi";
 import EmailComposer from "@/components/EmailComposer";
 import {
   groupFieldsForPipeline,
@@ -191,11 +198,64 @@ const IconBoard = () => (
     <rect x="17" y="4" width="4" height="13" rx="1" />
   </svg>
 );
+/**
+ * ROUND 165 — one column of the Moves screen.
+ *
+ * 🔴 IT TAKES A LABELLER, NOT A USER LIST. lib/stageKpi.ts deals only in ids
+ * and this component only in rows; neither knows how a name is resolved, which
+ * is what lets the arithmetic be proven without a user map and the naming be
+ * fixed in one place. `userLabel` already answers "Former user" for an id that
+ * no longer resolves — a departed rep's moves still happened and still count.
+ *
+ * ⚠️ THE BAR IS SCALED TO THE TOP ROW, not to a fixed maximum. A department
+ * that moves four records a month and one that moves four hundred both get a
+ * readable chart, and the NUMBER is always printed beside it so the bar is
+ * decoration rather than the claim.
+ */
+function MovesTable({
+  rows,
+  label,
+}: {
+  rows: { id: string; moves: number }[];
+  label: (id: string) => string;
+}) {
+  if (!rows.length)
+    return <div className="mvnone">No moves recorded in this period.</div>;
+  const top = rows[0].moves || 1;
+  return (
+    <ol className="mvlist">
+      {rows.map((row) => (
+        <li key={row.id} className="mvrow">
+          <span className="mvwho" title={label(row.id)}>
+            {label(row.id).split(" — ")[0]}
+          </span>
+          <span className="mvbar" aria-hidden="true">
+            <i style={{ width: `${Math.max(2, (row.moves / top) * 100)}%` }} />
+          </span>
+          <span className="mvn">{row.moves}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 // ITEM 4 — Master: several columns seen at once, so a wider grid than the board.
 const IconMaster = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <rect x="3" y="4" width="18" height="16" rx="1" />
     <path d="M9 4v16M15 4v16M3 9h18" />
+  </svg>
+);
+// ROUND 165 — Moves: ascending bars, i.e. a count per person over time.
+// Deliberately NOT the Master grid and NOT the people glyph — this sits
+// directly under Master on the rail, and two neighbouring entries sharing a
+// shape is how you click the wrong one (the note on IconShare below).
+const IconMoves = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+    <path d="M3 21h18" />
+    <rect x="5" y="13" width="4" height="6" rx="1" />
+    <rect x="12" y="9" width="4" height="10" rx="1" />
+    <rect x="19" y="5" width="4" height="14" rx="1" />
   </svg>
 );
 const IconPeople = () => (
@@ -1260,14 +1320,28 @@ const MASTER_COLUMNS: {
   },
 ];
 
-// Days since the record last changed stage. Returns null when GoHighLevel sent
-// no timestamp — the caller renders nothing rather than "0 days".
-function daysInStage(r: OpportunityRecord): number | null {
-  if (!r.stageChangedAt) return null;
-  const t = Date.parse(r.stageChangedAt);
-  if (!Number.isFinite(t)) return null;
-  const d = Math.floor((Date.now() - t) / 86_400_000);
-  return d >= 0 ? d : null;
+// ═══ ROUND 165 — THE HONEST DAYS-IN-STAGE ══════════════════════════════════
+//
+// 🔴 THIS NUMBER WAS WRONG ON SCREEN AND THE CODE ALREADY SAID SO. The comment
+// at lib/ghl.ts:1582 has recorded it since the field was verified: fourteen
+// records share a gap of exactly 2,880 minutes and all fourteen are still at
+// NEW LEAD, because a bulk correction moved `lastStageChangeAt` without moving
+// any record. And it happened again on 28 September — 26 ODP records were
+// corrected out of TRANSFERRED IN, so their stage date now reads "today" for
+// records that have been sitting since the 21st.
+//
+// ⚠️ A CORRECTION IS INDISTINGUISHABLE FROM WORK, to that field. Which is why
+// the stage log now answers first where it can, and why every number says
+// which source it came from rather than pretending the two are one.
+//
+// Returns null when NEITHER source has a date — the caller renders nothing,
+// never "0 days", which is the rule this function has followed since it was
+// written.
+function daysInStage(
+  r: OpportunityRecord,
+  historyFieldId: string | null,
+): number | null {
+  return stageAge(r, historyFieldId, Date.now())?.days ?? null;
 }
 
 // ITEM 4 — a Master-view card. Deliberately NOT a BoardCard:
@@ -1286,6 +1360,7 @@ function MasterCard({
   canDrag,
   onOpen,
   from,
+  age,
 }: {
   r: OpportunityRecord;
   following: boolean;
@@ -1297,12 +1372,16 @@ function MasterCard({
   // the live field definitions, which live in Dashboard's state — so the FACT
   // is passed in rather than re-derived here.
   from?: string;
+  // 🔴 ROUND 165 — the same precedent, one field along. Days-in-stage now reads
+  // the stage log first and the log lives in a custom field, so the id would
+  // have to be looked up against the live defs — which this module-level
+  // component cannot reach. The computed ANSWER is passed in, source and all.
+  age?: StageAge | null;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `m:${r.id}`,
     disabled: !canDrag,
   });
-  const age = daysInStage(r);
   return (
     <div
       ref={setNodeRef}
@@ -1331,12 +1410,25 @@ function MasterCard({
             timestamp — "0 days" on a record whose history we don't have would
             be a confident lie, and this view exists to surface exactly the
             opposite: the lead that has been sitting for three weeks. */}
-        {age != null ? (
+        {/* 🔴 ROUND 165 — THE TOOLTIP NAMES THE SOURCE, because the two do not
+            deserve the same confidence. "history" was written when the move
+            happened; "ghl" is a field a bulk correction can move without any
+            record moving, which is exactly what happened to 26 ODP records on
+            28 September. A number whose reliability varies has to say which
+            kind it is, or the reliable ones get distrusted too. */}
+        {age ? (
           <span
-            className={`mage${age >= 14 ? " stale" : ""}`}
-            title="Days since this record last changed stage"
+            className={`mage${age.days >= 14 ? " stale" : ""}${
+              age.source === "ghl" ? " approx" : ""
+            }`}
+            title={
+              age.source === "history"
+                ? `Days since this record last changed stage — recorded at the move (${age.at.slice(0, 10)})`
+                : "Days since GoHighLevel's stage date, which a bulk edit can move without the record moving. Not recorded by this dashboard."
+            }
           >
-            {age}d
+            {age.source === "ghl" ? "~" : ""}
+            {age.days}d
           </span>
         ) : null}
       </div>
@@ -1571,6 +1663,7 @@ export default function Dashboard() {
     | "list"
     | "board"
     | "master"
+    | "kpi"
     | "resources"
     | "import"
     | "access"
@@ -3216,7 +3309,7 @@ export default function Dashboard() {
   // sent no stage date, rather than "0 days" — a confident claim about a record
   // whose history we don't have. Same rule the Master card already follows.
   const renderCgRow = (r: OpportunityRecord) => {
-    const age = daysInStage(r);
+    const age = dis(r);
     return (
       <tr
         key={r.id}
@@ -3455,6 +3548,67 @@ export default function Dashboard() {
       )?.id || "",
     [fieldDefs],
   );
+  // 🔴 ROUND 165 — THE STAGE LOG'S FIELD ID, looked up the same way.
+  //
+  // ⚠️ null, NOT "", AND THE DIFFERENCE IS LOAD-BEARING. `stageAge` treats null
+  // as "this account has no stage log" and goes straight to GoHighLevel's
+  // date; "" would be a field id that matches nothing, which is the same
+  // behaviour by accident rather than by contract.
+  //
+  // ✅ THE FIELD IS HIDDEN BUT ITS DEFINITION IS NOT. HIDDEN_NAMES is applied
+  // inside groupFieldsForPipeline — a RENDERING decision — so the raw defs
+  // array still carries it and this lookup works. Verified before building on
+  // it, because a hidden field that also vanished from the defs would have
+  // made every number here silently fall back.
+  const stageHistoryFieldId = useMemo(
+    () =>
+      fieldDefs.find(
+        (d) => (d.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === "stagehistory",
+      )?.id || null,
+    [fieldDefs],
+  );
+  // 🔴 COMPUTED ONCE PER PAYLOAD, NOT PER CALL — AND THE FIRST VERSION OF THIS
+  // WAS A MEASURABLE REGRESSION.
+  //
+  // daysInStage() used to be one Date.parse. Reading the log makes it a
+  // multi-line string parse, and `dis()` is called from inside a SORT
+  // COMPARATOR (cgSorted) — so the cost went from n to n log n full parses on
+  // every render, for a string that grows with every move a record ever makes.
+  // The Access-tab proof went from 13s to 50s and that is what caught it.
+  //
+  // ⚠️ AND FIXING THE COST FIXED A CORRECTNESS WART TOO. Each call took its own
+  // `Date.now()`, so two numbers rendered in the same frame could disagree
+  // across a midnight boundary. One clock read per payload means every number
+  // on screen is answering the same question at the same instant.
+  const ageByRecord = useMemo(() => {
+    const now = Date.now();
+    const m = new Map<string, StageAge | null>();
+    // 🔴 THE RAW STATE ARRAYS, NOT THE FILTERED ONES. cgVisible is declared
+    // 400 lines below this and depends on filters that change on every
+    // keystroke; keying off it would both break (temporal dead zone) and
+    // rebuild the whole map each time someone typed in the search box.
+    for (const r of data) m.set(r.id, stageAge(r, stageHistoryFieldId, now));
+    for (const r of cgData) m.set(r.id, stageAge(r, stageHistoryFieldId, now));
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, cgData, stageHistoryFieldId]);
+
+  /** Days-in-stage for this account's records — the log first, GHL second. */
+  const ageOf = useCallback(
+    (r: OpportunityRecord): StageAge | null =>
+      // ⚠️ THE `?? stageAge(...)` IS NOT DEFENSIVE PADDING. A record can reach a
+      // renderer without being in either source array — the selected record
+      // survives a filter change, for one — and returning null for it would
+      // silently blank a number rather than compute it.
+      ageByRecord.has(r.id)
+        ? (ageByRecord.get(r.id) ?? null)
+        : stageAge(r, stageHistoryFieldId, Date.now()),
+    [ageByRecord, stageHistoryFieldId],
+  );
+  const dis = useCallback(
+    (r: OpportunityRecord): number | null => ageOf(r)?.days ?? null,
+    [ageOf],
+  );
   const transferredFrom = useCallback(
     (r: OpportunityRecord): string => {
       if (!transferredFromId) return "";
@@ -3503,15 +3657,31 @@ export default function Dashboard() {
       .sort((a, b) => b.n - a.n || a.k.localeCompare(b.k));
   };
 
+  // 🔴 ROUND 165 — A THIRD NUMBER, FOR THE SAME REASON THE SECOND ONE EXISTS.
+  //
+  // `noDate` was added because a tile that silently drops undateable records
+  // is lying by omission. `approx` is the same argument one step in: a stalled
+  // count built on GoHighLevel's stage date includes records whose date was
+  // moved by a BULK CORRECTION rather than by anyone working them — 26 ODP
+  // records on 28 September alone, and the 2,880-minute cluster before that.
+  //
+  // ⚠️ THOSE RECORDS ARE NOT EXCLUDED. A correction-moved date is still the
+  // best information available for a record the log never saw, and dropping
+  // them would understate the backlog — the opposite error. They are COUNTED
+  // AND FLAGGED: "142 stalled · 8 no date · 119 from GHL's date".
   const stallOf = (rows: OpportunityRecord[]) => {
     let stalled = 0;
     let noDate = 0;
+    let approx = 0;
     for (const r of rows) {
-      const d = daysInStage(r);
-      if (d == null) noDate++;
-      else if (d >= STALL_DAYS) stalled++;
+      const a = ageOf(r);
+      if (a == null) noDate++;
+      else if (a.days >= STALL_DAYS) {
+        stalled++;
+        if (a.source === "ghl") approx++;
+      }
     }
-    return { stalled, noDate };
+    return { stalled, noDate, approx };
   };
 
   const masterColumns = useMemo(() => {
@@ -3535,7 +3705,7 @@ export default function Dashboard() {
         case "shared":
           return r.shared;
         case "stalled": {
-          const d = daysInStage(r);
+          const d = dis(r);
           return d != null && d >= STALL_DAYS;
         }
         default:
@@ -3593,6 +3763,45 @@ export default function Dashboard() {
           : f.kind === "blocked"
             ? "road-blocked"
             : `${f.kind}: ${f.value}`;
+
+  // ═══ ROUND 165 — THE MOVES SCREEN ═════════════════════════════════════════
+  //
+  // 🔴 ZERO EXTRA REQUESTS, AND THAT WAS THE ARGUMENT FOR PER-RECORD STORAGE IN
+  // THE FIRST PLACE. The rows ride the opportunity payload the board already
+  // fetches — verified live: search returns the full value under
+  // `fieldValueString`, 35 records with history, no truncation. So this is a
+  // reduce over an array already in memory, exactly like the master tiles.
+  //
+  // ⚠️ `data` IS ALREADY ACCESS-FILTERED, which is why the screen prints its
+  // denominator. See the note beside `kpiScope` in the render.
+  const [kpiAllTime, setKpiAllTime] = useState(false);
+  /**
+   * Stage id -> name, across every pipeline in the payload.
+   *
+   * ⚠️ THE ROW STORES AN ID, ON PURPOSE — round 163 chose the id over the
+   * payload's `pipleline_stage` because names get edited and a renamed stage
+   * would split one column into two. Resolution happens HERE, at render, so a
+   * rename shows up everywhere at once and no stored row has to change.
+   *
+   * ⚠️ FALLS BACK TO THE ID ITSELF rather than "Unknown": a stage from a
+   * pipeline this viewer cannot see is a real id we simply cannot name, and
+   * printing it lets someone paste it into GoHighLevel and find out.
+   */
+  const stageName = useCallback(
+    (id: string): string => {
+      for (const list of Object.values(stagesByPipeline))
+        for (const s of list) if (s.id === id) return s.name;
+      return id;
+    },
+    [stagesByPipeline],
+  );
+  const kpi: StageKpiResult = useMemo(
+    () =>
+      stageKpi(data, stageHistoryFieldId, {
+        window: kpiAllTime ? undefined : monthWindow(Date.now()),
+      }),
+    [data, stageHistoryFieldId, kpiAllTime],
+  );
 
   const masterStats = useMemo(() => {
     const rows = data;
@@ -3832,7 +4041,7 @@ export default function Dashboard() {
         case "source":
           return (r.src || "").trim() === cgFocus.value;
         case "stalled": {
-          const d = daysInStage(r);
+          const d = dis(r);
           return d != null && d >= STALL_DAYS;
         }
         default:
@@ -3849,8 +4058,8 @@ export default function Dashboard() {
     const dir = cgSortDir === "asc" ? 1 : -1;
     return [...cgFocused].sort((a, b) => {
       if (cgSortKey === "days") {
-        const x = daysInStage(a);
-        const y = daysInStage(b);
+        const x = dis(a);
+        const y = dis(b);
         if (x == null && y == null) return 0;
         if (x == null) return 1;
         if (y == null) return -1;
@@ -3891,7 +4100,7 @@ export default function Dashboard() {
     // confirms every record on this account has one, so an absence means
     // something is wrong, not that the applicant arrived today.
     const aged = cgVisible
-      .map((r) => ({ r, d: daysInStage(r) }))
+      .map((r) => ({ r, d: dis(r) }))
       .filter((x): x is { r: OpportunityRecord; d: number } => x.d != null)
       .sort((a, b) => b.d - a.d);
     return {
@@ -5245,6 +5454,7 @@ export default function Dashboard() {
     | "caregivers"
     | "referrals"
     | "master"
+    | "kpi"
     | "import"
     | "access"
     | "pipelines" =
@@ -5253,6 +5463,12 @@ export default function Dashboard() {
     view === "import" ||
     view === "access" ||
     view === "pipelines" ||
+    // 🔴 ROUND 165 — SAME ARGUMENT AS MASTER, ONE STEP FURTHER. The KPI screen
+    // is not a lens on the record list at all: its rows are PEOPLE. A screen
+    // whose row type differs from the board's cannot be a tab inside it, and
+    // filed under Clients it would have inherited the board's pipeline filter,
+    // which describes a record and not a rep.
+    view === "kpi" ||
     // ITEM 3 — Master is a CROSS-PIPELINE LENS, not another way of looking at
     // one pipeline's records, and it is the only entry in that row with its own
     // Access-tab grant. That makes it a place you go, like Caregivers — so it
@@ -5416,6 +5632,30 @@ export default function Dashboard() {
           >
             <IconMaster />
             <span>Master</span>
+          </button>
+        )}
+        {/* 🔴 ROUND 165 — GATED ON canSeeMaster, AND THAT IS A DECISION ABOUT
+            PEOPLE, NOT A CONVENIENCE.
+            Everywhere else on this rail, hiding an entry is cosmetic because
+            the route behind it re-derives the role server-side. This one is
+            different in kind: "moves per rep" is a RANKING OF COLLEAGUES, and
+            the board payload it is computed from is already in the browser of
+            every rep who can load the app. So the gate here is the only thing
+            standing between a rep and a league table of their team.
+            ⚠️ WHICH MEANS IT IS NOT A SECURITY BOUNDARY AND MUST NOT BE READ AS
+            ONE. Anyone who can open the dashboard can compute these numbers
+            from the payload by hand. The gate reflects an INTENT — that this
+            is a management view — and if that intent ever needs enforcing, it
+            needs the server to stop sending the field, not a hidden button. */}
+        {canSeeMaster && (
+          <button
+            className={railWhere === "kpi" ? "railsec active" : "railsec"}
+            title="Stage moves per rep and per case manager"
+            type="button"
+            onClick={() => setView("kpi")}
+          >
+            <IconMoves />
+            <span>Moves</span>
           </button>
         )}
         {/* ITEM 15 — ADMIN ACTIONS. Import and Access used to sit in the top
@@ -6379,11 +6619,23 @@ export default function Dashboard() {
                     {cgStats.noDate ? (
                       <span className="vsub"> · {cgStats.noDate} no date</span>
                     ) : null}
+                    {/* ⚠️ ROUND 165 — HERE THIS WILL READ "n stalled · n approx",
+                        because the stage recorder's workflow covers the client
+                        pipelines and not recruiting. That is not noise: it is
+                        the screen saying the log does not reach these records,
+                        which is exactly what someone comparing the two
+                        sections needs to know. */}
+                    {cgStats.approx ? (
+                      <span className="vsub"> · {cgStats.approx} approx</span>
+                    ) : null}
                   </div>
                   <div className="sub">
                     {STALL_DAYS}+ days in stage
                     {cgStats.noDate
                       ? ` · ${cgStats.noDate} without a stage date`
+                      : ""}
+                    {cgStats.approx
+                      ? ` · ${cgStats.approx} dated from GoHighLevel rather than the stage log`
                       : ""}
                   </div>
                 </button>
@@ -6785,6 +7037,161 @@ export default function Dashboard() {
               The bulk import tool is restricted to admin users.
             </div>
           )
+        ) : view === "kpi" ? (
+          // ═══ ROUND 165 — MOVES ═══════════════════════════════════════════
+          // Stage moves per rep and per case manager, read from the stage log
+          // that rides the payload this page already has.
+          !canSeeMaster ? (
+            <div className="empty">
+              <b>Not enabled for you</b>
+              <br />
+              Moves is granted with the Master view, in the Access tab.
+            </div>
+          ) : (
+            <div className="mvwrap">
+              <div className="mvhead">
+                <h2 className="mvtitle">Moves</h2>
+                <div className="mvseg">
+                  <button
+                    type="button"
+                    className={kpiAllTime ? "" : "on"}
+                    onClick={() => setKpiAllTime(false)}
+                  >
+                    This month
+                  </button>
+                  <button
+                    type="button"
+                    className={kpiAllTime ? "on" : ""}
+                    onClick={() => setKpiAllTime(true)}
+                  >
+                    All recorded
+                  </button>
+                </div>
+              </div>
+
+              {/* 🔴 WHAT THIS NUMBER IS NOT. Five sentences, on the screen and
+                  not in a report, because a report is a thing nobody reads
+                  twice and this screen will be read every month.
+                  Each one exists because the number is wrong without it. */}
+              <div className="mvnotes">
+                <p>
+                  <b>
+                    {kpi.since
+                      ? `Recording since ${kpi.since.slice(0, 10)}.`
+                      : "Nothing recorded yet."}
+                  </b>{" "}
+                  Moves before then were never captured, so an early month reads
+                  near zero and that is correct — not a fault.
+                </p>
+                <p>
+                  Counting <b>{kpi.moves}</b> move
+                  {kpi.moves === 1 ? "" : "s"} across{" "}
+                  <b>{kpi.recordsWithHistory}</b> record
+                  {kpi.recordsWithHistory === 1 ? "" : "s"}
+                  {/* 🔴 THE DENOMINATOR. This payload is access-filtered, so
+                      two people open this screen and see different totals for
+                      the same rep. Round 155 built the vocabulary for saying
+                      so; a metric owes its reader the same disclosure a
+                      filtered list does. */}
+                  <span className="mvscope">
+                    {" "}
+                    — from the {kpi.recordsScanned} record
+                    {kpi.recordsScanned === 1 ? "" : "s"} you can see. Someone
+                    with different pipeline access sees different totals.
+                  </span>
+                </p>
+                {kpi.firstSightings ? (
+                  <p>
+                    <b>{kpi.firstSightings} first sighting
+                    {kpi.firstSightings === 1 ? "" : "s"} not counted.</b>{" "}
+                    A record&rsquo;s first row says where it is, not where it
+                    came from — the origin was never observed, so it is not a
+                    move. This undercounts, and by exactly this many.
+                  </p>
+                ) : null}
+                {kpi.unattributed ? (
+                  <p>
+                    <b>{kpi.unattributed} move
+                    {kpi.unattributed === 1 ? "" : "s"} had no owner</b> and are
+                    credited to nobody, so the rep column adds up to{" "}
+                    {kpi.moves - kpi.unattributed}, not {kpi.moves}.
+                  </p>
+                ) : null}
+                {kpi.missedMoves ? (
+                  <p>
+                    <b>{kpi.missedMoves} record
+                    {kpi.missedMoves === 1 ? "" : "s"} moved without being
+                    recorded</b> — the log&rsquo;s last entry disagrees with
+                    where the record actually is. A gap is a gap, not a zero.
+                  </p>
+                ) : null}
+                {kpi.skipped ? (
+                  <p className="mvbad">
+                    <b>{kpi.skipped} unreadable row
+                    {kpi.skipped === 1 ? "" : "s"}</b> were skipped. Expected to
+                    be none — worth looking at.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="mvcols">
+                <div className="mvcol">
+                  <h3>
+                    Moves per rep
+                    <span className="mvsub">
+                      one move, one rep. These sum to the total.
+                    </span>
+                  </h3>
+                  <MovesTable rows={kpi.perRep} label={userLabel} />
+                </div>
+                <div className="mvcol">
+                  <h3>
+                    Moves per case manager
+                    {/* 🔴 THE COLUMN THAT DOES NOT SUM, AND SAYS SO. One move
+                        counts once for every manager watching it, so someone
+                        supporting all five reps shows the department's total.
+                        That is arithmetic, not a person to hide: with both
+                        columns up it is a display decision, and with only one
+                        it is a lie whose direction depends on who is in it. */}
+                    <span className="mvsub">
+                      one move counted for <i>each</i> watching manager — these
+                      sum to more than {kpi.moves}.
+                    </span>
+                  </h3>
+                  <MovesTable rows={kpi.perManager} label={userLabel} />
+                  {kpi.unmanaged ? (
+                    <div className="mvfoot">
+                      {kpi.unmanaged} move{kpi.unmanaged === 1 ? "" : "s"} had no
+                      case manager recorded.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* 🔴 SURFACED, NEVER FILTERED. Round 163 kept the verdict out of
+                  the row precisely so this rule could change without
+                  re-recording anything. */}
+              {kpi.clusters.length ? (
+                <div className="mvclust">
+                  <h3>Bulk-looking clusters</h3>
+                  <p>
+                    Many records entering one stage inside one minute. Shown, not
+                    removed — whether these count is yours to decide, and
+                    changing your mind costs nothing because the rows are
+                    untouched.
+                  </p>
+                  <ul>
+                    {kpi.clusters.map((c) => (
+                      <li key={`${c.at}|${c.to}`}>
+                        <b>{c.records} records</b> at {c.at.replace("T", " ")} —{" "}
+                        {stageName(c.to)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          )
         ) : view === "master" ? (
           // ITEM 4 — MASTER VIEW. Every pipeline this viewer can access, side by
           // side. Not a sixth pipeline: nothing is created in GoHighLevel, and
@@ -6926,6 +7333,14 @@ export default function Dashboard() {
                     {masterStats.noDate ? (
                       <span className="vsub"> · {masterStats.noDate} no date</span>
                     ) : null}
+                    {/* 🔴 ROUND 165 — AND SAY WHAT IS SOFT. These are counted,
+                        not dropped: GoHighLevel's stage date is the best thing
+                        available for a record the log never saw. But a bulk
+                        correction moves it without the record moving, so the
+                        number it feeds is approximate and has to admit it. */}
+                    {masterStats.approx ? (
+                      <span className="vsub"> · {masterStats.approx} approx</span>
+                    ) : null}
                   </div>
                   <div className="sub">
                     {STALL_DAYS}+ days in stage
@@ -6933,6 +7348,9 @@ export default function Dashboard() {
                       ? ` · ${masterStats.noDate} record${
                           masterStats.noDate === 1 ? " has" : "s have"
                         } no stage date, so cannot be judged`
+                      : ""}
+                    {masterStats.approx
+                      ? ` · ${masterStats.approx} dated from GoHighLevel rather than the stage log, which a bulk edit can move`
                       : ""}
                   </div>
                 </button>
@@ -7056,6 +7474,7 @@ export default function Dashboard() {
                             canDrag={canEdit(r)}
                             onOpen={() => setSelId(r.id)}
                             from={transferredFrom(r)}
+                            age={ageOf(r)}
                           />
                         ))
                       ) : (

@@ -26,3 +26,4 @@ stale-readback
 backfill
 referral-access
 stage-recorder
+stage-kpi
