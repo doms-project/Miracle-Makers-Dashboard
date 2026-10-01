@@ -71,16 +71,43 @@ const mkState = () => ({
  * Without this the read-back check in A2 would pass against a fake that simply
  * echoed — which is the harness bug, not the app's.
  */
-const ghlNormalise = (c) => ({
-  ...c,
-  email: String(c.email ?? "").trim().toLowerCase(),
-  phone: (() => {
-    const d = String(c.phone ?? "").replace(/\D/g, "");
-    if (d.length === 10) return `+1${d}`;
-    if (d.length === 11 && d.startsWith("1")) return `+${d}`;
-    return String(c.phone ?? "").trim();
-  })(),
-});
+const ghlNormalise = (c, resplit) => {
+  const out = {
+    ...c,
+    email: String(c.email ?? "").trim().toLowerCase(),
+    phone: (() => {
+      const d = String(c.phone ?? "").replace(/\D/g, "");
+      if (d.length === 10) return `+1${d}`;
+      if (d.length === 11 && d.startsWith("1")) return `+${d}`;
+      return String(c.phone ?? "").trim();
+    })(),
+  };
+  // ═══ ROUND 169 — GOHIGHLEVEL RE-SPLITS A NAME ═════════════════════════════
+  //
+  // 🔴 MEASURED LIVE. Sent `{ firstName: "TEST e2e 202610011527", lastName:
+  // "renamed" }`, GoHighLevel stored the SAME FULL NAME split somewhere else —
+  // and the read-back, comparing the two halves separately, reported a rename
+  // that had worked as a 502.
+  //
+  // ⚠️ THIS IS RULE 1 IN THE OTHER DIRECTION, AND WORTH SAYING. Rule 1 is about
+  // a fake ACCEPTING what GoHighLevel refuses; this is a fake being TIDIER than
+  // GoHighLevel — storing exactly what it was handed, when the real thing
+  // re-arranges it. A harness that is too well-behaved is green on a bug just
+  // as surely as one that is too permissive, and this one was: the route's
+  // strict comparison could not fail against it.
+  //
+  // The model moves ONE word across the boundary, which is enough to make both
+  // halves differ while the full name does not.
+  if (resplit) {
+    const words = `${out.firstName ?? ""} ${out.lastName ?? ""}`.trim().split(/\s+/).filter(Boolean);
+    if (words.length > 1) {
+      out.firstName = words[0];
+      out.lastName = words.slice(1).join(" ");
+    }
+  }
+  out.name = `${out.firstName ?? ""} ${out.lastName ?? ""}`.trim();
+  return out;
+};
 
 function makeFake(S) {
   return http.createServer((req, res) => {
@@ -140,7 +167,10 @@ function makeFake(S) {
           S.writes.push({ id, body: j });
           // 🔴 200 EITHER WAY — the hazard the read-back exists for.
           if (!S.dropWrites)
-            S.contacts[id] = ghlNormalise({ ...c, ...j, dateUpdated: new Date().toISOString() });
+            S.contacts[id] = ghlNormalise(
+              { ...c, ...j, dateUpdated: new Date().toISOString() },
+              S.resplitNames,
+            );
           return send(200, { contact: S.contacts[id] });
         }
         return send(200, { contact: c });
@@ -212,6 +242,58 @@ ok("🔴 a discarded write fails the request", r.status === 502, r.status);
 ok("⚠️ naming both the sent and the stored value",
    /610 555 7777/.test(r.body.detail || "") && /6105550123/.test(r.body.detail || ""),
    r.body.detail);
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\nA3b · 🔴 ROUND 169 — A RENAME GOHIGHLEVEL RE-SPLITS");
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 THE LIVE FAILURE. `PATCH … name: { firstName: "TEST e2e 202610011527",
+// lastName: "renamed" }` returned 502 "accepted the rename but did not store
+// it", with a detail printing the SAME joined string on both sides — because
+// GoHighLevel stored the full name and split it elsewhere, and the comparison
+// tested the halves separately.
+//
+// ⚠️ ROUND 134 WROTE "COMPARE MEANING, NOT TEXT" IN THAT VERY FUNCTION and
+// applied it to the phone and the email only. This is its third field.
+S.resplitNames = true;
+r = await patch("o1", { name: { firstName: "Mary Ann", lastName: "Smith" } });
+console.log(`  sent "Mary Ann"/"Smith" · stored ${JSON.stringify(r.body.firstName)}/${JSON.stringify(r.body.lastName)}`);
+// 🔴 BOTH HALVES IN THE HEADLINE ASSERTION, AND THE FIRST VERSION HAD ONLY ONE.
+// Round 169 changed two things: the comparison (full name, so a re-split
+// CONFIRMS) and the outcome (never fail, so an unconfirmed rename still 200s).
+// This read `r.status === 200` alone — which the second half guarantees whatever
+// the comparison does, so reverting the comparison left four of the five
+// assertions below green. "Reports success" means confirmed, not merely
+// not-refused.
+ok("🔴 a re-split rename SUCCEEDS, AND IS CONFIRMED",
+   r.status === 200 && r.body.nameConfirmed === true,
+   { status: r.status, nameConfirmed: r.body.nameConfirmed });
+ok("🔴 …and the response carries the split GOHIGHLEVEL CHOSE, not the one sent",
+   r.body.firstName === "Mary" && r.body.lastName === "Ann Smith",
+   { first: r.body.firstName, last: r.body.lastName });
+ok("…confirmed, because the full name matches", r.body.nameConfirmed === true, r.body.nameConfirmed);
+ok("⚠️ the full name is unchanged — which is the thing that mattered",
+   `${r.body.firstName} ${r.body.lastName}` === "Mary Ann Smith",
+   `${r.body.firstName} ${r.body.lastName}`);
+ok("🔴 and it really was stored that way, not just reported",
+   S.contacts.c1.firstName === "Mary" && S.contacts.c1.lastName === "Ann Smith",
+   [S.contacts.c1.firstName, S.contacts.c1.lastName]);
+S.resplitNames = false;
+
+// 🔴 THE CONTROL. "A re-split succeeds" is satisfied by a route that never
+// checks anything — so a write GoHighLevel IGNORES must still be reported.
+console.log("\nA3c · 🔴 …AND A RENAME THAT WENT NOWHERE IS STILL SAID");
+S.dropWrites = true;
+r = await patch("o1", { name: { firstName: "Ignored", lastName: "Entirely" } });
+S.dropWrites = false;
+console.log(`  -> ${r.status} · nameConfirmed=${JSON.stringify(r.body.nameConfirmed)}`);
+ok("🔴 CONTROL — an ignored rename is NOT confirmed", r.body.nameConfirmed === false, r.body);
+ok("⚠️ …but it does NOT fail the request — round 156: confirm, never condemn",
+   r.status === 200, r.status);
+ok("🔴 …and the response carries what GoHighLevel actually holds, so the panel",
+   r.body.firstName === "Mary" && r.body.lastName === "Ann Smith",
+   { first: r.body.firstName, last: r.body.lastName });
+ok("…shows the truth rather than reverting to the typed value",
+   r.body.nameSent === "Ignored Entirely", r.body.nameSent);
 
 console.log("\nA4 · 🔴 VALIDATION — USEFUL, NOT ANNOYING");
 n = S.writes.length;

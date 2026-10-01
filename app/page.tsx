@@ -470,7 +470,15 @@ const BlockPill = ({ b }: { b: string }) => (
 // exactly where the raw GHL 400 ("stageId must be one of the following values:
 // c4fa7d37-…") was reaching reps, and <ErrorMessage> needs the object to map it.
 type SaveState =
-  | { status: "saving" | "error"; err?: unknown }
+  /**
+   * ⚠️ ROUND 169 — `"warn"` IS NEW, AND IT IS NOT A SYNONYM FOR `"error"`.
+   * A rename GoHighLevel stored differently SAVED: the value on screen is the
+   * stored one, nothing reverted, and nothing needs doing. `"error"` means the
+   * save did not happen and the row has gone back; `"warn"` means it did happen
+   * and is worth a sentence. Rendering them the same would reinstate round
+   * 169's bug in the display layer after fixing it in the route.
+   */
+  | { status: "saving" | "error" | "warn"; err?: unknown }
   | undefined;
 
 // ROUND 131 — the contact-save map is keyed by custom-field id; the person's
@@ -940,6 +948,20 @@ function FieldControl({
         <div className="savemsg">Saving…</div>
       ) : save?.status === "error" ? (
         <ErrorMessage error={save.err ?? "Save failed"} />
+      ) : save?.status === "warn" ? (
+        /* ⚠️ ROUND 169 — A NOTICE, NOT AN ERROR. `<ErrorMessage>` is styled and
+           worded for "this did not save"; this saved. */
+        <div className="savewarn">
+          {(() => {
+            const w = save.err as { error?: string; detail?: string } | undefined;
+            return (
+              <>
+                <b>{w?.error || "Saved with a difference."}</b>
+                {w?.detail ? <> {w.detail}</> : null}
+              </>
+            );
+          })()}
+        </div>
       ) : null}
     </>
   );
@@ -992,7 +1014,14 @@ function CardBody({
 }: {
   r: OpportunityRecord;
   following: boolean;
-  saving?: "saving" | "error";
+  /**
+   * ⚠️ ROUND 169 — WIDENED WITH THE `SaveState` UNION, NOT BECAUSE A CARD CAN
+   * WARN. This receives the STAGE save's status, and a stage move either
+   * happened or it did not — there is no "saved differently" for a stage id.
+   * The type follows the union because the value comes from it; a narrower
+   * annotation here would be a second, drifting copy of what SaveState says.
+   */
+  saving?: "saving" | "error" | "warn";
   // BUG 2 — "1 caregiver" / "2 clients". Passed in rather than computed here so
   // the card stays a pure renderer and the counts load in one place.
   relBadge?: string;
@@ -1064,7 +1093,14 @@ function BoardCard({
   r: OpportunityRecord;
   canDrag: boolean;
   following: boolean;
-  saving?: "saving" | "error";
+  /**
+   * ⚠️ ROUND 169 — WIDENED WITH THE `SaveState` UNION, NOT BECAUSE A CARD CAN
+   * WARN. This receives the STAGE save's status, and a stage move either
+   * happened or it did not — there is no "saved differently" for a stage id.
+   * The type follows the union because the value comes from it; a narrower
+   * annotation here would be a second, drifting copy of what SaveState says.
+   */
+  saving?: "saving" | "error" | "warn";
   relBadge?: string;
   onOpen: () => void;
 }) {
@@ -4584,8 +4620,27 @@ export default function Dashboard() {
           setCSave((p) => ({ ...p, [NAME_KEY]: { status: "error", err: j } }));
           return false;
         }
+        // 🔴 WHAT GOHIGHLEVEL STORED, NOT WHAT WAS TYPED. This has been the
+        // behaviour since the read-back was added; round 169 is what lets it
+        // actually run, by stopping the comparison 502ing on a re-split.
         const first = j.firstName ?? firstName;
         const last = j.lastName ?? lastName;
+        // ⚠️ ROUND 169 — AND IF GOHIGHLEVEL DID NOT STORE IT, THE ROW SAYS SO
+        // RATHER THAN THE SAVE FAILING. Round 156's rule: a read-back may
+        // confirm, never condemn. The name on screen is the stored one either
+        // way, so there is nothing to revert — only something to mention.
+        if (j.nameConfirmed === false)
+          setCSave((pv) => ({
+            ...pv,
+            [NAME_KEY]: {
+              status: "warn",
+              err: {
+                error: "Saved, but GoHighLevel reports a different name.",
+                detail: `It stored “${[first, last].filter(Boolean).join(" ") || "(nothing)"}” — shown above — rather than “${j.nameSent || ""}”. Nothing was lost; check it in GoHighLevel if that is not what you meant.`,
+              },
+            },
+          }));
+        else setCSave((pv) => ({ ...pv, [NAME_KEY]: undefined }));
         setCFields((prev) =>
           prev ? { ...prev, firstName: first, lastName: last, version: j.version || prev.version } : prev,
         );
@@ -5178,6 +5233,15 @@ export default function Dashboard() {
     if (s?.status === "saving") return <div className="savemsg">Saving…</div>;
     if (s?.status === "error")
       return <ErrorMessage error={s.err ?? "Save failed"} />;
+    if (s?.status === "warn") {
+      const w = s.err as { error?: string; detail?: string } | undefined;
+      return (
+        <div className="savewarn">
+          <b>{w?.error || "Saved with a difference."}</b>
+          {w?.detail ? <> {w.detail}</> : null}
+        </div>
+      );
+    }
     return null;
   };
   const savingFk = (id: string, fk: string) =>

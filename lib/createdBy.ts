@@ -32,6 +32,12 @@ export interface CreatedBySource {
   sourceType: string;
   sourceValue: string;
   sourceUserId: string;
+  /**
+   * `internalSource.id`. ⚠️ MEANS SOMETHING DIFFERENT PER SOURCE — a workflow
+   * uuid, a possible user id, an app id — so it is read only where the SOURCE
+   * says it may be a person. See `createdByLabel`.
+   */
+  sourceId?: string;
 }
 
 /**
@@ -42,9 +48,56 @@ export interface CreatedBySource {
  * `WORKFLOW_NEW`, `workflow-new` and `WorkflowNew` all land here.
  */
 const KNOWN: Record<string, string> = {
-  // 🔴 OBSERVED LIVE, round 168's probe. The only one.
+  // ═══ ROUND 169 — READ LIVE FROM ALL 1,474 CASES, EVERY PIPELINE ═══════════
+  //
+  // 🔴 ROUND 168 HAD ONE SAMPLE AND SAID SO. It refused to write GoHighLevel's
+  // enum from memory and fell back to making an unknown value readable from its
+  // own text — which, by luck of their spelling, already rendered the other two
+  // of these correctly. These three are now EXACT rather than mechanical, which
+  // is a different and stronger claim: the fallback cannot be checked against
+  // anything, and these have been counted.
+  //
+  //     WORKFLOW_NEW  1091   channel ISTIO_MESH
+  //     BULK_ACTION    355   channel ISTIO_MESH
+  //     INTEGRATION     28   channel OAUTH
+  //
+  // ⚠️ EVERY CASE HAS ONE, so the absent-internalSource branch below is for a
+  // record this account has never produced — kept because "shows nothing" is
+  // the only honest answer if one ever appears, not because it fires today.
   workflownew: "Workflow",
+  bulkaction: "Bulk action",
+  integration: "Integration",
 };
+
+// ═══ ROUND 169b — `internalSource.id` IS NEVER A PERSON, FOR ANY SOURCE ═════
+//
+// 🔴 THE FULL SCAN KILLED THE LOOKUP THIS FUNCTION BRIEFLY HAD. 1,474 cases
+// across every pipeline, every one carrying an internalSource, and only three
+// values exist on the account:
+//
+//     1091  WORKFLOW_NEW  channel ISTIO_MESH  id = one of 5 workflow UUIDs
+//      355  BULK_ACTION   channel ISTIO_MESH  id = one of 5 batch ids, 20 chars
+//       28  INTEGRATION   channel OAUTH       id = one of 2 app ids, 24 hex
+//
+// All five bulk-action ids were checked against the user list. NONE is a user.
+// They identify IMPORT BATCHES — and they are 20 characters, which is exactly
+// what a GoHighLevel user id looks like.
+//
+// 🔴 SO THE 20-CHARACTER SHAPE WAS THE WHOLE EVIDENCE, AND IT WAS WRONG. Round
+// 169 said "the gate is the SOURCE, never the shape of the id" and was right
+// about which SOURCE may be read — while the lookup itself still assumed that
+// an id which RESOLVES to a user IS that user. Same mistake one level up: a
+// 20-character string that matches a user proves a collision, not an author.
+//
+// ⚠️ AND THE COLLISION IS THE REAL HAZARD, not the missing name. Five batch ids
+// against twenty-six users today; the day one matches, 355 records credit an
+// import to a colleague who had nothing to do with it — a confident lie on the
+// screen somebody uses to decide who to ask about a case. The proof asserts
+// exactly that case.
+//
+// ⚠️ `sourceUserId` IS UNAFFECTED AND STAYS. That is an explicit `userId` key,
+// which is GoHighLevel asserting a person rather than us inferring one; none of
+// these three sources carries it, and the hand-created path still needs it.
 
 const key = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -109,6 +162,11 @@ export function createdByLabel(
   }
 
   const k = key(src.sourceValue);
+
+  // 🔴 NO LOOKUP ON `internalSource.id`, FOR ANY SOURCE — see the banner above.
+  // `sourceId` is still carried, because knowing WHICH workflow or WHICH batch
+  // is a real question somebody may want answered later; what it must never do
+  // is become a person's name.
   if (KNOWN[k]) return KNOWN[k];
   // ⚠️ ANY VALUE MENTIONING A WORKFLOW IS A WORKFLOW. GoHighLevel has more than
   // one workflow source constant on other accounts; this is a shape match on
