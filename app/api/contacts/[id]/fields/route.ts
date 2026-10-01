@@ -12,7 +12,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord, canSeeRecord } from "@/lib/visibility";
 import { isFieldEditable } from "@/lib/editable";
 import { versionGuard } from "@/lib/concurrency";
-import { emailKey, phoneKey } from "@/lib/phone";
+import { emailKey, phoneKey, nameKey } from "@/lib/phone";
 import type { ApiError } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -272,16 +272,40 @@ export async function PATCH(
     // non-ok response; a 200 with the old name in it would leave the new
     // spelling on screen over the old one in GoHighLevel, which is worse than
     // not offering the rename at all.
-    if (wantsName && (after.firstName !== newFirst || after.lastName !== newLast))
-      return NextResponse.json(
-        {
-          error: "GoHighLevel accepted the rename but did not store it.",
-          detail: `Sent “${[newFirst, newLast].filter(Boolean).join(" ")}”, read back “${
-            [after.firstName, after.lastName].filter(Boolean).join(" ") || "(nothing)"
-          }”. The name has been left as it was on screen; change it in GoHighLevel.`,
-          status: 502,
-        } as ApiError,
-        { status: 502 },
+    // ═══ 🔴 ROUND 169 — BY THE FULL NAME, AND IT MAY CONFIRM BUT NEVER FAIL ══
+    //
+    // 🔴 THIS COMPARED THE TWO HALVES SEPARATELY AND REPORTED A WORKING RENAME
+    // AS A 502. GoHighLevel RE-SPLITS a name across firstName/lastName: sent
+    // `{ "TEST e2e 202610011527", "renamed" }` it stored the same full name
+    // split elsewhere, so both halves differed, and the detail line — which
+    // JOINS both sides before printing — showed two identical strings. The
+    // diagnostic hid the diagnosis.
+    //
+    // ⚠️ AND ROUND 134 WROTE THE RULE RIGHT BELOW THIS. It gave `phoneKey` to
+    // the phone and `emailKey` to the email and left the name on `!==` — the
+    // one field GoHighLevel actually re-normalises. Its own words: a strict
+    // comparison failing a save that worked "is a WORSE bug than the one the
+    // read-back exists to catch, because it fires on the happy path".
+    //
+    // 🔴 AND IT NO LONGER FAILS THE REQUEST. The paragraph that used to sit
+    // here argued it must, because "a 200 with the old name in it would leave
+    // the new spelling on screen over the old one in GoHighLevel" — and that
+    // stopped being true when the client stopped painting optimistically. It
+    // reads `j.firstName ?? firstName` from this response (app/page.tsx:4587,
+    // under a comment saying the read-back is what decides), so a 200 carrying
+    // the OLD name shows the OLD name. The reason to condemn was removed by the
+    // code below it.
+    //
+    // ⚠️ SO: UNCONFIRMED, NOT FAILED — round 156's shape, the one the followers
+    // route settled on. The stored value goes back either way and the panel
+    // renders THAT, so the screen cannot disagree with GoHighLevel whatever
+    // happened.
+    const nameStored = !wantsName || nameKey(after.firstName, after.lastName) === nameKey(newFirst, newLast);
+    if (wantsName && !nameStored)
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[contact-fields] rename on ${g.contactId}: sent firstName=“${newFirst}” lastName=“${newLast}”, ` +
+          `read back firstName=“${after.firstName}” lastName=“${after.lastName}”. Returned as unconfirmed.`,
       );
 
     // ═══ 🔴 ROUND 134 · AND THE READ-BACK MUST COMPARE MEANING, NOT TEXT ═════
@@ -316,7 +340,25 @@ export async function PATCH(
       );
     }
 
-    return NextResponse.json(after, { headers: { "Cache-Control": "no-store" } });
+    /**
+     * ⚠️ `after` ALREADY CARRIES firstName AND lastName — the stored split, as
+     * GoHighLevel holds it — and the panel already reads them. Round 169 adds
+     * only the flag, so a re-split is VISIBLE rather than fatal and the "how
+     * does it split Mary Ann" question answers itself on first use.
+     */
+    return NextResponse.json(
+      {
+        ...after,
+        ...(wantsName
+          ? {
+              nameConfirmed: nameStored,
+              /** What was sent, so the panel can show both when they differ. */
+              nameSent: [newFirst, newLast].filter(Boolean).join(" "),
+            }
+          : {}),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (e) {
     return errorOut(e, "Could not save the contact's fields.");
   }

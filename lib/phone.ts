@@ -65,3 +65,46 @@ export function phoneKey(input: unknown): string {
 export function emailKey(input: unknown): string {
   return String(input ?? "").trim().toLowerCase();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 169 — "IS THIS THE SAME NAME?"
+//
+// 🔴 GOHIGHLEVEL RE-SPLITS A NAME ACROSS firstName AND lastName. Sent
+// `{ firstName: "TEST e2e 202610011527", lastName: "renamed" }`, it stored the
+// same full name split somewhere else — so a read-back comparing the two halves
+// separately found both different and reported a rename that had worked as a
+// 502. The panel then reverted a correct name and told the rep to go and fix it
+// in GoHighLevel, where they would find it already correct.
+//
+// ⚠️ THIS IS ROUND 134'S RULE, APPLIED TO THE FIELD IT MISSED. That round wrote
+// "the read-back must compare MEANING, not text" into this very comparison —
+// and then gave `phoneKey` to the phone, `emailKey` to the email, and left the
+// NAME on `!==`. The one field GoHighLevel actually re-normalises.
+//
+// 🔴 IT LIVES HERE BECAUSE THIS FILE IS ALREADY WHERE "the same person" IS
+// DECIDED. `emailKey` is not a phone number either; what these share is being
+// the one rule for whether two values mean the same contact, which the file's
+// own banner says a second copy would drift from.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * A name reduced to what it MEANS: the parts joined, runs of whitespace
+ * collapsed, case and surrounding space ignored.
+ *
+ *   nameKey("Mary Ann", "Smith")   === nameKey("Mary", "Ann Smith")
+ *   nameKey("  mary   ann smith ") === nameKey("Mary Ann", "Smith")
+ *
+ * ⚠️ PUNCTUATION IS KEPT, DELIBERATELY. "O'Brien" and "OBrien" are different
+ * spellings of a surname and a rename from one to the other is a real change
+ * somebody meant — stripping punctuation the way `norm()` does elsewhere would
+ * silently confirm a write that did not happen. Only whitespace and case are
+ * noise here.
+ */
+export function nameKey(...parts: unknown[]): string {
+  return parts
+    .map((p) => String(p ?? ""))
+    .join(" ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}

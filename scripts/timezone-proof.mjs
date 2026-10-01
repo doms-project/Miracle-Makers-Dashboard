@@ -151,6 +151,72 @@ ok("🔴 …and NO unknown value ever renders empty, which is the real claim",
   ["WHATEVER_THIS_IS", "x", "A_B_C", "someNewThing"].map((v) => createdByLabel(src(v), nameOf)));
 ok("⚠️ anything naming a workflow is a Workflow",
   createdByLabel(src("WORKFLOW_SOMETHING_ELSE"), nameOf) === "Workflow");
+
+// ═══ ROUND 169 — THE REAL VALUES, READ LIVE FROM 280 CASES ══════════════════
+//
+// 🔴 EXACT NOW, NOT MECHANICAL. Round 168 had one sample and said so; the
+// fallback rendered the other two correctly by luck of their spelling, which is
+// a weaker claim than having counted them:
+//
+//     WORKFLOW_NEW  182    BULK_ACTION  74    INTEGRATION  24 (channel OAUTH)
+// 🔴 THESE FIVE ARE THE ACCOUNT'S REAL BULK-ACTION IDS, and not one of them is
+// a user — checked against the user list across all 1,474 cases. They identify
+// IMPORT BATCHES while looking exactly like GoHighLevel user ids: 20
+// characters, same alphabet.
+const BATCH_IDS = [
+  "AtX8n1VtCxpHgJpbeJLQ", "Jt5e4Wf0YJEKaO1Zeabt", "ppOahtYXadFC5y7AILOQ",
+  "KuVWgnVPbzbCXvpE6dM4", "Ffzu9TW2CCAuoJG52RTx",
+];
+const APP_ID = "65f1a2b3c4d5e6f708192a3b"; // 24 hex — one of 2 OAuth app ids
+const WF_UUID = "cb82ab6e-1111-2222-3333-444455556666";
+const withId = (v, id) => ({ sourceType: "CREATED", sourceValue: v, sourceUserId: "", sourceId: id });
+
+// ═══ 🔴 THE TRAP THE LIVE DATA SHOWED ══════════════════════════════════════
+//
+// `nameEverything` resolves EVERY id to a person — including a batch id. A
+// lookup on `internalSource.id` would therefore credit 355 imported records to
+// a colleague who had nothing to do with them, and would look completely
+// plausible on screen.
+//
+// ⚠️ ROUND 169 BRIEFLY HAD THAT LOOKUP, on the evidence that a bulk-action id
+// is 20 characters and so "may be a user". The full scan says none of the five
+// is. The shape WAS the whole evidence, and it was wrong — the same mistake as
+// gating on length, one level up: an id that RESOLVES to a user proves a
+// collision, not an author.
+const nameEverything = (id) => (id ? `Dana Ruiz` : "");
+
+ok("🔴 a BULK_ACTION whose id MATCHES A USER still reads \"Bulk action\"",
+  createdByLabel(withId("BULK_ACTION", BATCH_IDS[1]), nameEverything) === "Bulk action",
+  createdByLabel(withId("BULK_ACTION", BATCH_IDS[1]), nameEverything));
+ok("🔴 …for ALL FIVE of the account's real batch ids",
+  BATCH_IDS.every((id) => createdByLabel(withId("BULK_ACTION", id), nameEverything) === "Bulk action"),
+  BATCH_IDS.map((id) => createdByLabel(withId("BULK_ACTION", id), nameEverything)));
+ok("…and with no id at all", createdByLabel(withId("BULK_ACTION", ""), nameEverything) === "Bulk action");
+ok("🔴 INTEGRATION is \"Integration\", its app id never resolved",
+  createdByLabel(withId("INTEGRATION", APP_ID), nameEverything) === "Integration",
+  createdByLabel(withId("INTEGRATION", APP_ID), nameEverything));
+ok("🔴 WORKFLOW_NEW is \"Workflow\", its uuid never resolved",
+  createdByLabel(withId("WORKFLOW_NEW", WF_UUID), nameEverything) === "Workflow",
+  createdByLabel(withId("WORKFLOW_NEW", WF_UUID), nameEverything));
+// 🔴 ONE ASSERTION FOR THE WHOLE RULE: no source, with any id, ever becomes a
+// name. Stated once rather than three times, because the claim is about the
+// absence of a lookup and not about three separate behaviours.
+ok("🔴 NO source resolves its id to a person, whatever the id is",
+  ["WORKFLOW_NEW", "BULK_ACTION", "INTEGRATION"].every((v) =>
+    [...BATCH_IDS, APP_ID, WF_UUID].every(
+      (id) => !createdByLabel(withId(v, id), nameEverything).includes("Dana Ruiz"))));
+// ⚠️ THE CONTROL, AND IT IS STILL NEEDED. "No id becomes a name" is satisfied
+// by a function that never names anybody — so the EXPLICIT `userId` path, which
+// is GoHighLevel asserting a person rather than us inferring one, must still
+// work. It is the hand-created case, and none of these three sources carries it.
+ok("🔴 CONTROL — an explicit `userId` DOES still name the person",
+  createdByLabel(
+    { sourceType: "CREATED", sourceValue: "MANUAL", sourceUserId: "u1", sourceId: "" },
+    (id) => (id === "u1" ? "Dana Ruiz" : ""),
+  ) === "Dana Ruiz");
+ok("⚠️ …and the mechanical fallback is still there for a value this scan did not find",
+  createdByLabel(withId("SOME_FUTURE_SOURCE", ""), nameEverything) === "Some future source",
+  createdByLabel(withId("SOME_FUTURE_SOURCE", ""), nameEverything));
 // ⚠️ A uuid ON `id` IS NOT A PERSON. The live sample's internalSource.id is a
 // uuid on a WORKFLOW_NEW source, so it names the WORKFLOW.
 ok("🔴 an `id` that is not a `userId` is NOT read as a person",

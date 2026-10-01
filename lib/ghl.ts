@@ -6765,6 +6765,22 @@ export interface OppFooter {
   sourceValue: string;
   /** A GHL user id when a PERSON created the record, else "". */
   sourceUserId: string;
+  /**
+   * 🔴 ROUND 169 — `internalSource.id`, RAW, AND IT MEANS A DIFFERENT THING PER
+   * SOURCE. Round 168 discarded it, correctly, because the only sample was a
+   * WORKFLOW_NEW whose id is a uuid naming the WORKFLOW — reading it as a user
+   * would have credited a workflow to whoever happened to match.
+   *
+   * ⚠️ 280 LIVE CASES LATER IT IS WORTH CARRYING, AND ONLY ONE SOURCE MAY READ
+   * IT AS A PERSON:
+   *
+   *     WORKFLOW_NEW  182   uuid           the workflow
+   *     BULK_ACTION    74   20 characters  MAY be a user — looked up
+   *     INTEGRATION    24   24-hex         an app id, NEVER a person
+   *
+   * The label layer decides; this just stops throwing the value away.
+   */
+  sourceId: string;
 }
 
 /**
@@ -6823,6 +6839,7 @@ export async function getOpportunityWithFooter(
       // the only key that could mean one. Guessing that a uuid is a person is
       // how a workflow ends up credited to whoever happens to match.
       sourceUserId: src && src.userId ? String(src.userId) : "",
+      sourceId: src && src.id ? String(src.id) : "",
     },
   };
 }

@@ -2199,3 +2199,13 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* A timestamp must not wrap mid-value — "Sep 30 2026," on one line and
    "11:34pm" on the next reads as two dates. */
 .createdcell{white-space:nowrap;font-size:11.5px;color:var(--ink-2)}
+
+/* ═══ ROUND 169 — "SAVED, BUT DIFFERENTLY" ══════════════════════════════════
+   🔴 NOT `.savemsg` AND NOT <ErrorMessage>'s STYLING. The first is "Saving…",
+   ephemeral grey chrome; the second is red and says the save failed. This one
+   says the save WORKED and the result differs from what was typed — amber, the
+   same language `.rfdivtag-none` uses for "this is worth a look, nothing is
+   broken". Swept: no `.savewarn` existed. */
+.savewarn{margin-top:5px;font-size:11px;line-height:1.5;color:var(--gold-ink);
+  background:var(--gold-soft);border:1px solid #f0dcb4;border-radius:6px;padding:5px 8px}
+.savewarn b{color:var(--gold-ink)}
