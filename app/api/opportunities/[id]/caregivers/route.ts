@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getOpportunityById,
+  getSelectedPipelines,
   listCaregiverRelations,
   createCaregiverRelation,
   deleteCaregiverRelation,
@@ -22,7 +23,7 @@ async function authorize(
   id: string,
   blob: string | null,
 ): Promise<
-  | { ok: true; contactId: string }
+  | { ok: true; contactId: string; pipelineId: string }
   | { ok: false; res: NextResponse }
 > {
   let session: Session = null;
@@ -70,7 +71,10 @@ async function authorize(
         { status: 400 },
       ),
     };
-  return { ok: true, contactId: target.contactId };
+  // ⚠️ ROUND 170 — THE PIPELINE TRAVELS WITH THE CONTACT. The POST has to know
+  // whether the record it is called on is a CLIENT or a CAREGIVER, and the
+  // pipeline is the server's own answer to that — see the note at the write.
+  return { ok: true, contactId: target.contactId, pipelineId: target.pipelineId };
 }
 
 function fail(e: unknown): NextResponse {
@@ -135,9 +139,33 @@ async function postHandler(
         { error: "caregiverContactId is required." } as ApiError,
         { status: 400 },
       );
+    // ═══ 🔴 ROUND 170 — WHICH SIDE AM I ON? ══════════════════════════════
+    //
+    // This passed `(a.contactId, body.caregiverContactId)` into a function whose
+    // first parameter was called `clientContactId` — true on a client's panel
+    // and false on a caregiver's, where the open record IS the caregiver. The
+    // live result: an applicant linked from the CLIENT's panel stored the
+    // client in the caregiver slot, and /api/relations/counts answered
+    // `{"caregivers":0,"clients":1}` for that client.
+    //
+    // 🔴 DECIDED FROM THE PIPELINE, NOT FROM A ROLE THE CLIENT SENDS. The
+    // browser knows which side it is on (`selfRole` in CaregiversSection, "by
+    // WHICH PAYLOAD the record came from") — but a role posted by a browser is
+    // a claim, and getting it wrong writes a reversed link that nobody notices
+    // for forty rounds. The pipeline's recruiting group is the server's own
+    // answer and cannot be spoofed.
+    //
+    // ⚠️ AND IT IS `recruitingGroup`, WHICH HAD NO CALLERS UNTIL NOW. It was
+    // written in round 113/114 as the one place the caregiver/staff default
+    // lives, precisely so a rule each consumer remembers cannot drift.
+    const cgPipes = await getSelectedPipelines("caregiver").catch(() => []);
+    const openRecordIsCaregiver = cgPipes.some((p) => p.id === a.pipelineId);
     const relationId = await createCaregiverRelation(
-      a.contactId,
-      body.caregiverContactId,
+      openRecordIsCaregiver
+        ? // The open record is the CAREGIVER, so the picked contact is the client.
+          { caregiverContactId: a.contactId, clientContactId: body.caregiverContactId }
+        : // The ordinary case: a client's panel, picking their caregiver.
+          { clientContactId: a.contactId, caregiverContactId: body.caregiverContactId },
     );
     const caregivers = await listCaregiverRelations(a.contactId);
     return NextResponse.json(

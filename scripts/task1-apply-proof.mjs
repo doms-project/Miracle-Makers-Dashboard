@@ -292,7 +292,22 @@ reset(); fresh();
 r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", UNMAPPED));
 console.log(`  -> skipped=${r.skipped} "${r.why}"`);
 ok("it skips", r.skipped === true, r);
-ok("⚠️ saying both halves of why", /no entry in the map and this function added nothing/.test(r.why), r.why);
+// ═══ ROUND 170 — THE PROPERTY, NOT THE PHRASE ══════════════════════════════
+//
+// 🔴 THIS READ ONE LITERAL SENTENCE — "no entry in the map and this function
+// added nothing" — and round 170 changed the wording to name the owner, so it
+// went red against working code. What the assertion is NAMED for is "both
+// halves of why": that the owner is unmapped, AND that nothing was added. Both
+// halves still hold; only the connective moved. Same trap round 128 set twice
+// with `divisions={eventDivisions}`.
+ok("⚠️ saying both halves of why — unmapped, AND nothing added",
+   /no entry in the/i.test(r.why) && /added nothing/i.test(r.why), r.why);
+// 🔴 AND ROUND 170'S OWN REQUIREMENT, asserted where the message is: 21 of 26
+// users are unmapped, so this is the commonest line in the webhook log, and
+// "that owner" was not something anybody could act on. The NAME is who to ask;
+// the ID is what the Access tab's map is keyed on.
+ok("🔴 ROUND 170 — and it names the owner AND their id",
+   /Ern Holden/.test(r.why) && new RegExp(UNMAPPED).test(r.why), r.why);
 ok("🔴 the co-rep is untouched and the field is never written",
    followers().join() === HUMAN_ADDED && cf(CM_FIELD) === null, { f: followers(), cm: cf(CM_FIELD) });
 ok("🔴 and NOT ONE WRITE was sent", !S.writes.some((w) => w.what === "followers" || w.what === "put"), S.writes);
@@ -504,8 +519,11 @@ console.log("\n7d · ⚠️ AND AN UNMAPPED OWNER ON A CLIENT PIPELINE STILL SAY
 reset(); fresh();
 r = await withMap(REAL_MAP, () => ghl.applyCaseManagers("o1", UNMAPPED));
 console.log(`  -> "${r.why}"`);
+// ⚠️ ROUND 170 — `no entry in the map` BECAME `no entry in the case-manager
+// map`. The control's claim is which of the three reasons is given — the MAP,
+// not the pipeline scope — so it tests that, and not the exact noun phrase.
 ok("🔴 THE CONTROL — a client pipeline with an unmapped owner blames the MAP",
-   /no entry in the map/.test(r.why) && !/client-scoped/.test(r.why), r.why);
+   /no entry in the (case-manager )?map/.test(r.why) && !/client-scoped/.test(r.why), r.why);
 
 console.log("\n═══ 8 · 🔴 ROUND 151 — A 200 THAT STORED NOTHING ═══");
 // 🔴 THE CASE THIS WHOLE FILE WAS GREEN AGAINST. Eleven rounds at 63/63 while
