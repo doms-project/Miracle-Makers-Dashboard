@@ -9,6 +9,7 @@ import {
   getEditableFieldDefs,
   getOltlOpportunities,
   upsertContact,
+  ensureContact,
   createOpportunity,
   latestContactNoteAt,
   listContactNotes,
@@ -1332,6 +1333,27 @@ export async function POST(request: Request) {
         // WRITE 1 — the client's contact.
         const cPhone = clean(body.phone);
         const cEmail = clean(body.email);
+        // ═══════════════════════════════════════════════════════════════════
+        // ⚠️ ROUND 166 — DELIBERATELY STILL `upsertContact`, AND THAT IS NOT AN
+        // OVERSIGHT.
+        //
+        // The other three contact writes in this file moved to `ensureContact`,
+        // which falls back to a name-only create when there is no phone and no
+        // email. This one did not, because the question it raises is a BUSINESS
+        // question and not a technical one: may a CLIENT exist with no way to
+        // contact them?
+        //
+        // A venue with no phone number is normal. A partner organisation you
+        // have only a name for is normal. A client referral with neither is a
+        // lead nobody can follow up, and silently creating it would put a
+        // record into the enrolment pipeline that looks workable and is not.
+        //
+        // 🔴 SO THE BEHAVIOUR IS UNCHANGED ON PURPOSE: with neither key this
+        // still fails, and the owner decides whether it should. Round 164's
+        // report names it; this comment is here so the next person reading the
+        // four call sites does not "finish the job" and answer the question by
+        // accident.
+        // ═══════════════════════════════════════════════════════════════════
         const contact = await upsertContact({
           firstName: clean(body.firstName),
           lastName: clean(body.lastName),
@@ -1573,27 +1595,63 @@ export async function POST(request: Request) {
         const rtV =
           defsV.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
           PARTNER_FIELDS.recordType.id;
-        const [nameHits, partnersNow] = await Promise.all([
-          searchContacts(venue),
-          ghlSearchContacts(rtV, PARTNER_RECORD_TYPE),
-        ]);
-        const partnerIds = new Set(partnersNow.rows.map((r) => r.id));
-        const reuse = nameHits.find(
-          (c) => norm(c.name) === norm(venue) && c.id !== hostId && !partnerIds.has(c.id),
-        );
-        let venueContactId = reuse?.id || "";
-        if (!venueContactId) {
-          // ⚠️ NO Record Type. The picklist holds "Referral Partner" and "Event
-          // Attendee" and nothing else; writing a third value into a
-          // SINGLE_OPTIONS field is unverified against this account, and a
-          // venue must not read as either of the two that exist. Leaving it
-          // unset keeps the venue out of both searches, which is correct — the
-          // app never lists venues.
-          const made = await upsertContact({
+        // 🔴 ROUND 166 — ONE CALL, AND IT NO LONGER USES THE WRONG ENDPOINT.
+        //
+        // This block used to search, pick a reusable hit, and then fall through
+        // to `upsertContact({ name, source })` — which GoHighLevel refuses with
+        // 400 "Pass at least one of number, email query parameter", because an
+        // upsert needs a deduplication key and a venue has neither. So "Add an
+        // event" has failed for EVERY NEW VENUE since round 124 shipped it, and
+        // only ever succeeded down the reuse path.
+        //
+        // `ensureContact` holds the whole decision now (lib/ghl.ts): a key
+        // means upsert, no key means search-then-create. The exclusion list is
+        // the only venue-specific part, and it stays here because it is data
+        // rather than policy.
+        const partnersNow = await ghlSearchContacts(rtV, PARTNER_RECORD_TYPE);
+        let venueContactId = "";
+        let venueHow: "upserted" | "reused" | "created" = "created";
+        try {
+          const got = await ensureContact({
             name: venue,
             source: "Event venue",
+            // ⚠️ NO Record Type. The picklist holds "Referral Partner" and
+            // "Event Attendee" and nothing else; writing a third value into a
+            // SINGLE_OPTIONS field is unverified against this account, and a
+            // venue must not read as either of the two that exist. Leaving it
+            // unset keeps the venue out of both searches, which is correct —
+            // the app never lists venues.
+            //
+            // 🔴 AND NEVER REUSE A PARTNER, OR THE HOST. Venue names and
+            // partner names overlap constantly — "Riddle Hospital" is both a
+            // plausible venue and an actual partner on this account — and
+            // attaching the event to the PARTNER's contact is the exact bug
+            // round 124 exists to remove.
+            // 🔴 A VENUE IS A PLACE, SO ITS NAME IDENTIFIES IT. Two events at
+            // "Delco Expo Centre" are two events at one address; without reuse
+            // the account grows a contact per event for the same hall.
+            nameIdentifies: true,
+            excludeIds: [...partnersNow.rows.map((r) => r.id), ...(hostId ? [hostId] : [])],
           });
-          venueContactId = made.id;
+          venueContactId = got.id;
+          venueHow = got.how;
+        } catch (e) {
+          // 🔴 TRANSLATED, AND IT SAYS NOTHING WAS CREATED. Every other refusal
+          // in this handler ends with that sentence; this path reached the
+          // screen as a bare "Could not save." plus GoHighLevel's wording about
+          // a query parameter, which is why it read as a crash rather than a
+          // thing with a cause. Nothing before this point writes — the
+          // pipeline, the field defs, the clash check and both searches are all
+          // reads — so the claim is true and not a hope.
+          const d = e instanceof GhlError ? e : null;
+          return NextResponse.json(
+            {
+              error: `The venue "${venue}" could not be saved as a contact.`,
+              detail: `${d?.detail || (e instanceof Error ? e.message : String(e))} Nothing was created.`,
+              status: d?.status === 422 || d?.status === 400 ? 400 : 502,
+            } as ApiError,
+            { status: d?.status === 422 || d?.status === 400 ? 400 : 502 },
+          );
         }
         if (!venueContactId)
           return NextResponse.json(
@@ -1627,7 +1685,13 @@ export async function POST(request: Request) {
           eventId: oppId,
           pipelineName: evPipe.name,
           venueContactId,
-          venueReused: !!reuse,
+          // ⚠️ ROUND 166 — NOW THREE-VALUED, NOT A BOOLEAN. `venueReused` was
+          // `!!reuse`, which could only say "an existing contact" or "a new
+          // one" — and a new one was the case that never actually worked. The
+          // word says which of the three paths ran, so a response that looks
+          // successful can be told apart from one that was.
+          venueContact: venueHow,
+          venueReused: venueHow === "reused",
           skipped: missing,
         });
       }
@@ -1897,7 +1961,20 @@ export async function POST(request: Request) {
           }
         }
 
-        const c = await upsertContact({
+        // 🔴 ROUND 166 — ensureContact, FOR THE SAME REASON AS THE VENUE. This
+        // passed phone and email CONDITIONALLY, so a person met at an event
+        // whose card you never got — a name and nothing else — hit the same
+        // 400 "Pass at least one of number, email query parameter" as the
+        // venue path. Latent rather than certain, which is why it went
+        // unnoticed: most attendees have a phone.
+        const c = await ensureContact({
+          // 🔴 A PERSON'S NAME DOES NOT IDENTIFY THEM, so with no phone and no
+          // email this ALWAYS creates. Two people called Nina met at two
+          // different events are two different people, and reusing on a
+          // first-name match would file the second one's outcome onto the
+          // first one's record — a wrong merge, which is worse than a visible
+          // duplicate. Venues and partners are the opposite case and say so.
+          nameIdentifies: false,
           firstName,
           lastName: clean(body.lastName),
           name: `${firstName} ${clean(body.lastName)}`.trim() || phone,
@@ -1986,7 +2063,22 @@ export async function POST(request: Request) {
         const pEmail = clean(body.email);
         const pPhone = clean(body.phone);
         const pOwner = clean(body.owner);
-        const c = await upsertContact({
+        // 🔴 ROUND 166 — ensureContact. An organisation is exactly the case
+        // that has a name and often nothing else: "Main Line Health" with no
+        // switchboard number yet is a perfectly ordinary partner to add, and
+        // it hit the same refusal as the venue.
+        //
+        // ⚠️ `name` IS THE ORG, AND IT BECOMES firstName WHEN THERE IS NO KEY.
+        // That is deliberate and it is what the live probe showed works —
+        // `name` alone is refused by the create endpoint, `firstName` is
+        // accepted. The org is not split across firstName/lastName: see the
+        // note on createContact.
+        const c = await ensureContact({
+          // 🔴 AN ORGANISATION'S NAME IDENTIFIES IT. "Main Line Health" is one
+          // company however many times it is typed, so an exact match is the
+          // same partner. The duplicate check above already refuses an obvious
+          // re-add; this stops a second CONTACT for one that slips past it.
+          nameIdentifies: true,
           firstName: clean(body.firstName),
           lastName: clean(body.lastName),
           name: org,

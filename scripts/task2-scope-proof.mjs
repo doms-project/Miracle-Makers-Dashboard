@@ -160,8 +160,22 @@ const server = http.createServer((req, res) => {
       }], meta: { total: 1 } });
     }
 
-    if (path === "/contacts/upsert" || path === "/contacts/")
+    // ROUND 166 — GHL's two contact rules; see round124-proof for the full note.
+    // ⚠️ THIS ONE ALREADY ROUTED BOTH PATHS TO ONE PERMISSIVE ANSWER, which hid
+    // that they have DIFFERENT requirements: the upsert needs a dedup key, the
+    // create needs any one of four fields.
+    if (path === "/contacts/upsert") {
+      if (!j?.email && !j?.phone)
+        return send(400, { message: "Pass at least one of number, email query parameter" });
       return send(200, { contact: { id: "c_new" } });
+    }
+    if (path === "/contacts/") {
+      if (!j?.email && !j?.phone && !j?.firstName && !j?.lastName)
+        return send(422, {
+          message: "Contacts without email, phone, firstName and lastName are not allowed.",
+        });
+      return send(200, { contact: { id: "c_new" } });
+    }
     if (path === "/opportunities/" && req.method === "POST")
       return send(200, { opportunity: { id: "o_new", pipelineId: j?.pipelineId } });
     if (/^\/contacts\/[^/]+\/notes$/.test(path)) return send(200, { note: { id: "n1" } });
@@ -299,6 +313,13 @@ ok("🔴 and §4 withholds the OLTL partner from a viewer holding nothing — an
 console.log("\n═══ 2 · 🔴 THE WRITE — THE CONTROL AND THE REFUSAL IN THE SAME RUN ═══");
 const enquiry = (pipelineId, division) => ({
   action: "log-referral", partnerId: "p1", firstName: "New", lastName: "Enquiry",
+  // ⚠️ ROUND 166 — THE PHONE IS NEW AND IT IS NOT DECORATION. Every assertion
+  // below is about PIPELINE SCOPING. Without a phone or an email GoHighLevel
+  // refuses the contact outright — the fake now says so, correctly — and all
+  // four would be measuring the contact rule instead of the thing they name.
+  // One fixture standing for two independent claims is rule 4; the no-key case
+  // is asserted on its own, in scripts/contact-create-proof.mjs.
+  phone: "+15551230001",
   ...(pipelineId ? { pipelineId } : {}), ...(division ? { division } : {}),
 });
 

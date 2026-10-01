@@ -101,7 +101,19 @@ const server = http.createServer((req, res) => {
           customFields: [{ id: RT, value: "Referral Partner" }, { id: PDIV, value: "Private Pay" }] }], total: 1 });
       return json(res, 200, { contacts: [], total: 0 });
     }
-    if (path === "/contacts/upsert") return json(res, 200, { contact: { id: "c_new" }, new: true });
+    // ROUND 166 — GHL's two contact rules; see round124-proof for the full note.
+    if (path === "/contacts/upsert") {
+      if (!body?.email && !body?.phone)
+        return json(res, 400, { message: "Pass at least one of number, email query parameter" });
+      return json(res, 200, { contact: { id: "c_new" }, new: true });
+    }
+    if (path === "/contacts/" && req.method === "POST") {
+      if (!body?.email && !body?.phone && !body?.firstName && !body?.lastName)
+        return json(res, 422, {
+          message: "Contacts without email, phone, firstName and lastName are not allowed.",
+        });
+      return json(res, 200, { contact: { id: "c_made" } });
+    }
     if ((path === "/opportunities" || path === "/opportunities/") && req.method === "POST") {
       opps.push(body);
       return json(res, 200, { opportunity: { id: `o${opps.length}` } });

@@ -3856,6 +3856,196 @@ export async function upsertContact(fields: {
   return { id: res.contact?.id || "", isNew: res.new !== false };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 166 — A CONTACT THAT HAS ONLY A NAME.
+//
+// 🔴 THE BUG THIS FIXES SHIPPED IN ROUND 124 AND NEVER WORKED ONCE. "Add an
+// event" makes the VENUE a contact so a partner can host more than one event,
+// and it created that contact through `upsertContact` with a name and nothing
+// else. GoHighLevel refuses:
+//
+//     400  Pass at least one of number, email query parameter
+//
+// ⚠️ AND THIS CODEBASE ALREADY KNEW. Round 133 wrote that exact sentence into
+// `ContactFieldsRead.email`'s doc comment — "GoHighLevel will not create a
+// contact without one of them" — nine rounds after round 124 shipped against
+// it, and nobody swept the finding back over the path that was already live.
+//
+// ✅ THE WAY THROUGH, PROBED LIVE ON 1 OCTOBER:
+//
+//     POST /contacts/  { locationId, name }       -> 422 "Contacts without
+//                        email, phone, firstName and lastName are not allowed."
+//     POST /contacts/  { locationId, firstName }  -> created (twice, same)
+//
+// So `name` is not one of the four fields that count, and `firstName` is. The
+// create endpoint needs ONE of email / phone / firstName / lastName; the UPSERT
+// endpoint is stricter and needs a deduplication key, which is a different
+// requirement and the reason both functions exist below.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** GoHighLevel's refusal when none of the four identifying fields is sent. */
+const CREATE_NEEDS_A_NAME = 422;
+
+/**
+ * Create a contact outright. No deduplication — see `ensureContact`.
+ *
+ * 🔴 THE NAME IS SENT AS `firstName`, ALWAYS, AND IT IS NOT SPLIT. A venue is
+ * "Delco Expo Centre" and a partner is "Main Line Health": one string naming
+ * one thing. Splitting on the first space would file a lastName of "Expo
+ * Centre" and a firstName of "Delco", which is wrong in the data and wrong on
+ * every screen that reads it back. Callers with a real person's two names pass
+ * them explicitly.
+ */
+export async function createContact(fields: {
+  /** The display name. Becomes `firstName` unless `firstName` is given. */
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  source?: string;
+  assignedTo?: string;
+  customFields?: { id: string; value: unknown }[];
+}): Promise<{ id: string }> {
+  const { locationId } = requireEnv();
+  const first = (fields.firstName || fields.name || "").trim();
+  const body: Record<string, unknown> = { locationId };
+  if (first) body.firstName = first;
+  for (const k of ["lastName", "email", "phone", "source", "assignedTo"] as const)
+    if (fields[k]) body[k] = fields[k];
+  if (fields.customFields?.length) body.customFields = fields.customFields;
+
+  // ⚠️ REFUSED HERE RATHER THAN BY GOHIGHLEVEL. With nothing to put in any of
+  // the four fields the 422 is certain, and a local refusal names the thing
+  // that is missing instead of quoting an endpoint nobody called.
+  if (!first && !fields.lastName && !fields.email && !fields.phone)
+    throw new GhlError(
+      "A contact needs a name, a phone number or an email address.",
+      400,
+      "GoHighLevel refuses a contact with none of firstName, lastName, phone or email. Nothing was sent.",
+      { code: "CONTACT_NEEDS_IDENTITY" },
+    );
+
+  try {
+    const res = await ghlSend<{ contact?: { id?: string }; id?: string }>(
+      "POST",
+      "/contacts/",
+      body,
+    );
+    return { id: String(res.contact?.id || res.id || "") };
+  } catch (e) {
+    // 🔴 THE 422 IS TRANSLATED, NOT PASSED THROUGH. What reached the screen
+    // before this round was GoHighLevel's own wording about a "query
+    // parameter", on a dialog that has no such thing — unreadable to the
+    // person who hit it and unsearchable in this repo.
+    if (e instanceof GhlError && e.status === CREATE_NEEDS_A_NAME)
+      throw new GhlError(
+        "GoHighLevel would not create that contact.",
+        422,
+        `It needs at least one of a first name, last name, phone number or email address. GoHighLevel said: "${e.detail || ""}". Nothing was created.`,
+        { code: "CONTACT_NEEDS_IDENTITY" },
+      );
+    throw e;
+  }
+}
+
+export interface EnsureContactResult {
+  id: string;
+  /**
+   * How the id was obtained. Carried out to the route so a response can say
+   * what happened rather than only that it worked.
+   */
+  how: "upserted" | "reused" | "created";
+}
+
+/**
+ * Get a contact id for `name`, whatever identifying fields are available.
+ *
+ * 🔴 ONE DECISION, ONE PLACE. Three call sites needed this and each had its own
+ * half of it — which is how the venue path ended up calling the one endpoint
+ * that cannot serve it. The rule:
+ *
+ *   a phone or an email  -> UPSERT. GoHighLevel deduplicates on that key, which
+ *                           is the whole reason to prefer it: the same person
+ *                           added twice is one contact.
+ *   neither              -> SEARCH by name, reuse an EXACT match, else CREATE
+ *                           — but ONLY where the name identifies the thing.
+ *                           See `nameIdentifies`: a person's name does not.
+ *
+ * ⚠️ THE SEARCH IS A WEAKER DEDUPLICATION THAN THE UPSERT, AND KNOWINGLY SO.
+ * `/contacts/search` is an index and it lags a few seconds behind a create, so
+ * two name-only adds in quick succession can both miss and both create. That is
+ * accepted rather than papered over: the alternative is refusing the second add
+ * on a read we already know can be stale, and round 156 settled that a stale
+ * read may confirm but must never condemn.
+ *
+ * ⚠️ MATCHED ON THE EXACT NAME, NOT ON THE SEARCH RANKING. `/contacts/search`
+ * is a candidate generator — it matches substrings — so "Riddle" would return
+ * "Riddle Hospital" and reusing the top hit would attach a new venue to an
+ * existing one.
+ */
+export async function ensureContact(fields: {
+  name: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  source?: string;
+  assignedTo?: string;
+  customFields?: { id: string; value: unknown }[];
+  /**
+   * 🔴 DOES THE NAME IDENTIFY THE THING? REQUIRED, WITH NO DEFAULT, BECAUSE
+   * BOTH ANSWERS ARE RIGHT SOMEWHERE AND THE WRONG ONE MERGES TWO PEOPLE.
+   *
+   *   true   a VENUE or a PARTNER ORGANISATION. "Delco Expo Centre" is one
+   *          place and "Main Line Health" is one company, so an exact name
+   *          match IS the same thing — without reuse a venue accumulates one
+   *          contact per event.
+   *
+   *   false  a PERSON. Two people called Nina, met at two different events,
+   *          are two different people — and a first-name match would file the
+   *          second one's outcome onto the first one's record. With no phone
+   *          and no email nothing identifies them, so a new contact is created
+   *          every time and the duplicate stays VISIBLE rather than being
+   *          silently merged into a stranger.
+   *
+   * ⚠️ NO DEFAULT ON PURPOSE. Defaulting to `true` would hand the dangerous
+   * answer to any new caller who says nothing; defaulting to `false` would
+   * quietly bring back the duplicate venues. The compiler asks instead.
+   */
+  nameIdentifies: boolean;
+  /**
+   * Contacts that must never be reused, by id. The venue path passes every
+   * partner: venue names and partner names overlap constantly, and attaching
+   * an event to the PARTNER's contact is the bug round 124 existed to remove.
+   */
+  excludeIds?: readonly string[];
+}): Promise<EnsureContactResult> {
+  const { excludeIds, nameIdentifies, ...rest } = fields;
+
+  if (fields.email || fields.phone) {
+    const up = await upsertContact(rest);
+    return { id: up.id, how: "upserted" };
+  }
+
+  const want = (fields.name || "").trim();
+  if (nameIdentifies && want) {
+    const exclude = new Set(excludeIds || []);
+    const hits = await searchContacts(want).catch(() => []);
+    const match = hits.find(
+      (c) => normName(c.name) === normName(want) && !exclude.has(c.id),
+    );
+    if (match) return { id: match.id, how: "reused" };
+  }
+
+  const made = await createContact(rest);
+  return { id: made.id, how: "created" };
+}
+
+/** Name comparison for reuse: case, spacing and punctuation insensitive. */
+const normName = (s: string): string =>
+  (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
 // ---------------------------------------------------------------------------
 // ITEM 4 — the hybrid picker's write half.
 //
