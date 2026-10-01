@@ -118,6 +118,27 @@ async function postHandler(request: Request) {
         { error: "First and last name are required.", status: 400 } as ApiError,
         { status: 400 },
       );
+    // ═══ ROUND 167 — A WAY TO REACH THEM IS REQUIRED ═══════════════════════
+    //
+    // 🔴 THE SAME DECISION AS "LOG A REFERRAL", AND IT HAS TO BE THE SAME. Both
+    // create a client somebody will ring or email, so one accepting a lead with
+    // no contact detail while the other refuses would be two answers to one
+    // question — and round 166's sweep found this call site precisely because
+    // the two had drifted apart without anyone choosing.
+    //
+    // ⚠️ REFUSED BEFORE THE FIRST WRITE. GoHighLevel refuses it too, with
+    // "Pass at least one of number, email query parameter" — about an endpoint
+    // the rep never called and a parameter this dialog does not have. Every
+    // step above this line is a read, so "Nothing was created" is true.
+    if (!email && !phone)
+      return NextResponse.json(
+        {
+          error: "Add a phone number or an email — we need a way to reach them.",
+          detail: "Nothing was created.",
+          status: 400,
+        } as ApiError,
+        { status: 400 },
+      );
     if (!body.pipelineId)
       return NextResponse.json(
         { error: "Pick a pipeline.", status: 400 } as ApiError,

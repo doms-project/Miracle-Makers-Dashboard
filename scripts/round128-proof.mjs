@@ -145,10 +145,29 @@ ok("🔴 the menu no longer maps the hardcoded list",
 // not name a division the account cannot have — survives intact, and still owns
 // the two create dialogs below.
 ok("it maps a derived list instead", /divisionChoices[^\n]*\.map\(/.test(code), "no derived list");
-ok("🔴 the event dialog is given the EVENT field's options",
-   /<AddEventDialog[\s\S]{0,400}divisions=\{eventDivisions\}/.test(code), "still the partner list");
-ok("and the partner dialog the partner field's",
-   /<AddPartnerDialog[\s\S]{0,400}divisions=\{partnerDivisions\}/.test(code), "wrong list");
+// ═══ ROUND 167 — THE PROPERTY, NOT THE SPELLING. AGAIN. ════════════════════
+//
+// 🔴 THESE READ `divisions={eventDivisions}` AND `divisions={partnerDivisions}`
+// EXACTLY, and round 167 renamed both props to `…Mine` — the lists are now
+// intersected with the viewer's referral access, so a rep cannot be offered a
+// division they would not then be able to see. The claim round 128 makes is
+// unchanged and both halves of it still hold; only the identifier moved.
+//
+// ⚠️ THE NOTE TWENTY LINES ABOVE SAYS THIS ALREADY HAPPENED ONCE — "pinned to a
+// literal I later improved, which is the recurring one". Re-pinning to the new
+// name would set the same trap for round 168, so the test is now what round 128
+// actually cares about: the event dialog gets a list DERIVED FROM THE EVENT
+// FIELD and the partner dialog one derived from the PARTNER field, whatever
+// either is called.
+const propOf = (tag) =>
+  (new RegExp(`<${tag}[\\s\\S]{0,600}?divisions=\\{([A-Za-z0-9_]+)\\}`).exec(code) || [])[1] || "";
+const evProp = propOf("AddEventDialog");
+const pProp = propOf("AddPartnerDialog");
+ok("🔴 the event dialog is given a list derived from the EVENT field",
+   /^eventDivisions/.test(evProp), evProp || "no divisions prop found");
+ok("and the partner dialog one derived from the PARTNER field",
+   /^partnerDivisions/.test(pProp), pProp || "no divisions prop found");
+ok("🔴 …and they are not the same list", evProp !== pProp, { evProp, pProp });
 ok("⚠️ a choice that is no longer offered is clamped back to All",
    /!divisionChoices\.includes\(division\)\)\s*\n?\s*setDivision\(ALL_DIVISIONS\)/.test(code),
    "no clamp");

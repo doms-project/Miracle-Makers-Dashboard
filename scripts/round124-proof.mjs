@@ -320,8 +320,27 @@ ok("and it says what to do instead", /Rename the venue/i.test(clash.body.detail 
 ok("🔴 nothing was created", !opps.some((o) => o.name === "Autumn Fair 2"), opps.map((o) => o.name));
 
 console.log("\n  …and a venue is required, because it IS the contact:");
-const noVenue = await post({ action: "add-event", org: "Nowhere", partnerId: "p_riddle", venue: "" });
+// ⚠️ ROUND 167 — THE DIVISION IS NEW HERE AND IT IS NOT PADDING. An event now
+// needs one, and that check runs BEFORE the venue check — so without this the
+// assertion below measured the division message while claiming to measure the
+// venue one. One fixture, two requirements, and the failure names the wrong
+// field: rule 4.
+const noVenue = await post({
+  action: "add-event", org: "Nowhere", partnerId: "p_riddle", venue: "", division: "OLTL",
+});
 ok("an event with no venue is refused", noVenue.status === 400, noVenue.body);
+// ═══ ROUND 167 — AND THE DIVISION IS REQUIRED TOO ═══════════════════════════
+// 🔴 ASSERTED HERE BECAUSE THIS IS WHERE IT DISPLACED SOMETHING. An event saved
+// with no division is shown to EVERY viewer (inDivision), which is how one OLTL
+// event put "OLTL" on an ODP-only viewer's heading. Round 143 made the same
+// field required on a partner; the event dialog was never brought into line.
+const noDiv = await post({
+  action: "add-event", org: "Nowhere", partnerId: "p_riddle", venue: "Somewhere Hall", division: "",
+});
+ok("🔴 ROUND 167 — an event with no division is refused", noDiv.status === 400, noDiv.body);
+ok("…and it says what would happen without one",
+   /shown to everybody/i.test(noDiv.body.detail || ""), noDiv.body.detail);
+ok("…and nothing was created", !opps.some((o) => o.name === "Nowhere"), opps.map((o) => o.name));
 ok("and it explains why the venue matters", /becomes a contact/i.test(noVenue.body.detail || ""),
    noVenue.body.detail);
 

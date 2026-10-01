@@ -236,6 +236,11 @@ if (NOPIPES) {
   // go and ask an admin for a grant that cannot exist.
   const rr = await post(ADMIN, {
     action: "log-referral", partnerId: "p1", firstName: "New", lastName: "Enquiry",
+    // ⚠️ ROUND 167 — THE PHONE IS NEW. A referral now needs a phone or an email
+    // (someone we will contact needs a way to be reached), and that check runs
+    // before the pipeline-configuration check these two assertions are about.
+    // Without it both measured the contact rule while naming the 409/403 one.
+    phone: "+15551239999",
   });
   console.log(`  -> ${rr.status} "${rr.body.error}"`);
   ok("🔴 409, not 403 — nothing exists, so nothing is being withheld",

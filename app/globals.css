@@ -2160,3 +2160,19 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    not sit beside a recorded one looking identical. */
 .mage.approx{border-style:dashed;color:var(--ink-3)}
 .mage.stale.approx{color:var(--blk);border-color:#f3c6bf;border-style:dashed}
+
+/* ═══ ROUND 167 · B8 — WHY YOU CAN SEE THIS PARTNER OR EVENT ════════════════
+   ⚠️ `rf`-PREFIXED like everything else in the Referrals section, for the
+   reason at the top of that block. Swept before writing: no `.rfdivtag` existed.
+   🔴 THE ORDINARY CASE IS QUIET AND THE TWO LEAKS ARE NOT. "ODP" is a fact and
+   reads as one; "No division · visible to everyone" is a thing somebody should
+   fix, so it carries the same warning colour the withheld note uses. A tag that
+   looked identical in all four states would be decoration. */
+.rfdivtag{display:inline-block;margin:3px 0 0;padding:1px 7px;border-radius:20px;
+  font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  background:var(--plum-soft);color:var(--plum);border:1px solid var(--plum-line)}
+.rfdivtag-all{background:var(--line-soft);color:var(--ink-2);border-color:var(--line)}
+.rfdivtag-none{background:var(--wait-soft);color:var(--wait);border-color:#f0dcb4;
+  text-transform:none;letter-spacing:0;font-size:10px}
+.rfdivtag-mine{background:var(--gold-soft);color:var(--gold-ink);border-color:#f0dcb4;
+  text-transform:none;letter-spacing:0;font-size:10px}

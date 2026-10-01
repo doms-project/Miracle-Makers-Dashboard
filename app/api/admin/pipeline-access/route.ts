@@ -6,9 +6,11 @@ import {
   saveAccessGrantsV2,
   listMediaFolders,
   getPipelineConfig,
+  getEditableFieldDefs,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
+import { PARTNER_FIELDS } from "@/lib/referrals";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import type { ApiError } from "@/lib/types";
@@ -145,6 +147,34 @@ export async function GET(request: Request) {
           // the Pipelines screen, and the badge now says so.
           notLoadedWhy: loadedReason(p.id) || undefined,
         })),
+        /**
+         * ═══ ROUND 167 · D12 — THE DIVISIONS A REFERRAL GRANT CAN ACTUALLY
+         * NAME ═══
+         *
+         * 🔴 THE TAB WAS DERIVING THEM FROM PIPELINE NAMES, which offered
+         * Events, OLTL Staff, PP Caregiver, ODP DSP and anything else a
+         * pipeline is named after — none of which a partner or an event is ever
+         * labelled with. An admin could tick one, save it, see it stored, and
+         * grant nothing: `referralDivisions` compares the stored value against
+         * `Partner Division`'s values, not against a pipeline's name.
+         *
+         * ⚠️ SERVED BY THIS ROUTE RATHER THAN PASSED DOWN FROM THE REFERRALS
+         * PAYLOAD. The tab already fetches everything else it needs from here;
+         * threading a prop through the page would couple an admin screen to a
+         * section it has nothing else to do with, and the two would then have
+         * to be loaded in the right order.
+         *
+         * ⚠️ EMPTY WHEN `Partner Division` IS NOT A PICKLIST on this account.
+         * The tab falls back to the old derivation and says which it is
+         * showing — a silent fallback that reproduces the old behaviour is the
+         * fault round 126 and round 130 both record.
+         */
+        divisionOptions: await (async () => {
+          const defs = await getEditableFieldDefs("contact");
+          const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const def = defs.find((d) => n(d.name) === n(PARTNER_FIELDS.division.name));
+          return def?.options?.length ? [...def.options] : [];
+        })(),
         // Folders read LIVE from GHL — a folder created in GHL appears here
         // with no code change, same as users and pipelines.
         folders,

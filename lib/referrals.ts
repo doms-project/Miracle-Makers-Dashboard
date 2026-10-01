@@ -243,6 +243,45 @@ export function inDivision(recordDivision: string, viewing: Division): boolean {
   return !d || d === "All" || d === viewing;
 }
 
+/**
+ * ═══ ROUND 167 · B6 — WHAT THE DIVISION SWITCHER MAY OFFER ═════════════════
+ *
+ * 🔴 PURE, AND IT IS HERE RATHER THAN IN THE COMPONENT BECAUSE OF A REVERT THAT
+ * CAME BACK GREEN. The first version of this lived in a `useMemo` inside
+ * ReferralsSection, and round 167's proof asserted the SERVER field it reads
+ * (`meta.viewerReferralDivisions`) rather than the derivation itself — so
+ * reverting the derivation changed nothing the proof could see. That is rule
+ * 10: a revert that changes nothing is not a passing revert, it is a proof not
+ * reaching the code. Pulled out here, it is driven with literals.
+ *
+ * 🔴 ACCESS FIRST, THEN THE DATA, AND BOTH ARE NEEDED.
+ *
+ *   ACCESS   an ODP-only viewer must read "ODP" even on a day when no ODP
+ *            partner and no ODP event exists. Deriving from the data alone is
+ *            what let one unscoped OLTL event put "OLTL" on their heading, and
+ *            what made the heading read "Referral partners" when it was deleted.
+ *
+ *   DATA     an ADMIN has no divisions (`null` = all), so access alone would
+ *            give them an empty switcher; and a division that exists in the
+ *            records but that nobody holds must stay reachable by whoever can
+ *            see it.
+ *
+ * ⚠️ "All" IS NEVER AN ENTRY. A record marked "All" appears under every
+ * division — that is the record saying something, not a menu item.
+ */
+export function headingDivisions(
+  viewerDivisions: readonly string[] | null | undefined,
+  partners: readonly { division?: string }[],
+  events: readonly { division?: string }[],
+): string[] {
+  const found = new Set<string>(viewerDivisions ?? []);
+  for (const p of partners)
+    if (p.division && p.division !== ALL_DIVISIONS) found.add(p.division);
+  for (const e of events)
+    if (e.division && e.division !== ALL_DIVISIONS) found.add(e.division);
+  return [...found].sort();
+}
+
 export interface RawPartner {
   id: string;
   org: string;

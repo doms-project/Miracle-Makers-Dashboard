@@ -29,6 +29,7 @@ import {
   applyAccess,
   getUserHomePipelines,
   referralDivisions,
+  referralScopeKind,
 } from "@/lib/pipelineAccess";
 import { isAdminSession } from "@/lib/visibility";
 import { emit } from "@/lib/webhooks";
@@ -876,21 +877,57 @@ export async function GET(request: Request) {
       // same paged search the board makes per pipeline, so the shape and the
       // rate-limit cost are both known quantities.
       const evRecords = evPipe ? await getOpportunitiesInPipeline(evPipe) : [];
-      const events: RawEvent[] = evPipe
-        ? evRecords
-            .map((r) => ({
-              id: r.id,
-              name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled event",
-              stage: r.stage,
-              date: String(r.cf?.[evDate] ?? ""),
-              cost: Number(r.cf?.[evCost] ?? 0) || 0,
-              venue: String(r.cf?.[evVenue] ?? ""),
-              division: String(r.cf?.[evDiv] ?? ""),
-              host: eventHostField ? String(r.cf?.[eventHostField] ?? "").trim() : "",
-            }))
-        : [];
+      // ═══ ROUND 167 — EVENTS GET THE PARTNER RULE ══════════════════════════
+      //
+      // 🔴 THEY WERE NOT FILTERED AT ALL, AND IT SHOWED ON THE HEADING. An
+      // ODP-only viewer read "OLTL" over the Referrals section because
+      // `divisionChoices` (components/ReferralsSection.tsx) is built from
+      // partners AND events, and only the partners were scoped. Deleting the
+      // one OLTL event changed the heading to "Referral partners" — the
+      // reproduction that found this.
+      //
+      // ⚠️ THE SAME RULE AS PARTNERS, DELIBERATELY WORD FOR WORD. Blank and
+      // "All" are universal for display (see inDivision); anything else is
+      // visible only inside the viewer's referral divisions. Two lists with two
+      // rules is a second source of truth, which is the fault round 143 closed
+      // on the "Referred by" picker.
+      //
+      // ⚠️ NO `owned` HALF, AND THAT IS NOT AN OVERSIGHT. A partner can be
+      // OWNED by a rep outside its division — that is what `shared` is for —
+      // but an event has no owner field. `Event Host` names a PARTNER, not a
+      // user, so there is nothing here that could play the same role.
+      const allEvents: RawEvent[] = evRecords.map((r) => ({
+        id: r.id,
+        name: r.oppName || `${r.first} ${r.last}`.trim() || "Untitled event",
+        stage: r.stage,
+        date: String(r.cf?.[evDate] ?? ""),
+        cost: Number(r.cf?.[evCost] ?? 0) || 0,
+        venue: String(r.cf?.[evVenue] ?? ""),
+        division: String(r.cf?.[evDiv] ?? ""),
+        host: eventHostField ? String(r.cf?.[eventHostField] ?? "").trim() : "",
+      }));
+      const eventVisible = (d: string): boolean => {
+        const div = (d || "").trim();
+        return !partnerDivisions || !div || div === ALL_DIVISIONS || partnerDivisions.includes(div);
+      };
+      const events: RawEvent[] = allEvents.filter((e) => eventVisible(e.division));
+      /** Withheld from THIS viewer. A count, never the names. */
+      const eventsWithheld = allEvents.length - events.length;
 
-      const attendees: RawAttendee[] = attendeeRes.rows.map((c) => ({
+      // ═══ ROUND 167 — AN ATTENDEE IS VISIBLE IF ITS EVENT IS ═══════════════
+      //
+      // ⚠️ AN ATTENDEE HAS NO DIVISION OF ITS OWN. It has an event and the
+      // event has one, so the test is derived rather than invented — the same
+      // reasoning the client already used for the division switcher.
+      //
+      // 🔴 AN ATTENDEE WITH NO EVENT STAYS VISIBLE. `Event Attended` can be
+      // blank, a blank belongs to no division, and withholding it would hide
+      // somebody from everybody — the labelled-leak decision partners already
+      // follow for a blank division. It is counted on the client as
+      // "unplaced", which is unchanged.
+      const visibleEventIds = new Set(events.map((e) => e.id));
+      const allEventIds = new Set(allEvents.map((e) => e.id));
+      const allAttendees: RawAttendee[] = attendeeRes.rows.map((c) => ({
         id: c.id,
         name: c.name,
         eventId: attendeeEventField ? c.fields[attendeeEventField] || "" : "",
@@ -898,6 +935,56 @@ export async function GET(request: Request) {
         profile: c.fields[F.profile] || "",
         version: c.version,
       }));
+      const attendees: RawAttendee[] = allAttendees.filter(
+        (a) =>
+          !a.eventId ||
+          visibleEventIds.has(a.eventId) ||
+          // 🔴 A DANGLING POINTER IS NOT A WITHHELD ONE, AND THE FIRST VERSION
+          // OF THIS FILTER GOT IT WRONG. "Visible if its event is visible" hid
+          // every attendee whose event had been DELETED, because a deleted
+          // event is in neither list — so deleting an event erased the only
+          // remaining evidence that those people were met at all, which is the
+          // exact thing round 124 · item 4 refused to do:
+          //
+          //   "clearing Event Attended on every one of them is a write that can
+          //    half-fail, and it would erase the only remaining evidence that
+          //    those people were met at all."
+          //
+          // round124-proof caught it — "both attendees survive the event's
+          // deletion" went red. A record pointing at nothing is a data-quality
+          // fact about the account, visible to everyone and counted as
+          // `danglingAttendees`; only an event that EXISTS and is out of scope
+          // withholds its people.
+          !allEventIds.has(a.eventId),
+      );
+      /** Withheld from THIS viewer. A count, never the names. */
+      const attendeesWithheld = allAttendees.length - attendees.length;
+
+      // ═══ ROUND 167 — DANGLING ATTENDEES MOVE SERVER-SIDE ══════════════════
+      //
+      // 🔴 THIS IS A RELOCATION, NOT A NEW NUMBER, AND ROUND 145 ALREADY DID IT
+      // ONCE FOR THE OTHER OBJECT. `orphanAttendees` lived in
+      // components/ReferralsSection.tsx and was computed against `data.events`,
+      // with a comment explaining the care taken:
+      //
+      //     "AGAINST data.events, NOT THE DIVISION CUT. An attendee at an OLTL
+      //      event is not orphaned merely because you are looking at ODP."
+      //
+      // That was exactly right while the client held every event. The filter
+      // above makes `data.events` mean "events you may see", so the same line
+      // would have started reporting a WITHHELD event's attendees as people
+      // "recorded at an event that no longer exists" — a withheld thing read as
+      // a deleted one, which is round 145's lesson verbatim.
+      //
+      // ⚠️ AGAINST `allEvents`, BEFORE THE FILTER, so every viewer gets the
+      // same number — it is a data-quality fact about the account, not about
+      // who is asking. The client-side copy is REMOVED in the same change:
+      // leaving both would be two answers to one question.
+      const liveEventIds = new Set(allEvents.map((e) => e.id));
+      const danglingAttendees = allAttendees.filter(
+        (a) => a.eventId && !liveEventIds.has(a.eventId),
+      ).length;
+
 
       // ═══ TASK 2 · SECTION 1 — THE TWO LISTS, SO THE DIFFERENCE IS SAYABLE ══
       //
@@ -945,6 +1032,22 @@ export async function GET(request: Request) {
           owners: [...users.entries()].map(([id, name]) => ({ id, name })),
           categoryOptions: optionsOf(contactDefs, PARTNER_FIELDS.category.name),
           tierOptions: optionsOf(contactDefs, PARTNER_FIELDS.tier.name),
+          /**
+           * `Partner Division`'s WHOLE picklist, and deliberately not narrowed
+           * to the viewer.
+           *
+           * 🔴 TWO CONSUMERS NEED DIFFERENT THINGS FROM IT. The Access tab
+           * offers these as the divisions an admin may grant (round 167 · D12),
+           * so it needs all of them; the create dialogs may offer only the
+           * viewer's own (C10), so they intersect this with
+           * `meta.viewerReferralDivisions` on the client.
+           *
+           * ⚠️ NARROWING IT HERE WOULD HAVE BROKEN THE ACCESS TAB SILENTLY —
+           * an admin would quietly stop being able to grant a division, which
+           * is the "a filtered list read as an absence" fault this project has
+           * now hit five times. The INTERSECTION is the dialog's business and
+           * the REFUSAL is the server's; see `add-event` and `add-partner`.
+           */
           divisionOptions: optionsOf(contactDefs, PARTNER_FIELDS.division.name),
           // 🔴 ROUND 128 — THE EVENT'S OWN FIELD, WHICH IS A DIFFERENT FIELD.
           //
@@ -1069,6 +1172,77 @@ export async function GET(request: Request) {
              */
             viewerDivisions: partnerDivisions ? partnerDivisions.length : null,
             /**
+             * 🔴 ROUND 167 — THE DIVISION NAMES, NOT JUST HOW MANY.
+             *
+             * `viewerDivisions` above is a COUNT, because the old design only
+             * needed to pick a sentence. The heading needs the NAMES: an
+             * ODP-only viewer must read "ODP" even with no ODP partners and no
+             * ODP events, and a two-division viewer's combined option has to
+             * read "ODP + OLTL" rather than "All divisions".
+             *
+             * 🔴 WHY THE HEADING CANNOT BE DERIVED FROM THE DATA ANY MORE. It
+             * was, and that is the bug this round fixes: `divisionChoices` is
+             * built from the partners AND the events, the events were never
+             * scoped, and an ODP-only viewer read "OLTL" off a single OLTL
+             * event. Scoping the events repairs that one case; deriving the
+             * heading from ACCESS makes the whole class impossible, including
+             * the empty-division case no amount of filtering can fix.
+             *
+             * ⚠️ NOT A DISCLOSURE. These are the viewer's OWN divisions —
+             * derived from grants they hold or set explicitly for them. Round
+             * 155's rule is about not naming what somebody may NOT see;
+             * `partnersWithheld` and `eventsWithheld` stay counts for exactly
+             * that reason.
+             *
+             * `null` for an admin and for Agency referral access, meaning "all"
+             * — the same three-state shape `referralDivisions` returns, carried
+             * out intact rather than flattened into a list the client would
+             * have to guess about.
+             */
+            viewerReferralDivisions: partnerDivisions,
+            /**
+             * 🔴 ROUND 167 — WHY THE LIST IS EMPTY, WHICH IS TWO DIFFERENT
+             * ANSWERS SINCE ROUND 162.
+             *
+             *   "none"      holds no pipeline at all — the case manager's
+             *               intended state, and nothing is misconfigured.
+             *   "explicit"  holds pipelines, but an admin set their referral
+             *               access to an empty division list on purpose.
+             *   "derived"   the ordinary case: divisions come from grants.
+             *   "all"       admin, or Agency referral access.
+             *
+             * ⚠️ THE SENTENCE AT ReferralsSection.tsx COULD NOT TELL THE FIRST
+             * TWO APART and said "you hold no pipeline" to both. Round 162
+             * created the second cause for one number and left the sentence
+             * knowing one. The server knows which it is; nothing is inferred.
+             */
+            referralScopeKind: referralScopeKind(
+              session?.userId || "",
+              pipelineNameById,
+              isAdmin,
+            ),
+            /**
+             * 🔴 ROUND 167 — EVENTS OUTSIDE THIS VIEWER'S DIVISIONS. A COUNT,
+             * NEVER THE NAMES. Same shape and same reason as
+             * `partnersWithheld`: empty because filtered and empty because
+             * there is nothing must not look the same.
+             */
+            eventsWithheld,
+            /** Attendees whose event is withheld. A count, never the names. */
+            attendeesWithheld,
+            /**
+             * 🔴 ROUND 167 — PEOPLE MET AT AN EVENT THAT NO LONGER EXISTS,
+             * COUNTED AGAINST THE FULL EVENT LIST.
+             *
+             * Moved here from components/ReferralsSection.tsx in this round.
+             * It was correct on the client for as long as the client held every
+             * event; filtering events would have turned "your division does not
+             * include this event" into "this event was deleted". Round 145 made
+             * the identical move for `danglingReferrals`, for the identical
+             * reason, and the note explaining it is still in that file.
+             */
+            danglingAttendees,
+            /**
              * 🔴 ROUND 145 — COMPUTED AGAINST THE FULL PARTNER LIST, SERVER
              * SIDE, because the client cannot tell a withheld partner from a
              * deleted one. See the note beside danglingCount.
@@ -1152,6 +1326,56 @@ export async function POST(request: Request) {
         session = decryptSso(body.ssoKey);
       }
 
+      // ═══ ROUND 167 · C10 — NOBODY CREATES SOMETHING THEY THEN CANNOT SEE ═══
+      //
+      // 🔴 ROUND 140'S RULE, APPLIED TO THE DIVISION FIELD. That round refused
+      // to let a rep file a case into a pipeline they hold no grant on, because
+      // the record vanished from its creator's board the moment it was made.
+      // An event or a partner stamped with a division outside the creator's
+      // referral access does the same thing: it is written, it succeeds, and it
+      // is gone from the only screen that would show it.
+      //
+      // ⚠️ A 403 THAT NAMES THE DIVISION, NEVER A SILENT CORRECTION. Dropping
+      // the value would create the record with no division — visible to
+      // everyone, which is the labelled leak — and substituting one of their
+      // own would file it somewhere they did not choose. Both are worse than
+      // refusing, because both look like success.
+      //
+      // ⚠️ BLANK AND "All" PASS. They are universal for display, so neither can
+      // hide a record from its creator. Requiring a division is a different
+      // decision, made in the dialogs.
+      const writeIsAdmin = !session || isAdminSession(session.role, session.type);
+      /**
+       * `true` when the division may be written; the viewer's own divisions
+       * when it may not, so the refusal can name them.
+       *
+       * ⚠️ ASYNC AND LAZY, AND IT COSTS NOTHING. `referralDivisions` derives
+       * from the pipelines the viewer holds, so it needs their names — the same
+       * `listPipelines()` the GET uses, which is memoised (`cache.pipelines`).
+       * It is reached only when a non-admin writes a real division, so the
+       * common paths pay nothing at all.
+       */
+      const divisionAllowed = async (want: string): Promise<true | string[]> => {
+        const d = (want || "").trim();
+        if (!d || d === ALL_DIVISIONS || writeIsAdmin) return true;
+        const names = new Map((await listPipelines()).map((p) => [p.id, p.name]));
+        const mine = referralDivisions(session?.userId || "", names, writeIsAdmin);
+        if (!mine || mine.includes(d)) return true;
+        return mine;
+      };
+      const refuseDivision = (want: string, mine: string[], thing: string) =>
+        NextResponse.json(
+          {
+            error: `You cannot file ${thing} under ${String(want).trim()}.`,
+            detail: mine.length
+              ? `Your referral access covers ${mine.join(", ")}. A record in another division would not appear on your Referrals screen at all — so it is refused rather than created where you cannot see it. Nothing was created. Ask an admin on Admin → Access if that is wrong.`
+              : "You hold no referral divisions, so every division is outside your access and a record would be invisible to you once created. Nothing was created. Ask an admin on Admin → Access.",
+            refusal: true,
+            status: 403,
+          } as ApiError,
+          { status: 403 },
+        );
+
       // ── log a touch ────────────────────────────────────────────────────────
       // 🔴 THE COUNTERPART TO THE QUEUE. A queue that tells you who to call and
       // gives you no way to record the call keeps telling you to call them.
@@ -1220,6 +1444,30 @@ export async function POST(request: Request) {
         if (!who)
           return NextResponse.json(
             { error: "A referral needs the client or family's name.", status: 400 } as ApiError,
+            { status: 400 },
+          );
+        // ═══ ROUND 167 — A WAY TO REACH THEM IS REQUIRED ═══════════════════
+        //
+        // 🔴 THIS ANSWERS THE QUESTION ROUND 166 LEFT OPEN AND PINNED.
+        // Round 166 moved three contact writes onto `ensureContact`, which
+        // falls back to a name-only create, and deliberately did NOT move this
+        // one: whether a CLIENT may exist with no way to contact them is a
+        // business question. The answer is no — somebody we will ring or email
+        // needs a number or an address, and a lead nobody can follow up is a
+        // record that looks workable and is not.
+        //
+        // ⚠️ SO THIS STAYS ON `upsertContact`, AND NOW BY DECISION RATHER THAN
+        // BY DEFAULT. GoHighLevel would refuse it anyway, with "Pass at least
+        // one of number, email query parameter" — unreadable to a rep and about
+        // an endpoint they never called. Refusing first replaces that with a
+        // sentence about the thing that is missing, before any write.
+        if (!clean(body.phone) && !clean(body.email))
+          return NextResponse.json(
+            {
+              error: "Add a phone number or an email — we need a way to reach them.",
+              detail: "Nothing was created.",
+              status: 400,
+            } as ApiError,
             { status: 400 },
           );
 
@@ -1519,7 +1767,30 @@ export async function POST(request: Request) {
         };
         put(EVENT_FIELDS.date.name, EVENT_FIELDS.date.id, (body.eventDate || "").trim());
         put(EVENT_FIELDS.venue.name, EVENT_FIELDS.venue.id, (body.venue || "").trim());
-        put(EVENT_FIELDS.division.name, EVENT_FIELDS.division.id, (body.division || "").trim());
+        // 🔴 ROUND 167 · C10 — REFUSED BEFORE THE FIRST WRITE, not after. The
+        // venue contact and the opportunity both come later, so a refusal here
+        // really does leave nothing behind.
+        const evDivWanted = (body.division || "").trim();
+        // 🔴 ROUND 167 — REQUIRED, THE SAME AS A PARTNER AND FOR THE SAME
+        // REASON. Blank means "every division" (inDivision), so an event saved
+        // without one is shown to every viewer whichever division they work
+        // in — and that is precisely the leak that put "OLTL" on an ODP-only
+        // viewer's heading. Round 143 closed it for partners at the DIALOG
+        // only; this closes it at both ends for events, because a dialog guard
+        // alone still accepts a direct API call.
+        if (!evDivWanted)
+          return NextResponse.json(
+            {
+              error: "An event needs a division.",
+              detail:
+                "An event with no division is shown to everybody, whichever division they work in. Nothing was created.",
+              status: 400,
+            } as ApiError,
+            { status: 400 },
+          );
+        const evDivOk = await divisionAllowed(evDivWanted);
+        if (evDivOk !== true) return refuseDivision(evDivWanted, evDivOk, "an event");
+        put(EVENT_FIELDS.division.name, EVENT_FIELDS.division.id, evDivWanted);
         if (Number(body.cost) > 0)
           put(EVENT_FIELDS.cost.name, EVENT_FIELDS.cost.id, Number(body.cost));
 
@@ -2025,7 +2296,27 @@ export async function POST(request: Request) {
         put(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id, PARTNER_RECORD_TYPE);
         put(PARTNER_FIELDS.category.name, PARTNER_FIELDS.category.id, body.category || "");
         put(PARTNER_FIELDS.tier.name, PARTNER_FIELDS.tier.id, body.tier || "");
-        put(PARTNER_FIELDS.division.name, PARTNER_FIELDS.division.id, body.division || "");
+        // 🔴 ROUND 167 · C10 — same rule, partner side.
+        const pDivWanted = (body.division || "").trim();
+        // ⚠️ ROUND 167 — AND NOW THE SERVER ENFORCES IT TOO. Round 143 made
+        // this required in the dialog (`!div` on the Save button) and left the
+        // route accepting a blank, so a direct call could still create the
+        // visible-to-everyone partner the requirement exists to stop. Same
+        // argument as the client-pipeline filter: "filtering only on the
+        // dropdown is the same fault with a cosmetic patch over it".
+        if (!pDivWanted)
+          return NextResponse.json(
+            {
+              error: "A partner needs a division.",
+              detail:
+                "A partner with no division is shown to everybody, whichever division they work in. Nothing was created.",
+              status: 400,
+            } as ApiError,
+            { status: 400 },
+          );
+        const pDivOk = await divisionAllowed(pDivWanted);
+        if (pDivOk !== true) return refuseDivision(pDivWanted, pDivOk, "a partner");
+        put(PARTNER_FIELDS.division.name, PARTNER_FIELDS.division.id, pDivWanted);
         put(PARTNER_FIELDS.notes.name, PARTNER_FIELDS.notes.id, body.notes || "");
 
         // 🔴 RECORD TYPE IS NOT OPTIONAL. It is the ONLY thing that makes this

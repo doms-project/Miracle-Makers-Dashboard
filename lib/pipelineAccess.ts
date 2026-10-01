@@ -289,6 +289,43 @@ export function referralDivisions(
   return [...entry.divisions];
 }
 
+/**
+ * 🔴 ROUND 167 — WHY `referralDivisions` ANSWERED WHAT IT ANSWERED.
+ *
+ * The list alone cannot explain itself. An empty one has TWO causes since round
+ * 162 added the override, and they need different sentences on screen:
+ *
+ *   "all"       admin, or an explicit Agency grant — nothing is withheld.
+ *   "derived"   no override; divisions come from the pipelines they hold.
+ *   "none"      no override AND no pipelines. The case manager's intended
+ *               state: nothing is misconfigured and nobody needs to fix it.
+ *   "explicit"  an override holding an EMPTY division list. They may hold
+ *               several pipelines; an admin decided they see no referrals.
+ *
+ * ⚠️ IT REPORTS THE SHAPE OF THE GRANT, NEVER A ROLE. "none" says "holds no
+ * pipeline", which is a fact about grants. It does NOT say "is a case manager"
+ * — nothing in this system knows that, and reading it off an absent grant would
+ * infer a role from an absence, the same rule that bans reading one off a
+ * `-Sale` name suffix.
+ *
+ * ⚠️ AND IT DERIVES FROM THE SAME STORE AS `referralDivisions`, in the same
+ * order, so the two cannot disagree. A second function reading a second source
+ * is how two answers to one question get shipped.
+ */
+export type ReferralScopeKind = "all" | "derived" | "none" | "explicit";
+
+export function referralScopeKind(
+  userId: string,
+  pipelineNameById: Map<string, string>,
+  isAdmin: boolean,
+): ReferralScopeKind {
+  if (isAdmin) return "all";
+  const entry = userId ? referralAccessStore.getStore()?.get(userId) : undefined;
+  if (!entry) return userDivisions(userId, pipelineNameById).length ? "derived" : "none";
+  if (entry.mode === "agency") return "all";
+  return entry.divisions.length ? "derived" : "explicit";
+}
+
 export function getCaseManagers(repId: string): string[] | null {
   const store = caseManagerStore.getStore();
   if (!store || !repId) return null;
