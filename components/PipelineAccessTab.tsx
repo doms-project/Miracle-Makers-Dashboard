@@ -27,6 +27,12 @@ export default function PipelineAccessTab({
 }) {
   const [users, setUsers] = useState<User[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  /**
+   * 🔴 ROUND 167 · D12 — `Partner Division`'s OWN OPTIONS, from this tab's own
+   * route. `[]` when that field is not a picklist on the account, which makes
+   * `referralChoicesAreLive` false and the fallback say so.
+   */
+  const [partnerDivisionOptions, setPartnerDivisionOptions] = useState<string[]>([]);
   const [grants, setGrants] = useState<Grants>({});
   // ITEM 6b — folders are their OWN scope, not derived from pipelines: a
   // compliance folder can belong to case managers who hold no pipeline at all.
@@ -104,6 +110,7 @@ export default function PipelineAccessTab({
       setLoadErr(null);
       setUsers(j.users || []);
       setPipelines(j.pipelines || []);
+      setPartnerDivisionOptions(j.divisionOptions || []);
       setGrants(j.grants || {});
       setFolders(j.folders || []);
       setFoldersError(j.foldersError || null);
@@ -236,14 +243,32 @@ export default function PipelineAccessTab({
   const cmManagerCount = Object.keys(cmByManager).length;
 
   /**
-   * ⚠️ DERIVED FROM THE PIPELINES ALREADY LOADED, not a hardcoded list. The
-   * same `divisionLabel` every other division decision uses, so a new pipeline
-   * brings its division with it and nothing has to be edited here.
+   * ═══ ROUND 167 · D12 — `Partner Division`'s OPTIONS, NOT PIPELINE NAMES ════
+   *
+   * 🔴 IT OFFERED DIVISIONS NO PARTNER CAN CARRY. Derived from the pipeline
+   * list via `divisionLabel`, it listed Events, OLTL Staff, PP Caregiver, ODP
+   * DSP and anything else a pipeline happens to be named after — so an admin
+   * could tick "OLTL Staff", save it, see it stored, and grant nothing at all,
+   * because `referralDivisions` compares these against a PARTNER's and an
+   * EVENT's division field. A control that stores a value and changes nothing
+   * is worse than a missing control: it reports success.
+   *
+   * ⚠️ THE OLD COMMENT'S INSTINCT WAS RIGHT AND ITS FIELD WAS WRONG. "Not a
+   * hardcoded list, so a new pipeline brings its division with it" — true, and
+   * irrelevant: what matters is what the partners are actually labelled with,
+   * which is `Partner Division`'s picklist. That list is already in the
+   * referrals payload this page loads.
+   *
+   * ⚠️ FALLS BACK TO THE PIPELINE DERIVATION when the field is not a picklist
+   * on this account — better than an empty checklist — and the tab SAYS which
+   * it is showing, because a silent fallback that reproduces the old behaviour
+   * is round 126's and round 130's fault both.
    */
-  const referralDivisionChoices = useMemo(
-    () => [...new Set(pipelines.map((p) => divisionLabel(p.name)).filter(Boolean))].sort(),
-    [pipelines],
-  );
+  const referralDivisionChoices = useMemo(() => {
+    if (partnerDivisionOptions?.length) return [...partnerDivisionOptions].sort();
+    return [...new Set(pipelines.map((p) => divisionLabel(p.name)).filter(Boolean))].sort();
+  }, [partnerDivisionOptions, pipelines]);
+  const referralChoicesAreLive = !!partnerDivisionOptions?.length;
   const cmRepCount = Object.keys(caseManagers).length;
 
   /**
@@ -787,13 +812,43 @@ export default function PipelineAccessTab({
                       <label
                         key={d}
                         className={`rfachip${picked.includes(d) ? " on" : ""}${orphan ? " orphan" : ""}`}
-                        title={orphan ? "No pipeline on this account has this division any more." : undefined}
+                        /* ⚠️ ROUND 167 — THE WORDING HAD TO CHANGE WITH THE
+                           LIST. It said "no pipeline on this account has this
+                           division any more", which was exactly right while the
+                           choices were derived from pipeline names. They now
+                           come from `Partner Division`'s picklist, so an orphan
+                           means the OPTION is gone from that field — a
+                           different fact, with a different fix, in a different
+                           screen. Leaving the old sentence would have sent an
+                           admin to look at pipelines. */
+                        title={
+                          orphan
+                            ? referralChoicesAreLive
+                              ? "This is no longer an option on the Partner Division field in GoHighLevel. The grant still stands; untick it here to remove it."
+                              : "Partner Division could not be read, so this list is derived from pipeline names and no pipeline carries this division any more."
+                            : undefined
+                        }
                       >
                         <input type="checkbox" checked={picked.includes(d)} onChange={() => toggleDiv(d)} />
-                        {d}{orphan ? " — no pipeline" : ""}
+                        {d}
+                        {orphan ? (referralChoicesAreLive ? " — not an option" : " — no pipeline") : ""}
                       </label>
                     );
                   })}
+                  {/* 🔴 ROUND 167 · D12 — WHICH LIST IS BEING OFFERED. Round
+                      130's rule: a fallback that reproduces the old behaviour
+                      hides its own failure, so whichever list this is, the
+                      admin can tell. The old list is the BUG — it offered
+                      Events, OLTL Staff and PP Caregiver, which no partner
+                      carries, so ticking one stored a value that granted
+                      nothing. */}
+                  {!referralChoicesAreLive ? (
+                    <span className="ihint">
+                      ⚠️ These are derived from pipeline names. No{" "}
+                      <b>Partner Division</b> options could be read, so some of
+                      them may match no partner and grant nothing.
+                    </span>
+                  ) : null}
                   {/* 🔴 SAYS SO RATHER THAN LOOKING UNSET. An empty selection is
                       a decision, and a row that renders as blank chips is the
                       "absence that looks like an answer" this project keeps

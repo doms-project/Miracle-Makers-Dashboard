@@ -284,6 +284,12 @@ console.log("\n═══ 3 · PATH 2 — ADD PARTNER · PATH 3 — PERSON MET �
 // ═══════════════════════════════════════════════════════════════════════════
 const p = await post({
   action: "add-partner", org: "Main Line Health", category: "Hospital discharge",
+  // ⚠️ ROUND 167 — A DIVISION IS NOW REQUIRED SERVER-SIDE. Round 143 required
+  // it in the dialog only, so the route still accepted a blank and a direct
+  // call could create the visible-to-everyone partner the rule exists to stop.
+  // These assertions are about the CONTACT endpoint; without a division they
+  // would measure the division rule instead.
+  division: "ODP",
 });
 ok("🔴 a partner org with a name only is accepted", p.status === 200, p);
 ok("…via /contacts/", writes.at(-1)?.endpoint === "create", writes.map((w) => w.endpoint));
@@ -292,7 +298,7 @@ ok("…with the org in firstName", writes.at(-1)?.body?.firstName === "Main Line
 
 // CONTROL — with an email it must still UPSERT, because that deduplicates.
 const p2 = await post({
-  action: "add-partner", org: "Bryn Mawr Rehab", email: "refer@bmr.org",
+  action: "add-partner", org: "Bryn Mawr Rehab", email: "refer@bmr.org", division: "ODP",
 });
 ok("🔴 CONTROL — with an email it upserts instead, so duplicates still merge",
   p2.status === 200 && writes.at(-1)?.endpoint === "upsert", writes.map((w) => w.endpoint));
@@ -339,17 +345,27 @@ ok("🔴 CONTROL — a repeated VENUE name DOES reuse, so the flag is not false 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 4 · ⚠️ LOG A REFERRAL IS DELIBERATELY UNCHANGED ═══");
 // ═══════════════════════════════════════════════════════════════════════════
-// ⚠️ ASSERTED, NOT ASSUMED. Whether a CLIENT may exist with no way to contact
-// them is the owner's decision, not this round's. The behaviour is pinned here
-// so that changing it is a visible choice rather than a side-effect — and so
-// the next person reading four call sites does not "finish the job".
+// ═══ ROUND 167 — THE DECISION IS MADE, AND THIS ASSERTION CHANGES WITH IT ════
+//
+// 🔴 ROUND 166 PINNED THIS AS AN OPEN QUESTION: it asserted only that a keyless
+// referral "still fails", through GoHighLevel's refusal, because whether a
+// CLIENT may exist with no way to contact them was the owner's call. The answer
+// is no — someone we will ring or email needs a number or an address.
+//
+// ⚠️ SO THE CLAIM IS STRONGER NOW, NOT MERELY DIFFERENT. It is no longer "GHL
+// happens to reject it" but "we refuse it ourselves, by name, before any call
+// is made" — which is what makes the message readable instead of being about a
+// query parameter the dialog does not have.
 const noKey = await post({
   action: "log-referral", partnerId: "p_riddle", firstName: "Keyless", division: "OLTL",
 });
-ok("⚠️ a client referral with no phone and no email STILL fails", noKey.status >= 400, noKey);
-ok("…through the upsert, which is the unchanged path",
-  writes.some((w) => w.endpoint === "upsert") && !writes.some((w) => w.endpoint === "create"),
-  writes.map((w) => w.endpoint));
+ok("🔴 a client referral with no phone and no email is REFUSED", noKey.status === 400, noKey);
+ok("…with the sentence that names what is missing",
+  /way to reach them/i.test(noKey.body.error || ""), noKey.body);
+ok("…and it says nothing was created",
+  /Nothing was created/i.test(noKey.body.detail || ""), noKey.body);
+ok("🔴 …BEFORE ANY GOHIGHLEVEL CONTACT CALL — the refusal is ours, not theirs",
+  writes.length === 0, writes.map((w) => w.endpoint));
 
 const withKey = await post({
   action: "log-referral", partnerId: "p_riddle", firstName: "Reachable",

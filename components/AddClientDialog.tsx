@@ -230,8 +230,25 @@ export default function AddClientDialog({
   }, [chosen]);
   const blocked = blockedPipelines.get(pipelineId) || null;
 
+  /**
+   * ═══ ROUND 167 — A WAY TO REACH THEM IS REQUIRED ══════════════════════════
+   *
+   * 🔴 THE DECISION, MADE RATHER THAN INHERITED. Round 166 found that
+   * GoHighLevel refuses a contact with neither a phone nor an email — 400
+   * "Pass at least one of number, email query parameter" — and left the
+   * question open: may a CLIENT exist with no way to contact them? The answer
+   * is no. A lead nobody can ring or email is a record that looks workable and
+   * is not, and it would sit in the pipeline being counted.
+   *
+   * ⚠️ SO THE DIALOG STOPS IT, AND THE ROUTE STOPS IT TOO
+   * (app/api/clients/route.ts). Without the route half, a direct call still
+   * reaches GoHighLevel's own wording about a query parameter this form does
+   * not have; without the dialog half, a rep fills in a whole form to be told
+   * no at the end.
+   */
+  const reachable = !!phone.trim() || !!email.trim();
   const canSubmit =
-    !!first.trim() && !!last.trim() && !!pipelineId && !!stageId && !blocked;
+    !!first.trim() && !!last.trim() && reachable && !!pipelineId && !!stageId && !blocked;
 
   /**
    * The assignment read-back. `waiting` while the workflow runs, then the
@@ -400,6 +417,18 @@ export default function AddClientDialog({
               />
             </div>
           </div>
+          {/* 🔴 ROUND 167 — WHY, NOT JUST "REQUIRED". The hint names the
+              consequence — a lead nobody can reach — because "one of these is
+              required" invites the reader to type anything into whichever box
+              is nearer. Shown only while it is unmet, so a filled form carries
+              no leftover warning. */}
+          {!reachable ? (
+            <div className="rfdhint rfdbad">
+              ⚠️ Add a phone number or an email — we need a way to reach them.
+              A lead with neither cannot be followed up, and GoHighLevel will
+              not store a contact without one.
+            </div>
+          ) : null}
 
           {/* Search before creating. */}
           {searching && !chosen ? (

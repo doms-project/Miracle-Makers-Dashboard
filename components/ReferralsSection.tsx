@@ -13,6 +13,7 @@ import {
   OUTCOMES,
   PARTNER_CATEGORIES,
   inDivision,
+  headingDivisions,
   enrichPartner,
   eventStats,
   partnerKpis,
@@ -116,6 +117,26 @@ export interface Payload {
      * needs a different sentence from "some, but not that one". null = admin.
      */
     viewerDivisions?: number | null;
+    /**
+     * 🔴 ROUND 167 — THE VIEWER'S OWN DIVISION NAMES. `null` = all (admin or an
+     * Agency grant), `[]` = none. The heading and the combined option's label
+     * both come from this rather than from the records, because a division that
+     * holds nothing yet is still the division you are looking at.
+     */
+    viewerReferralDivisions?: string[] | null;
+    /** Why that list is what it is — see lib/pipelineAccess.referralScopeKind. */
+    referralScopeKind?: "all" | "derived" | "none" | "explicit";
+    /** Events withheld from THIS viewer by division. A count, never names. */
+    eventsWithheld?: number;
+    /** Attendees whose event is withheld. A count, never names. */
+    attendeesWithheld?: number;
+    /**
+     * 🔴 People recorded at an event that no longer exists — computed
+     * SERVER-SIDE against the full event list, round 167. Never recomputed
+     * here: once events are access-filtered the client cannot tell a deleted
+     * event from a withheld one, exactly as round 145 found for partners.
+     */
+    danglingAttendees?: number;
     /** Partners with no division at all, so visible to everyone. Account-wide. */
     partnersNoDivision?: number;
     /**
@@ -179,11 +200,92 @@ const CADENCE_WORD: Record<string, string> = {
  * colon are not.
  */
 const SHARED_SCOPE = "shared:owned";
-const divLabel = (d: Division) =>
-  d === "All" ? "All divisions" : d === SHARED_SCOPE ? "Shared with me" : d;
+/**
+ * The name of a scope, as a reader should see it.
+ *
+ * ═══ ROUND 167 · B7 — "ALL" MUST NOT MEAN DIFFERENT THINGS TO DIFFERENT
+ * PEOPLE ═══
+ *
+ * 🔴 IT READ "All divisions" FOR EVERYBODY. A viewer holding ODP and OLTL on a
+ * five-division account read "All divisions" over two divisions' worth of
+ * data — true in the sense that nothing was filtered on top, and false in
+ * every sense the reader cares about. It is the same fault round 155 found in
+ * `meta.pipelines` and the same one the single-division heading already avoids
+ * by refusing to say "All" at all.
+ *
+ * ⚠️ `mine` IS THE VIEWER'S OWN DIVISIONS — `null` for an admin or an Agency
+ * grant, meaning genuinely everything, which is the ONE case where "All
+ * divisions" is the truth. A partial viewer gets their divisions named, so the
+ * label and the numbers under it describe the same set.
+ */
+const divLabel = (d: Division, mine?: readonly string[] | null) =>
+  d === "All"
+    ? mine && mine.length
+      ? mine.join(" + ")
+      : "All divisions"
+    : d === SHARED_SCOPE
+      ? "Shared with me"
+      : d;
 
-function TierBadge({ t }: { t: string }) {
-  const cls = t === "Prospect" ? "prospect" : t.toLowerCase();
+/**
+ * ═══ ROUND 167 · B8 — WHY YOU CAN SEE THIS ONE ════════════════════════════
+ *
+ * 🔴 A SOURCES ROW SAID NOTHING ABOUT DIVISION AT ALL. Org, category, tier,
+ * owner, touch, refs, won, revenue — and no hint of which programme the partner
+ * belongs to or why it reached this viewer. The one partner whose presence
+ * needs explaining, an OLTL partner owned by an ODP rep, was the one explaining
+ * itself least: `shared` has been in the payload since round 143 and was used
+ * only to decide whether a switcher appeared.
+ *
+ * ⚠️ FOUR ANSWERS, AND THE DIFFERENCES MATTER TO DIFFERENT PEOPLE:
+ *
+ *   "Yours · OLTL"      you own it; its division is not one you hold. Reading
+ *                       just "OLTL" here would look like a leak.
+ *   "All divisions"     the record says so — a property, not a view.
+ *   "No division ·      the labelled leak. Everyone sees it, nobody has said
+ *    visible to         which programme it belongs to, and whoever can fix it
+ *    everyone"          needs to be able to spot it on the row.
+ *   "ODP"               the ordinary case.
+ */
+function DivisionTag({
+  division,
+  shared,
+  what = "partner",
+}: {
+  division: string;
+  shared?: boolean;
+  /** "partner" or "event" — an event has no owner, so it has no "Yours". */
+  what?: "partner" | "event";
+}) {
+  const d = (division || "").trim();
+  if (shared)
+    return (
+      <span className="rfdivtag rfdivtag-mine" title="You own this partner, and its division is not one you hold">
+        Yours · {d || "no division"}
+      </span>
+    );
+  if (!d)
+    return (
+      <span
+        className="rfdivtag rfdivtag-none"
+        title={`This ${what} has no division, so it is shown to every viewer whichever division they work in`}
+      >
+        No division · visible to everyone
+      </span>
+    );
+  if (d === ALL_DIVISIONS)
+    return (
+      <span
+        className="rfdivtag rfdivtag-all"
+        title={`This ${what} is marked "All", so it is shown to every viewer`}
+      >
+        All divisions · visible to everyone
+      </span>
+    );
+  return <span className="rfdivtag">{d}</span>;
+}
+
+function TierBadge({ t }: { t: string }) {  const cls = t === "Prospect" ? "prospect" : t.toLowerCase();
   return <span className={`rfbadge ${cls}`}>{t || "—"}</span>;
 }
 
@@ -381,14 +483,24 @@ export default function ReferralsSection({
    * partner marked "All" appears under every division (inDivision) — that is
    * the record saying something, not a menu entry.
    */
-  const divisionChoices = useMemo(() => {
-    const found = new Set<string>();
-    for (const p of data?.partners || [])
-      if (p.division && p.division !== ALL_DIVISIONS) found.add(p.division);
-    for (const e of data?.events || [])
-      if (e.division && e.division !== ALL_DIVISIONS) found.add(e.division);
-    return [...found].sort();
-  }, [data]);
+  /**
+   * The viewer's OWN referral divisions. `null` means all — an admin, or an
+   * explicit Agency grant. `[]` means none.
+   *
+   * ⚠️ NOT THE SAME QUESTION AS `divisionChoices`. This is what they are
+   * ENTITLED to; that is what they can switch between, which also includes a
+   * division only the data knows about. Round 167 keeps them separate because
+   * conflating them is what made the heading read somebody else's division.
+   */
+  const myDivs = data?.meta.viewerReferralDivisions ?? null;
+  const divisionChoices = useMemo(
+    // 🔴 ROUND 167 — THE DERIVATION MOVED TO lib/referrals.ts SO IT CAN BE
+    // PROVEN. It was inline here and a revert of it came back green, because
+    // the proof was asserting the server field it reads rather than this. See
+    // the banner on headingDivisions.
+    () => headingDivisions(myDivs, data?.partners || [], data?.events || []),
+    [myDivs, data],
+  );
   /**
    * 🔴 THE `anyShared` HALF — app/page.tsx:2426, same idea. A partner you OWN
    * whose division you do not hold; the parallel to applyAccess admitting an
@@ -411,7 +523,14 @@ export default function ReferralsSection({
    * label to be wrong, and the heading names what is actually there.
    */
   const canSwitchDivision = divisionChoices.length > 1 || anyShared;
-  /** The heading when there is nothing to switch. Never "All divisions". */
+  /**
+   * The heading when there is nothing to switch. Never "All divisions".
+   *
+   * ⚠️ ROUND 167 — `divisionChoices` NOW INCLUDES THE VIEWER'S OWN DIVISIONS,
+   * so an ODP-only viewer reads "ODP" even on a day when no ODP partner and no
+   * ODP event exists. Before this round the same viewer read "OLTL", off one
+   * unscoped OLTL event, and "Referral partners" the moment it was deleted.
+   */
   const staticDivLabel =
     divisionChoices.length === 1 ? divisionChoices[0] : "Referral partners";
   /**
@@ -425,10 +544,49 @@ export default function ReferralsSection({
    * every state is wallpaper, and wallpaper is not read — the same reasoning
    * that moved round 130's note rather than duplicating it.
    */
+  /**
+   * ═══ ROUND 167 · B7 — AND "All" NOW CARRIES A LABEL TOO, FOR A PARTIAL
+   * VIEWER ═══
+   *
+   * 🔴 THE "EMPTY UNDER All divisions" RULE ABOVE WAS RIGHT FOR THE READER IT
+   * IMAGINED — an admin, for whom "All" really is the account. For a viewer
+   * holding two of five divisions, "All" was the account's NAME over their
+   * TWO divisions' numbers, with nothing beside it. That is the one shape this
+   * suffix exists to prevent, reached through the one case it exempted.
+   *
+   * ⚠️ STILL EMPTY FOR AN ADMIN OR AN AGENCY GRANT (`myDivs === null`), which
+   * keeps the anti-wallpaper reasoning where it applies: there the label would
+   * repeat "everything" on every number on the screen.
+   */
   const scopeSuffix =
-    division === ALL_DIVISIONS ? "" : division === SHARED_SCOPE ? " · shared" : ` · ${division}`;
-  /** True when a number on screen counts less than the account. */
-  const isScoped = division !== ALL_DIVISIONS;
+    division === ALL_DIVISIONS
+      ? myDivs && myDivs.length
+        ? ` · ${myDivs.join(" + ")}`
+        : ""
+      : division === SHARED_SCOPE
+        ? " · shared"
+        : ` · ${division}`;
+  /**
+   * True when a number on screen counts less than the account.
+   *
+   * ⚠️ ROUND 167 — "All" IS NOW SCOPED TOO WHEN THE VIEWER IS. A partial
+   * viewer under the combined option is reading less than the account, which is
+   * exactly what this flag means, and it was answering `false` for them.
+   */
+  const isScoped = division !== ALL_DIVISIONS || !!(myDivs && myDivs.length);
+  /**
+   * The scope's name INSIDE A SENTENCE — "ODP cases only", "ODP + OLTL cases
+   * only".
+   *
+   * 🔴 ONE DERIVATION, THREE READERS, AND THAT IS THE POINT. Widening
+   * `isScoped` above made two existing sentences interpolate `${division}`
+   * while the control reads "All", so both would have said "All cases only" to
+   * a partial viewer — a sentence that is wrong in the opposite direction from
+   * the bug it was fixing. Patching the two templates separately is how they
+   * come to disagree; naming the scope once is how they cannot.
+   */
+  const scopeWords =
+    division === ALL_DIVISIONS ? (myDivs || []).join(" + ") : division;
   /**
    * 🔴 ROUND 130 — THE FALLBACK IS FIRING, AND SILENTLY IS THE PROBLEM.
    *
@@ -477,6 +635,38 @@ export default function ReferralsSection({
     [data, partnerDivisions],
   );
   const eventDivisionsAreItsOwn = !!data?.eventDivisionOptions?.length;
+  /**
+   * ═══ ROUND 167 · C10 — A DIALOG OFFERS ONLY WHAT THE VIEWER COULD THEN SEE ══
+   *
+   * 🔴 ROUND 140'S RULE, ONE FIELD ALONG. That round stopped "Log a referral"
+   * offering a pipeline the viewer holds no grant on, because the case vanished
+   * from its creator's board the moment it was filed. A partner or an event
+   * stamped with a division outside the creator's referral access does exactly
+   * the same thing — written, successful, and gone from the only screen that
+   * would show it.
+   *
+   * ⚠️ THE INTERSECTION IS HERE AND THE REFUSAL IS ON THE SERVER, and both are
+   * needed. Narrowing only the dropdown would stop it NAMING OLTL while the
+   * route still accepted an OLTL division — "the same fault with a cosmetic
+   * patch over it", as the client-pipeline filter already says of itself.
+   *
+   * ⚠️ `null` MEANS ALL — an admin or an Agency grant — and gets the whole list
+   * untouched. An EMPTY array means none, and correctly yields an empty picker:
+   * the dialogs then refuse to save and say why, rather than offering a value
+   * that would be refused.
+   */
+  const mineOf = useCallback(
+    (list: string[]) => (myDivs ? list.filter((d) => myDivs.includes(d)) : list),
+    [myDivs],
+  );
+  const partnerDivisionsMine = useMemo(
+    () => mineOf(partnerDivisions),
+    [mineOf, partnerDivisions],
+  );
+  const eventDivisionsMine = useMemo(
+    () => mineOf(eventDivisions),
+    [mineOf, eventDivisions],
+  );
   /**
    * ⚠️ A CHOICE THAT IS NO LONGER OFFERED IS CLAMPED BACK TO ALL. The list is
    * live now, so it can change under a session — an admin removing a division,
@@ -947,13 +1137,24 @@ export default function ReferralsSection({
    * COUNTED. This is the same treatment a referral gets when its partner is
    * deleted, and for the same reason.
    *
-   * ⚠️ AGAINST `data.events`, NOT THE DIVISION CUT. An attendee at an OLTL
-   * event is not orphaned merely because you are looking at ODP.
+   * ═══ ROUND 167 — COMPUTED SERVER-SIDE NOW, AND THIS IS WHY ════════════════
+   *
+   * 🔴 IT USED TO BE COUNTED HERE, against `data.events`, with a note saying
+   * "AGAINST data.events, NOT THE DIVISION CUT — an attendee at an OLTL event
+   * is not orphaned merely because you are looking at ODP." That was exactly
+   * right while the client held EVERY event.
+   *
+   * ⚠️ ROUND 167 SCOPES EVENTS BY ACCESS, so `data.events` now means "events
+   * you may see". The same line would have reported a WITHHELD event's
+   * attendees as people "recorded at an event that no longer exists" — a
+   * withheld thing read as a deleted one, which is round 145's lesson word for
+   * word. Round 145 moved `danglingReferrals` server-side for the identical
+   * reason; this is its twin, applied two rounds and one object later.
+   *
+   * ⚠️ AND THE OLD COPY IS GONE RATHER THAN KEPT AS A FALLBACK. Two answers to
+   * one question is how they come to disagree.
    */
-  const orphanAttendees = useMemo(() => {
-    const live = new Set((data?.events || []).map((e) => e.id));
-    return (data?.attendees || []).filter((a) => a.eventId && !live.has(a.eventId)).length;
-  }, [data]);
+  const orphanAttendees = data?.meta.danglingAttendees ?? 0;
 
   /**
    * ⚠️ ONE ROW PER PERSON — round 122's dedupe, hoisted so the BADGE and the
@@ -1260,7 +1461,7 @@ export default function ReferralsSection({
             onClick={() => setDivOpen((o) => !o)}
             title="Switch division — everything below changes with it"
           >
-            <span className="rfdivname">{divLabel(division)}</span>
+            <span className="rfdivname">{divLabel(division, myDivs)}</span>
             <svg className="rfcar" viewBox="0 0 10 6" aria-hidden="true">
               <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" />
             </svg>
@@ -1293,7 +1494,7 @@ export default function ReferralsSection({
                       setDivOpen(false);
                     }}
                   >
-                    <span>{divLabel(d)}</span>
+                    <span>{divLabel(d, myDivs)}</span>
                     {d === division ? <span className="rftick">✓</span> : null}
                   </button>
                 </li>
@@ -1319,7 +1520,7 @@ export default function ReferralsSection({
                       setDivOpen(false);
                     }}
                   >
-                    <span>{divLabel(SHARED_SCOPE)}</span>
+                    <span>{divLabel(SHARED_SCOPE, myDivs)}</span>
                     {division === SHARED_SCOPE ? <span className="rftick">✓</span> : null}
                   </button>
                 </li>
@@ -1763,7 +1964,7 @@ export default function ReferralsSection({
                                   {(data?.meta.partnersWithheld ?? 0) > 0
                                     ? "No referral partners you can see"
                                     : data?.partners.length
-                                      ? `No referral partners in ${divLabel(division)}`
+                                      ? `No referral partners in ${divLabel(division, myDivs)}`
                                       : "No referral partners yet"}
                                 </b>
                                 <br />
@@ -1831,6 +2032,13 @@ export default function ReferralsSection({
                         >
                           <td>
                             <div className="rforg">{p.org}</div>
+                            {/* 🔴 ROUND 167 · B8 — ON EVERY ROW, not only the
+                                odd ones. A label that appears sometimes is read
+                                as a warning; one that is always there is read
+                                as a fact, and "ODP" beside an ODP partner is
+                                what makes "Yours · OLTL" beside the next one
+                                mean something. */}
+                            <DivisionTag division={p.division} shared={p.shared} />
                             {p.email || p.phone ? (
                               <div className="rfsub2">
                                 {[p.email, p.phone].filter(Boolean).join(" · ")}
@@ -1933,7 +2141,7 @@ export default function ReferralsSection({
                 <b>Referrals</b>, <b>Won</b> and <b>Revenue</b> count{" "}
                 {division === SHARED_SCOPE
                   ? "only the cases you are entitled to see — these partners work in divisions you do not hold, so most of their business is not counted here"
-                  : `${division} cases only`}
+                  : `${scopeWords} cases only`}
                 .
               </p>
             ) : null}
@@ -1951,24 +2159,40 @@ export default function ReferralsSection({
                     MANAGER". Nothing in this system knows who is a case manager,
                     and reading it off an absent grant would be a role inferred
                     from an absence — the same rule as the `-Sale` name suffix. */}
-                {(data?.meta.viewerDivisions ?? 0) === 0 ? (
+                {/* ═══ ROUND 167 · B9 — THREE SENTENCES, BECAUSE ROUND 162
+                    MADE A FOURTH STATE AND THIS KNEW TWO ═══════════════════
+                    🔴 IT BRANCHED ON `viewerDivisions === 0` AND SAID "you hold
+                    no pipeline". Round 162 gave that number a SECOND cause: an
+                    admin can now set somebody's referral access to an explicit
+                    empty division list, and that somebody may hold several
+                    pipelines. Told "you hold no pipeline" they would go and
+                    check their grants, find them, and conclude the screen is
+                    broken — advice that sends the reader to the wrong place is
+                    the fault this whole sentence exists to avoid, which it then
+                    committed itself.
+                    ⚠️ THE SERVER SAYS WHICH IT IS (`referralScopeKind`).
+                    Nothing here infers it from the count, and nothing infers a
+                    ROLE from either — see the note above. */}
+                <b>
+                  {data?.meta.partnersWithheld}{" "}
+                  {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not shown
+                </b>{" "}
+                {data?.meta.referralScopeKind === "explicit" ? (
                   <>
-                    <b>
-                      {data?.meta.partnersWithheld}{" "}
-                      {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
-                      shown
-                    </b>{" "}
+                    — your referral access is set to no divisions, so no partner
+                    is in scope for you. That is a deliberate setting rather
+                    than a missing grant: ask an admin to change it on{" "}
+                    <b>Admin → Access</b> if it is wrong.
+                  </>
+                ) : data?.meta.referralScopeKind === "none" ||
+                  (data?.meta.viewerDivisions ?? 0) === 0 ? (
+                  <>
                     — you hold no pipeline, so no partner is in scope for you.
                     Case managers see cases through the people they support
                     rather than through a division.
                   </>
                 ) : (
                   <>
-                    <b>
-                      {data?.meta.partnersWithheld}{" "}
-                      {data?.meta.partnersWithheld === 1 ? "partner is" : "partners are"} not
-                      shown
-                    </b>{" "}
                     — they belong to divisions you do not hold. You see the
                     divisions your pipelines are in, plus any partner assigned to
                     you. Ask an admin on <b>Admin → Access</b> if that is wrong.
@@ -2019,8 +2243,8 @@ export default function ReferralsSection({
               </div>
               <span className="rfscopenote">
                 {scope === "mine"
-                  ? `Partners you own, plus any nobody owns — ${queue.length} of ${all.length} in ${divLabel(division)}.`
-                  : `Every partner in ${divLabel(division)} — ${all.length}.`}
+                  ? `Partners you own, plus any nobody owns — ${queue.length} of ${all.length} in ${divLabel(division, myDivs)}.`
+                  : `Every partner in ${divLabel(division, myDivs)} — ${all.length}.`}
               </span>
             </div>
 
@@ -2193,7 +2417,7 @@ export default function ReferralsSection({
                   <b>
                     {division === SHARED_SCOPE
                       ? "Events are not shared"
-                      : `No events in ${divLabel(division)}`}
+                      : `No events in ${divLabel(division, myDivs)}`}
                   </b>
                   <br />
                   {division === SHARED_SCOPE ? (
@@ -2276,10 +2500,15 @@ export default function ReferralsSection({
                             </div>
                           )}
                           <div className="rfevsub">
-                            {[e.venue, e.stage, e.division || "no division"]
-                              .filter(Boolean)
-                              .join(" · ")}
+                            {[e.venue, e.stage].filter(Boolean).join(" · ")}
                           </div>
+                          {/* 🔴 ROUND 167 · B8 — AN EVENT GETS THE SAME WORDING
+                              AS A PARTNER. It read a bare "no division", which
+                              names the gap and not its consequence: a blank or
+                              "All" event is shown to EVERY viewer, and that is
+                              exactly how one OLTL event put "OLTL" on an
+                              ODP-only viewer's heading. */}
+                          <DivisionTag division={e.division} what="event" />
                         </div>
                         <div className="dt">
                           {e.date || "no date"} · {money(e.cost)} cost
@@ -2354,7 +2583,7 @@ export default function ReferralsSection({
                           {money(e.cost)} is the event&apos;s <b>whole</b> cost, and{" "}
                           <b>Cost per legit lead</b> uses every attendee.{" "}
                           <b>Clients</b> and <b>Revenue</b> count{" "}
-                          {division === SHARED_SCOPE ? "only cases you may see" : `${division} cases`}{" "}
+                          {division === SHARED_SCOPE ? "only cases you may see" : `${scopeWords} cases`}{" "}
                           only.
                         </div>
                       ) : null}
@@ -2606,7 +2835,7 @@ export default function ReferralsSection({
               <div className="rfbox">
                 <h3>Referrals by category</h3>
                 <p className="rfcap">
-                  All time, across every source in {divLabel(division)}.
+                  All time, across every source in {divLabel(division, myDivs)}.
                 </p>
                 <Bars
                   rows={byCategory(all)}
@@ -2695,7 +2924,7 @@ export default function ReferralsSection({
         <AddEventDialog
           ssoBlob={ssoBlob}
           partner={eventForPartner}
-          divisions={eventDivisions}
+          divisions={eventDivisionsMine}
           divisionsAreEventsOwn={eventDivisionsAreItsOwn}
           hostFieldPresent={!!data?.meta.eventHostField}
           onClose={() => setEventForPartner(null)}
@@ -2733,7 +2962,7 @@ export default function ReferralsSection({
           owners={data?.owners || []}
           categories={data?.categoryOptions.length ? data.categoryOptions : [...PARTNER_CATEGORIES]}
           tiers={data?.tierOptions.length ? data.tierOptions : [...TIERS]}
-          divisions={partnerDivisions}
+          divisions={partnerDivisionsMine}
           divisionsAreLive={divisionsAreLive}
           onClose={() => setAddOpen(false)}
           onAdded={() => void load()}
@@ -3245,6 +3474,11 @@ function PartnerDrawer({
             ×
           </button>
           <h2>{p.org}</h2>
+          {/* 🔴 ROUND 167 · B8 — THE PANEL SAYS IT TOO. Somebody who opened a
+              partner from a search has not necessarily seen the Sources row it
+              came from, and "why can I see this" is most pressing on the screen
+              where its whole history is. */}
+          <DivisionTag division={p.division} shared={p.shared} />
           <div className="rfdmeta">
             {[p.cat, p.owner ? `owned by ${p.owner}` : "unassigned"]
               .filter(Boolean)
@@ -4161,6 +4395,15 @@ function LogReferralDialog({
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
   const [phone, setPhone] = useState("");
+  /**
+   * 🔴 ROUND 167 — THE FIELD DID NOT EXIST, AND THE ROUTE HAS ALWAYS ACCEPTED
+   * IT. `log-referral` reads `body.email` and this dialog never sent one, so
+   * the only way to make a referral reachable was a phone number. With a phone
+   * or an email now REQUIRED, offering only one of the two keys the route
+   * accepts would force a number out of somebody who has an address — a
+   * requirement met by inventing data, which is the opposite of the point.
+   */
+  const [email, setEmail] = useState("");
   const [monthly, setMonthly] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4366,6 +4609,7 @@ function LogReferralDialog({
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             phone: phone.trim(),
+            email: email.trim(),
             monthlyValue: Number(monthly) || 0,
             pipelineId,
             division: partner?.division || event?.division || "",
@@ -4616,6 +4860,27 @@ function LogReferralDialog({
                 placeholder="(484) 555-0142"
               />
             </div>
+            <div>
+              <label htmlFor="rr-email">Email</label>
+              <input
+                id="rr-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="family@example.com"
+              />
+            </div>
+            {/* 🔴 ROUND 167 — WHY, NOT JUST "REQUIRED". A referral nobody can
+                ring or email is a record that looks workable and is not, and
+                it sits in the pipeline being counted. Round 166 found that
+                GoHighLevel refuses the contact anyway — "Pass at least one of
+                number, email query parameter", about an endpoint the rep never
+                called — and left the decision open; this is the decision. */}
+            {!phone.trim() && !email.trim() ? (
+              <div className="rfdhint rfdbad">
+                ⚠️ Add a phone number or an email — we need a way to reach them.
+              </div>
+            ) : null}
             {/* 🔴 A REP INPUT, NOT A READ-OUT — AND IT IS GIVEN WEIGHT.
                 The brief is explicit: the rep types the estimated monthly value
                 at referral time, and it must not be presented as a read-only
@@ -4768,7 +5033,16 @@ function LogReferralDialog({
               type="button"
               className="cgsave"
               onClick={() => void save()}
-              disabled={busy || !firstName.trim() || !dest || (!partner && !event)}
+              // 🔴 ROUND 167 — A WAY TO REACH THEM IS REQUIRED. The route
+              // refuses it too, with the same sentence; this end is what stops
+              // a rep filling in the whole form to be told no at the bottom.
+              disabled={
+                busy ||
+                !firstName.trim() ||
+                (!phone.trim() && !email.trim()) ||
+                !dest ||
+                (!partner && !event)
+              }
             >
               {busy ? "Saving…" : "Log referral"}
             </button>
@@ -5105,9 +5379,15 @@ function AddEventDialog({
                 />
               </div>
               <div>
-                <label htmlFor="re-div">Division</label>
+                <label htmlFor="re-div">Division *</label>
                 <select id="re-div" value={div} onChange={(e) => setDiv(e.target.value)}>
-                  <option value="">Not set</option>
+                  {/* 🔴 ROUND 167 — "Not set" IS GONE. It used to be the
+                      default, and an event saved with no division is shown to
+                      EVERY viewer (inDivision), which is how one OLTL event put
+                      "OLTL" on an ODP-only viewer's heading. Round 143 made the
+                      same field required on a partner for the same reason; the
+                      event dialog was simply never brought into line. */}
+                  <option value="">Choose a division…</option>
                   {divisions.map((d) => (
                     <option key={d} value={d}>
                       {d === "All" ? "All — appears under every division" : d}
@@ -5116,6 +5396,25 @@ function AddEventDialog({
                 </select>
               </div>
             </div>
+            {/* 🔴 ROUND 167 — REQUIRED, AND THE HINT SAYS WHAT HAPPENS WITHOUT
+                IT rather than only that it is needed. Same wording as the
+                partner dialog's, because it is the same consequence. */}
+            {!div ? (
+              <div className="rfdhint rfdbad">
+                ⚠️ Required. An event with no division is shown to everybody,
+                whichever division they work in.
+              </div>
+            ) : null}
+            {/* ⚠️ ROUND 167 · C10 — AN EMPTY LIST IS ITS OWN SENTENCE. A viewer
+                whose referral access covers no division gets no options, and a
+                picker that is simply empty reads as a broken dropdown. */}
+            {!divisions.length ? (
+              <div className="rfdhint rfdbad">
+                ⚠️ Your referral access covers no divisions, so there is nothing
+                you could file this event under and still see it. Ask an admin on{" "}
+                <b>Admin → Access</b>.
+              </div>
+            ) : null}
             {divisionsAreEventsOwn === false ? (
               <div className="rfdhint">
                 ⚠️ <b>Event Division</b> is not a dropdown on this account, so
@@ -5169,7 +5468,10 @@ function AddEventDialog({
             type="button"
             className="cgsave"
             onClick={() => void save()}
-            disabled={busy || !name.trim() || !venue.trim()}
+            // 🔴 ROUND 167 — `!div` ADDED, matching the partner dialog's Save
+            // guard exactly (round 143). The server refuses it too; this end is
+            // what stops somebody reaching the refusal by accident.
+            disabled={busy || !name.trim() || !venue.trim() || !div}
           >
             {busy ? "Saving…" : "Add event"}
           </button>
