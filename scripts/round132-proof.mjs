@@ -280,6 +280,9 @@ const server = http.createServer((req, res) => {
       return send(200, { opportunity: withC(o) });
     }
     if (path === "/contacts/upsert" && req.method === "POST") {
+      // ROUND 166 — GHL's dedup-key rule; see round124-proof for the full note.
+      if (!j?.email && !j?.phone)
+        return send(400, { message: "Pass at least one of number, email query parameter" });
       const hit = Object.values(A.contacts).find(
         (c) => (j.email && c.email === j.email) || (j.phone && c.phone === j.phone));
       const id = hit?.id || `p_c${Object.keys(A.contacts).length + 1}`;

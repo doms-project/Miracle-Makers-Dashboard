@@ -173,9 +173,29 @@ const server = http.createServer((req, res) => {
         (c.customFields || []).some((f) => f.id === RT && f.value === want));
       return json(res, 200, { contacts: hits, total: hits.length });
     }
-    if (path === "/contacts/upsert" && req.method === "POST") {
+    if ((path === "/contacts/upsert" || path === "/contacts/") && req.method === "POST") {
+      // ═══ ROUND 166 — GOHIGHLEVEL'S TWO CONTACT RULES, WORD FOR WORD ═══
+      // 🔴 THIS FAKE USED TO ACCEPT A NAME-ONLY UPSERT AND ANSWER 200, which is
+      // rule 1 — "a fake that answers something GoHighLevel would refuse is a
+      // harness bug, whether or not a test is red." It is why the venue path
+      // shipped green in round 124 and has never worked in production once.
+      // ⚠️ AND THE CORRECT VERSION ALREADY EXISTED IN THIS REPO, in
+      // round133-proof and round134-proof, since round 133. It was written
+      // where the round was ABOUT the rule and never swept to the fakes that
+      // merely use contacts — the same failure as the product bug it hid.
+      // Probed live 1 Oct: `name` counts for NEITHER endpoint.
+      if (path === "/contacts/upsert" && !body?.email && !body?.phone)
+        return json(res, 400, { message: "Pass at least one of number, email query parameter" });
+      if (path === "/contacts/" && !body?.email && !body?.phone &&
+          !body?.firstName && !body?.lastName)
+        return json(res, 422, {
+          message: "Contacts without email, phone, firstName and lastName are not allowed.",
+        });
       const id = `c_new${contacts.length + 1}`;
-      contacts.push({ id, contactName: body.name || "", email: body.email || "",
+      contacts.push({ id,
+                      contactName: body.name || [body.firstName, body.lastName]
+                        .filter(Boolean).join(" "),
+                      email: body.email || "",
                       phone: body.phone || "", source: body.source || "", customFields: [] });
       return json(res, 200, { contact: { id }, new: true });
     }

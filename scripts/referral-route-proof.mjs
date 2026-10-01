@@ -249,8 +249,19 @@ const fake = http.createServer((req, res) => {
     }
 
     // ── the write paths ──────────────────────────────────────────────────
-    if (u === "/contacts/upsert")
+    // ROUND 166 — GHL's two contact rules; see round124-proof for the full note.
+    if (u === "/contacts/upsert") {
+      if (!j?.email && !j?.phone)
+        return send(400, { message: "Pass at least one of number, email query parameter" });
       return send(200, { contact: { id: "newc1" }, new: true });
+    }
+    if (u === "/contacts/") {
+      if (!j?.email && !j?.phone && !j?.firstName && !j?.lastName)
+        return send(422, {
+          message: "Contacts without email, phone, firstName and lastName are not allowed.",
+        });
+      return send(200, { contact: { id: "madec1" } });
+    }
     if (u === "/opportunities/" || u === "/opportunities") {
       if (FAIL_OPP) return send(422, { message: "pipeline is archived" });
       return send(200, { opportunity: { id: "newo1" } });
@@ -474,6 +485,13 @@ const fromEvent = await post({
   action: "log-referral",
   eventId: "ev1",
   firstName: "Eve",
+  // ⚠️ ROUND 166 — THE PHONE IS NEW. This pair of assertions is about there
+  // being NO PARTNER, and the fixture also happened to carry no phone and no
+  // email — so once the fake started refusing a keyless contact the way
+  // GoHighLevel does, both went red for a reason neither of them names. One
+  // fixture, two independent claims: rule 4. The keyless case is now asserted
+  // deliberately, in scripts/contact-create-proof.mjs §4.
+  phone: "+15559990001",
   division: "OLTL",
   monthlyValue: 4200,
 });
