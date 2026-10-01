@@ -29,3 +29,4 @@ stage-recorder
 stage-kpi
 contact-create
 referral-scope
+timezone

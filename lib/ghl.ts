@@ -11,6 +11,7 @@ import {
   folderIdsPresent,
 } from "./fieldFolders";
 import { divisionLabel } from "./division";
+import { formatEasternNoZone } from "./dates";
 import { e164, emailKey, phoneKey } from "./phone";
 import { mapLimit, type Settled } from "./concurrency";
 import { getCaseManagers } from "./pipelineAccess";
@@ -1906,16 +1907,26 @@ export interface OppNote {
   removed: boolean; // ITEM 5 — soft-deleted: the text is a removal record
 }
 
+/**
+ * A note's timestamp, as the reader should see it.
+ *
+ * 🔴 ROUND 168 — THIS WAS THE WORST OF THE FOUR, BECAUSE IT RUNS ON THE SERVER.
+ * `toLocaleString` with NO `timeZone` uses the host's zone, and this host is
+ * UTC — so a note added at 8pm Eastern was stamped with the NEXT DAY at
+ * 12:00 AM, on every note, for every reader. Not a formatting preference: the
+ * date was wrong.
+ *
+ * ⚠️ NO ZONE LABEL, DELIBERATELY. Every note in the list is Eastern and the
+ * panel says so once; "(EDT)" on forty rows is wallpaper. `formatEasternNoZone`
+ * carries that decision and the reasoning behind it.
+ *
+ * ⚠️ RETURNS THE RAW VALUE ON AN UNPARSEABLE DATE, as it always did — a stamp
+ * nobody can read beats a note that renders blank.
+ */
 function fmtNoteDate(iso?: string): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  const out = formatEasternNoZone(iso);
+  return out || iso;
 }
 
 function noteBelongsToOpp(n: RawNote, oppId: string): boolean {
@@ -6721,4 +6732,97 @@ export async function updateContactNative(
 
   if (!Object.keys(body).length) return;
   await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, body);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 168 — THE RECORD FOOTER: CREATED, CREATED BY, UPDATED, RECORD ID.
+//
+// 🔴 `internalSource` IS ONLY ON THE SINGLE-RECORD ENDPOINT. The board is built
+// from `/opportunities/search`, which does not carry it — probed live on
+// William Yost (yNdWocl4xWXtIwwU5Nsr), where the single read returns
+// `{ type: "CREATED", source: "WORKFLOW_NEW", id: "cb82ab6e-…" }` and the
+// search returns nothing of the sort. So "Created by" cannot come from the
+// payload the panel already has, and that is why this exists.
+//
+// ⚠️ ONE READ, SERVING BOTH THE GATE AND THE FOOTER. The route has to check
+// `canSeeRecord`, which needs the mapped record (owner, followers, pipeline),
+// and the footer needs a field the mapper does not keep. Returning both from a
+// single GET is one request per panel open; calling `getOpportunityById` and
+// then reading again would be two for the same bytes.
+//
+// 🔴 AND `internalSource` IS NOT ADDED TO OpportunityRecord. That type is every
+// row of the board — several hundred of them — and a field that only exists on
+// a different endpoint would imply the board has it. The next person to read
+// `rec.internalSource` on a list record would get `undefined` and no
+// explanation. It stays out here, where its provenance is written down.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface OppFooter {
+  createdAt: string;
+  updatedAt: string;
+  /** Raw, exactly as GoHighLevel sent it. Labelled on the client. */
+  sourceType: string;
+  sourceValue: string;
+  /** A GHL user id when a PERSON created the record, else "". */
+  sourceUserId: string;
+}
+
+/**
+ * The footer fields plus the record the access gate needs, from ONE GET.
+ *
+ * `null` when the record does not exist. `footer` is present whenever the
+ * record is, with empty strings for anything GoHighLevel did not send — the
+ * client renders nothing for an empty value and never guesses.
+ */
+export async function getOpportunityWithFooter(
+  id: string,
+): Promise<{ rec: OpportunityRecord; footer: OppFooter } | null> {
+  let data: { opportunity?: RawOpportunity };
+  try {
+    data = await ghlGet<{ opportunity?: RawOpportunity }>(
+      `/opportunities/${encodeURIComponent(id)}`,
+    );
+  } catch (e) {
+    if (e instanceof GhlError && e.status === 404) return null;
+    throw e;
+  }
+  const opp = data.opportunity;
+  if (!opp) return null;
+
+  // ⚠️ MAPPED BY THE SAME FUNCTION THE REST OF THE APP USES, FROM THE RESPONSE
+  // ABOVE. The first version of this called `getOpportunityById(id)` here —
+  // which does its OWN GET, burst-cached or not — so the comment above claiming
+  // one read was describing two. `normalizeOpportunity` is the mapper
+  // `getOpportunityByIdUncached` itself ends with, and every lookup it needs is
+  // memoised per warm lambda, so this adds no request. Re-deriving the owner
+  // and followers by hand would be a second mapper, and `canSeeRecord` would
+  // then be testing a shape nothing else produces.
+  const selected = await getPipelines();
+  const stageNameByKey = new Map<string, string>();
+  const pipelineNameById = new Map<string, string>();
+  for (const p of selected) {
+    pipelineNameById.set(p.id, p.name);
+    for (const st of p.stages || []) stageNameByKey.set(stageKey(p.id, st.id), st.name);
+  }
+  const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
+  const rec = normalizeOpportunity(opp, fieldMap, userMap, stageNameByKey, pipelineNameById);
+
+  const src = (opp as unknown as {
+    internalSource?: { type?: unknown; source?: unknown; id?: unknown; userId?: unknown };
+  }).internalSource;
+  return {
+    rec,
+    footer: {
+      createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
+      updatedAt: String(opp.updatedAt ?? opp.dateUpdated ?? ""),
+      sourceType: src ? String(src.type ?? "") : "",
+      sourceValue: src ? String(src.source ?? "") : "",
+      // ⚠️ `id` ON internalSource IS NOT A USER ID on the one sample we have —
+      // it is a uuid, and the source was WORKFLOW_NEW, so it names the
+      // WORKFLOW. It is read as a user id ONLY from a `userId` key, which is
+      // the only key that could mean one. Guessing that a uuid is a person is
+      // how a workflow ends up credited to whoever happens to match.
+      sourceUserId: src && src.userId ? String(src.userId) : "",
+    },
+  };
 }

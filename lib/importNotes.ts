@@ -12,6 +12,7 @@
 // is a general shape rule that degrades to plain listing.
 // ---------------------------------------------------------------------------
 
+import { formatEasternDay } from "@/lib/dates";
 /**
  * Excel writes a leading apostrophe onto anything it would otherwise reformat —
  * leading zeros, phone numbers, dates, things that look like fractions. Most of
@@ -199,11 +200,25 @@ export function buildNoteBody(cols: NoteColumn[]): string {
  * file).
  */
 export function importNoteHeading(source: string, when: Date): string {
-  const day = when.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  // ═══ ROUND 168 — EASTERN, AND THIS ONE HAS A CONSEQUENCE ═══════════════════
+  //
+  // 🔴 THIS STRING IS ALSO A DEDUPE KEY. app/api/import/route.ts rebuilds it and
+  // asks whether a note on the record already `startsWith` it — see the note
+  // above about it having to be stable for a given source and day.
+  //
+  // ⚠️ SO CHANGING THE ZONE CHANGES THE KEY, for one window. The server runs on
+  // UTC, so between 00:00 and 04:00 UTC (20:00–00:00 Eastern) the day now
+  // differs from the day a heading written before this round carries. A re-run
+  // of the same file inside that window, across this deploy, will not match the
+  // earlier heading and will add a second note rather than skipping.
+  //
+  // ⚠️ ACCEPTED, AND HERE IS WHY: the heading is read by people, and "Imported
+  // from … 2 October" on a 1 October evening import is the same wrong date the
+  // note stamps had. The window is four hours, the failure is a duplicate note
+  // rather than lost data, and it cannot recur once a heading is written in the
+  // new zone. The alternative — leaving one string in UTC because it is also an
+  // index — would mean the dashboard shows two different days for one import.
+  const day = formatEasternDay(when);
   return `Imported from ${source || "an import"} — ${day}`;
 }
 

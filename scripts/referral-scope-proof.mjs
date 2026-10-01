@@ -27,12 +27,21 @@ const ok = (n, c, got) => {
 const LOC = "loc_test";
 const SECRET = "harness_shared_secret";
 const EV = "pipe_events", P_ODP = "pipe_odp", P_OLTL = "pipe_oltl";
+// 🔴 ROUND 168 — BILL'S REAL SHAPE. He holds FOUR ODP pipelines, two of which
+// are applicant pipelines, and `divisionLabel` turns their names into "ODP DSP"
+// and "ODP Staff" — strings no partner can ever carry. Without these two in the
+// fixture the phantom divisions cannot appear and item 1 proves nothing.
+const P_ODP_TR = "pipe_odp_transfer";
+const P_ODP_DSP = "pipe_odp_dsp";
+const P_ODP_STAFF = "pipe_odp_staff";
+const P_OLTL_CG = "pipe_oltl_cg";
 const RT = "F_RT", PDIV = "F_PDIV", CAT = "F_CAT", TIER = "F_TIER", NOTES = "F_NOTES";
 const EVATT = "F_EVATT", EVOUT = "F_EVOUT", EVPROF = "F_EVPROF";
 const EVDATE = "F_EVDATE", EVCOST = "F_EVCOST", EVVEN = "F_EVVEN", EVDIV = "F_EVDIV";
 const HOST = "F_HOST", REF = "F_REF";
 
-const BILL = "u_bill";        // ODP pipelines only
+const BILL = "u_bill";        // four ODP pipelines, two of them applicant
+const OLTL_USER = "u_ern";    // OLTL client + OLTL applicant
 const BOTH = "u_both";        // ODP + OLTL
 const ADMIN_ID = "u_admin";
 
@@ -46,6 +55,7 @@ const blob = (userId, role) =>
   ).toString();
 const BILL_SSO = blob(BILL, "user");
 const BOTH_SSO = blob(BOTH, "user");
+const OLTL_SSO = blob(OLTL_USER, "user");
 const ADMIN_SSO = blob(ADMIN_ID, "admin");
 
 // ── the account ────────────────────────────────────────────────────────────
@@ -101,14 +111,22 @@ const server = http.createServer((req, res) => {
     };
 
     if (path === "/users/")
-      return send(200, { users: [BILL, BOTH, ADMIN_ID].map((id) => ({ id, name: id })) });
+      return send(200, {
+        users: [BILL, OLTL_USER, BOTH, ADMIN_ID].map((id) => ({ id, name: id })),
+      });
     if (path === `/locations/${LOC}/customValues` && req.method === "GET")
       return send(200, { customValues: [
         { id: "cv1", name: "MM Pipeline Folders", value: cfg },
         { id: "cv2", name: "MM Pipeline Access", value: JSON.stringify({
           // 🔴 BILL HOLDS ODP PIPELINES AND NO REFERRAL OVERRIDE — so his
           // divisions are DERIVED, which is the default and the live shape.
-          pipelines: { [BILL]: [P_ODP], [BOTH]: [P_ODP, P_OLTL] },
+          pipelines: {
+            // 🔴 FOUR PIPELINES, THREE DERIVED "DIVISIONS", ONE REAL ONE.
+            [BILL]: [P_ODP, P_ODP_TR, P_ODP_DSP, P_ODP_STAFF],
+            // An OLTL user holding a client pipeline and an applicant one.
+            [OLTL_USER]: [P_OLTL, P_OLTL_CG],
+            [BOTH]: [P_ODP, P_OLTL],
+          },
           folders: {}, master: [], caseManagers: {}, referralAccess: {},
         }) },
       ] });
@@ -137,7 +155,14 @@ const server = http.createServer((req, res) => {
     if (path === "/opportunities/pipelines")
       return send(200, { pipelines: [
         { id: P_ODP, name: "ODP Enrollment", stages: [{ id: "o_s1", name: "NEW LEAD", position: 0 }] },
+        { id: P_ODP_TR, name: "ODP Transfer", stages: [{ id: "ot_s1", name: "NEW LEAD", position: 0 }] },
+        // 🔴 THE TWO THAT PRODUCED THE PHANTOMS. divisionLabel strips only a
+        // workflow suffix, so these become "ODP DSP Applicant" -> "ODP DSP"
+        // and "ODP Staff Applicants" -> "ODP Staff".
+        { id: P_ODP_DSP, name: "ODP DSP Applicant", stages: [{ id: "od_s1", name: "NEW", position: 0 }] },
+        { id: P_ODP_STAFF, name: "ODP Staff Applicants", stages: [{ id: "os_s1", name: "NEW", position: 0 }] },
         { id: P_OLTL, name: "OLTL Enrollment", stages: [{ id: "l_s1", name: "NEW LEAD", position: 0 }] },
+        { id: P_OLTL_CG, name: "OLTL Caregiver Applicants", stages: [{ id: "lc_s1", name: "NEW", position: 0 }] },
         { id: EV, name: "Events", stages: [{ id: "s1", name: "Held", position: 0 }] },
       ] });
     if (path === "/opportunities/search") {
@@ -149,6 +174,13 @@ const server = http.createServer((req, res) => {
       const id = `o${opps.length + 1}`;
       opps.push({ id, ...j, customFields: j.customFields || [] });
       return send(200, { opportunity: { id } });
+    }
+    // ⚠️ ROUND 168 — THE SINGLE-RECORD READ, which the footer route needs and
+    // which the board's search does NOT answer. `internalSource` lives only
+    // here, and that asymmetry is the whole reason the route exists.
+    if (/^\/opportunities\/[^/]+$/.test(path) && req.method === "GET") {
+      const o = opps.find((x) => x.id === path.split("/")[2]);
+      return o ? send(200, { opportunity: o }) : send(404, { message: "not found" });
     }
     if (path === "/contacts/search") {
       if (j?.query) {
@@ -243,6 +275,10 @@ ok("the scope kind is derived, not explicit or none",
 
 // ── the control ───────────────────────────────────────────────────────────
 const adm = await get(ADMIN_SSO);
+// ⚠️ FETCHED HERE, NOT IN §4. §1a's control needs the explicitly-granted viewer
+// to show that round 168's narrowing applies to the DERIVED path only, and a
+// control declared after the thing it controls is a control nobody ran.
+const both = await get(BOTH_SSO);
 const admText = JSON.stringify(adm.body);
 ok("🔴 CONTROL — the admin SEES the event", adm.body.events.length === 1, adm.body.events.length);
 ok("🔴 CONTROL — and both attendees",
@@ -252,6 +288,47 @@ ok("🔴 CONTROL — so there really was something to withhold",
   { e: adm.body.meta.eventsWithheld, a: adm.body.meta.attendeesWithheld });
 ok("🔴 CONTROL — the admin gets the switcher, not a division name",
   adm.body.meta.viewerReferralDivisions === null, adm.body.meta.viewerReferralDivisions);
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n═══ 1a · 🔴 ROUND 168 — DIVISIONS NO PARTNER CAN HAVE ═══");
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 BILL READ "ODP DSP + ODP + ODP Staff" WITH A SWITCHER. Derived access came
+// from his pipeline NAMES through `divisionLabel`, which strips only a workflow
+// suffix — so two applicant pipelines became two divisions no partner can
+// carry. The filter was always right; the label was the lie, which is why a
+// live check found no leak.
+//
+// ⚠️ ROUND 167 IS WHAT MADE IT VISIBLE, AND THAT WAS CORRECT. The heading used
+// to come from the records, which never hold those names.
+ok("🔴 Bill's four pipelines resolve to ONE division, not three",
+  JSON.stringify(bill.body.meta.viewerReferralDivisions) === '["ODP"]',
+  bill.body.meta.viewerReferralDivisions);
+ok("🔴 …so there is no switcher and no \"Every division\"",
+  (bill.body.meta.viewerReferralDivisions || []).length === 1);
+const billDivText = JSON.stringify(bill.body.meta.viewerReferralDivisions);
+ok("⚠️ \"ODP DSP\" is gone", !/ODP DSP/.test(billDivText), billDivText);
+ok("⚠️ \"ODP Staff\" is gone", !/ODP Staff/.test(billDivText), billDivText);
+
+const ernGet = await get(OLTL_SSO);
+ok("🔴 an OLTL user with a client AND an applicant pipeline reads just OLTL",
+  JSON.stringify(ernGet.body.meta.viewerReferralDivisions) === '["OLTL"]',
+  ernGet.body.meta.viewerReferralDivisions);
+ok("⚠️ \"OLTL Caregiver\" is gone",
+  !/OLTL Caregiver/.test(JSON.stringify(ernGet.body.meta.viewerReferralDivisions)));
+
+// 🔴 THE CONTROL IS THE EXPLICIT GRANT. Narrowing must apply to the DERIVED
+// path only — an admin naming a division means it, even one no partner carries
+// yet, which is what round 162's orphan chips exist to show.
+ok("🔴 CONTROL — an explicitly granted pair still gets BOTH and the switcher",
+  JSON.stringify(both.body.meta.viewerReferralDivisions) === '["ODP","OLTL"]',
+  both.body.meta.viewerReferralDivisions);
+// ⚠️ AND THE DERIVED NARROWING IS NOT JUST "DROP EVERYTHING BUT ONE". Bill's
+// surviving division is the one Partner Division actually offers.
+ok("⚠️ the survivor is a real Partner Division option",
+  ["ODP", "OLTL", "Private Pay", "All"].includes(
+    (bill.body.meta.viewerReferralDivisions || [])[0]));
+ok("the scope kind is still \"derived\", not \"none\"",
+  bill.body.meta.referralScopeKind === "derived", bill.body.meta.referralScopeKind);
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 1b · 🔴 THE HEADING ITSELF, NOT JUST THE FIELD IT READS ═══");
@@ -334,7 +411,6 @@ ok("🔴 CONTROL — the admin sees the same three, none of them `shared`",
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 4 · TWO DIVISIONS — \"ODP + OLTL\", NOT \"ALL\" ═══");
 // ═══════════════════════════════════════════════════════════════════════════
-const both = await get(BOTH_SSO);
 ok("the two-division viewer gets both names",
   JSON.stringify(both.body.meta.viewerReferralDivisions) === '["ODP","OLTL"]',
   both.body.meta.viewerReferralDivisions);
@@ -451,6 +527,62 @@ ok("the tab prefers the field's options over the pipeline derivation (source)",
   /partnerDivisionOptions\?\.length\)\s*return/.test(tabSrc), "no preference found");
 ok("…and says which list it is showing when it falls back (source)",
   /referralChoicesAreLive/.test(tabSrc), "no disclosure");
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n═══ 8 · ROUND 168 — THE FOOTER ROUTE IS GATED ═══");
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 IT IS A NEW PER-RECORD READ, SO IT IS A NEW WAY TO READ A RECORD. Without
+// `canSeeRecord` it would confirm a record's existence, its creation time and
+// who made it for any id a viewer could guess — including ones their board
+// withholds. Same gate, same shape, as conflicts/route.ts.
+const footer = await import("../app/api/opportunities/[id]/footer/route.ts");
+const callFooter = async (sso, id) => {
+  const r = await footer.GET(
+    new Request(`http://x/api/opportunities/${id}/footer`, {
+      headers: { "x-ghl-sso-key": sso },
+    }),
+    { params: Promise.resolve({ id }) },
+  );
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+};
+
+// An opportunity owned by somebody else, in a pipeline Bill does not hold.
+opps.push({
+  id: "o_secret", name: "Not Bill's", pipelineId: P_OLTL, pipelineStageId: "l_s1",
+  contactId: "p_other", assignedTo: OLTL_USER,
+  createdAt: "2026-10-01T03:34:26.497Z", updatedAt: "2026-10-01T03:34:59.290Z",
+  internalSource: { type: "CREATED", source: "WORKFLOW_NEW", id: "cb82ab6e-dead-beef" },
+  customFields: [],
+});
+
+const denied = await callFooter(BILL_SSO, "o_secret");
+ok("🔴 Bill is REFUSED a record he cannot see", denied.status === 403, denied);
+ok("…and nothing about it leaks into the refusal",
+  !/Not Bill|WORKFLOW|2026-10-01/.test(JSON.stringify(denied.body)), denied.body);
+
+// 🔴 THE CONTROL. "Refused" is satisfied by the route refusing everybody.
+const allowed = await callFooter(OLTL_SSO, "o_secret");
+ok("🔴 CONTROL — its OWNER is allowed", allowed.status === 200, allowed);
+ok("…and gets William Yost's exact creation string",
+  allowed.body.createdAt === "2026-10-01T03:34:26.497Z", allowed.body.createdAt);
+ok("🔴 …with WORKFLOW_NEW resolved to \"Workflow\"",
+  allowed.body.createdBy === "Workflow", allowed.body.createdBy);
+ok("…and the record id, for the copy button",
+  allowed.body.recordId === "o_secret", allowed.body.recordId);
+ok("🔴 CONTROL — an admin is allowed too, so the gate is access and not a wall",
+  (await callFooter(ADMIN_SSO, "o_secret")).status === 200);
+ok("a missing record is 404, not 403 — a different answer for a different cause",
+  (await callFooter(ADMIN_SSO, "o_nonexistent")).status === 404);
+
+// ⚠️ NO internalSource AT ALL — the panel must render nothing, not "Unknown".
+opps.push({
+  id: "o_plain", name: "Plain", pipelineId: P_OLTL, pipelineStageId: "l_s1",
+  contactId: "p_other", assignedTo: OLTL_USER,
+  createdAt: "2026-03-14T00:00:00.000Z", customFields: [],
+});
+const plain = await callFooter(ADMIN_SSO, "o_plain");
+ok("🔴 a record with NO internalSource returns an EMPTY createdBy",
+  plain.status === 200 && plain.body.createdBy === "", plain.body);
 
 console.log(`\n${fail ? "🔴" : "✅"}  ${pass} passed · ${fail} failed`);
 server.close();

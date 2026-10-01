@@ -125,7 +125,7 @@ export interface Payload {
      */
     viewerReferralDivisions?: string[] | null;
     /** Why that list is what it is — see lib/pipelineAccess.referralScopeKind. */
-    referralScopeKind?: "all" | "derived" | "none" | "explicit";
+    referralScopeKind?: "all" | "derived" | "none" | "explicit" | "unmatched";
     /** Events withheld from THIS viewer by division. A count, never names. */
     eventsWithheld?: number;
     /** Attendees whose event is withheld. A count, never names. */
@@ -1532,8 +1532,16 @@ export default function ReferralsSection({
           <p className="rfsub">
             Referral sources, the contact cadence they are owed, and what they
             have sent.{" "}
+            {/* 🔴 ROUND 168 — IT SAID "Every division." TO EVERYONE, because it
+                branched on the CONTROL's value, which is literally "All" for an
+                admin and a one-division rep alike. Bill read "Every division."
+                over three divisions he does not hold. Same root as round 167's
+                B7 and the same fix: `myDivs` is null only for an admin or an
+                Agency grant, which is the one case the sentence is true. */}
             {division === "All"
-              ? "Every division."
+              ? myDivs && myDivs.length
+                ? `${myDivs.join(" + ")}, plus every partner marked "All".`
+                : "Every division."
               : `${division}, plus every partner marked "All".`}
           </p>
         </div>
@@ -2183,6 +2191,21 @@ export default function ReferralsSection({
                     is in scope for you. That is a deliberate setting rather
                     than a missing grant: ask an admin to change it on{" "}
                     <b>Admin → Access</b> if it is wrong.
+                  </>
+                ) : data?.meta.referralScopeKind === "unmatched" ? (
+                  /* 🔴 ROUND 168 — THE FOURTH SENTENCE. A recruiter holding only
+                     applicant pipelines holds SOMETHING, so "you hold no
+                     pipeline" would send them to check a grant they have. And
+                     their pipelines genuinely have no referral partners: the
+                     divisions those names imply are not Partner Division
+                     values. Both halves are said, because knowing it is not a
+                     mistake is the useful part. */
+                  <>
+                    — the pipelines you hold are applicant pipelines, which have
+                    no referral partners of their own. That is not a
+                    misconfiguration; referral partners belong to the client
+                    programmes. Ask an admin on <b>Admin → Access</b> if you
+                    should see one of those too.
                   </>
                 ) : data?.meta.referralScopeKind === "none" ||
                   (data?.meta.viewerDivisions ?? 0) === 0 ? (
