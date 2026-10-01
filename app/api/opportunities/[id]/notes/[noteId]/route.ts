@@ -11,6 +11,7 @@ import {
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord } from "@/lib/visibility";
+import { formatEasternDay } from "@/lib/dates";
 import type { ApiError } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 
@@ -227,12 +228,11 @@ async function deleteHandler(
     // the note's own dateAdded is the ORIGINAL write time, not the removal.
     const userMap = await getUserMap();
     const who = (existing.userId && userMap.get(existing.userId)) || "the author";
-    const when = new Date().toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      timeZone: "UTC",
-    });
+    // 🔴 ROUND 168 — WAS `timeZone: "UTC"`, EXPLICITLY, so a note removed at
+    // 9pm Eastern was stamped with tomorrow's date in the note text itself —
+    // permanently, because this string is written INTO the record. One zone for
+    // the dashboard; this is a day with no clock, so it takes the Eastern DAY.
+    const when = formatEasternDay(new Date());
     // A MOVE note loses only its reason — the system sentence stays, so the
     // receiving rep still sees how the case reached them. A MANUAL note has no
     // system half, so the whole thing becomes the removal record.

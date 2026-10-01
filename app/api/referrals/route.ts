@@ -203,6 +203,19 @@ interface Body {
  * at all until this round — and with none, this returns undefined and the Events
  * tab says so rather than guessing which pipeline holds the events.
  */
+/**
+ * A custom field's picklist options, by field NAME.
+ *
+ * ⚠️ ROUND 168 — HOISTED TO MODULE SCOPE. It was a local const inside the GET
+ * handler, and the POST's division guard needs the same list: a write refused
+ * against one allow-list while the heading was built from another would be two
+ * answers to one question. One definition, both handlers.
+ */
+const optionsOf = (
+  defs: { id: string; name: string; options?: string[] }[],
+  name: string,
+): string[] => defs.find((d) => norm(d.name) === norm(name))?.options || [];
+
 async function eventsPipeline(): Promise<{
   pipe: { id: string; name: string; stages: { id: string; name: string; position?: number }[] } | undefined;
   /** How it was found, so the screen can say what to fix. */
@@ -454,10 +467,6 @@ export async function GET(request: Request) {
       // the prototype, 17 in the brief, 19 on the live field) because each was
       // somebody's transcription of another. Reading the field's own options
       // removes the reconciliation problem rather than solving it once.
-      const optionsOf = (
-        defs: { id: string; name: string; options?: string[] }[],
-        name: string,
-      ) => defs.find((d) => norm(d.name) === norm(name))?.options || [];
 
       // ── free-text contact search, for "+ Add partner → existing contact" ──
       // 🔴 949 CONTACTS ALREADY EXIST. Without this the first thing this
@@ -511,10 +520,14 @@ export async function GET(request: Request) {
         // 🔴 ROUND 161 — the resolver, not `userDivisions`. Same `null = all`
         // convention, so this reads identically; what changed is that an admin
         // can now override the derived answer per user. Absent = derived.
+        // ⚠️ ROUND 168 — THE ALLOW-LIST GOES TO THIS PICKER TOO. Two lists
+        // disagreeing about who may see whom is a second source of truth, which
+        // is the fault round 143 closed on exactly this picker.
         const pickerDivisions = referralDivisions(
           session?.userId || "",
           new Map(pipesForPicker.map((p) => [p.id, p.name])),
           pickerAdmin,
+          optionsOf(await getEditableFieldDefs("contact"), PARTNER_FIELDS.division.name),
         );
         const rows = res.rows
           .map((c) => ({
@@ -625,10 +638,15 @@ export async function GET(request: Request) {
       // an ownership flag and round 122 settled that aggregates must not be cut
       // by it. This is a different question — which PROGRAMME's partners you
       // work with — and it has a different answer.
+      // 🔴 ROUND 168 — NARROWED TO WHAT A PARTNER CAN ACTUALLY BE LABELLED
+      // WITH. `contactDefs` is already read at the top of this handler, so this
+      // costs no request. See the banner on referralDivisions.
+      const partnerDivisionOptions = optionsOf(contactDefs, PARTNER_FIELDS.division.name);
       const partnerDivisions = referralDivisions(
         session?.userId || "",
         pipelineNameById,
         isAdmin,
+        partnerDivisionOptions,
       );
       const scoped = allPartners.map((p) => {
         // Blank and "All" are UNIVERSAL FOR DISPLAY — see inDivision, and the
@@ -1220,6 +1238,7 @@ export async function GET(request: Request) {
               session?.userId || "",
               pipelineNameById,
               isAdmin,
+              partnerDivisionOptions,
             ),
             /**
              * 🔴 ROUND 167 — EVENTS OUTSIDE THIS VIEWER'S DIVISIONS. A COUNT,
@@ -1359,7 +1378,16 @@ export async function POST(request: Request) {
         const d = (want || "").trim();
         if (!d || d === ALL_DIVISIONS || writeIsAdmin) return true;
         const names = new Map((await listPipelines()).map((p) => [p.id, p.name]));
-        const mine = referralDivisions(session?.userId || "", names, writeIsAdmin);
+        // 🔴 ROUND 168 — THE SAME ALLOW-LIST AS THE GET, OR THE HEADING AND
+        // THE GUARD WOULD DISAGREE ABOUT WHAT "ODP" MEANS. A viewer offered ODP
+        // by one and refused it by the other is the cosmetic-patch failure this
+        // file already warns about twice.
+        const mine = referralDivisions(
+          session?.userId || "",
+          names,
+          writeIsAdmin,
+          optionsOf(await getEditableFieldDefs("contact"), PARTNER_FIELDS.division.name),
+        );
         if (!mine || mine.includes(d)) return true;
         return mine;
       };

@@ -95,14 +95,28 @@ export function formatGhlDate(v: unknown, opts?: { withTime?: boolean }): string
   if (!d) return "";
   const date = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
   const wantTime = opts?.withTime ?? hasTime(v);
+  // 🔴 DATE-ONLY STAYS IN UTC, AND THAT IS THE WHOLE POINT OF THIS FILE.
+  // GoHighLevel stores a DATE field at UTC midnight; converting it to Eastern
+  // would render March 14 as March 13. The reasoning is at the top.
   if (!wantTime) return date;
-  const h24 = d.getUTCHours();
-  const h = h24 % 12 === 0 ? 12 : h24 % 12;
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  // The zone is stated rather than silently converted: these are appointment
-  // times entered by staff, and quietly shifting them by the viewer's browser
-  // timezone is worse than being explicit.
-  return `${date}, ${h}:${mm} ${h24 < 12 ? "AM" : "PM"} UTC`;
+  // ═══ ROUND 168 — A VALUE THAT CARRIES A TIME IS A TIMESTAMP, SO IT GOES TO
+  // EASTERN — AND THE DATE PART GOES WITH IT ════════════════════════════════
+  //
+  // 🔴 SWAPPING ONLY THE CLOCK WOULD HAVE BEEN WORSE THAN LEAVING IT. `date`
+  // above is built from getUTCMonth/getUTCDate, so an Eastern time beside it
+  // prints the right hour on the wrong day: 2026-10-01T03:34Z is the 1st in
+  // UTC and the 30th in Eastern. The whole timestamp converts together or
+  // neither half does.
+  //
+  // ⚠️ THE OLD " UTC" SUFFIX WAS HONEST AND IS NO LONGER NEEDED. It existed
+  // because the value was NOT converted and the comment said so — "the zone is
+  // stated rather than silently converted". Now it IS converted, to the one
+  // zone the whole dashboard uses, and the label says which.
+  //
+  // ⚠️ IN PRACTICE THIS BRANCH IS A GUARD. A GHL DATE field cannot hold a time
+  // (proven by a real write, noted above), so it fires only for a value some
+  // other system wrote — which is exactly when getting the day right matters.
+  return formatEastern(d);
 }
 
 // Value for <input type="date"> — always "YYYY-MM-DD". The ONLY editor shape
@@ -110,4 +124,113 @@ export function formatGhlDate(v: unknown, opts?: { withTime?: boolean }): string
 export function toDateInput(v: unknown): string {
   const d = parseGhlDate(v);
   return d ? d.toISOString().slice(0, 10) : "";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 168 — ONE TIME ZONE FOR THE WHOLE DASHBOARD: EASTERN.
+//
+// 🔴 EVERY TIMESTAMP IN THIS APP WAS RENDERING IN A DIFFERENT ZONE DEPENDING ON
+// WHERE IT WAS FORMATTED. The server runs on UTC, so a note added at 8pm
+// Eastern read as the NEXT DAY, 12:00 AM. The note-removal stamp said
+// `timeZone: "UTC"` outright. The import heading used the server default. And
+// `formatGhlDate` appended a literal " UTC" to any timed value. Four sites,
+// four answers, none of them what GoHighLevel shows the same people.
+//
+// ⚠️ EASTERN IS NOT A PREFERENCE, IT IS WHAT THE SOURCE OF TRUTH SHOWS.
+// GoHighLevel renders William Yost's creation as "Sep 30 2026, 11:34pm (EDT)"
+// from `2026-10-01T03:34:26.497Z`. A dashboard beside it saying "Oct 1,
+// 3:34 AM" is two systems disagreeing about when something happened.
+//
+// 🔴 EDT/EST COMES FROM THE ZONE DATABASE, NEVER FROM A RULE WE WROTE. The
+// US DST boundaries have moved before and will again; `timeZoneName: "short"`
+// against `America/New_York` is correct for every date without anybody
+// maintaining it. Verified: October → EDT, January → EST.
+//
+// ⚠️ BUILT FROM `formatToParts`, NOT FROM A LOCALE STRING. The required format
+// — "Sep 30 2026, 11:34pm (EDT)" — has no comma after the day, a lowercase
+// meridiem and a parenthesised zone, and no locale produces that. Assembling
+// the parts is also immune to a locale-string layout changing under us.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The one zone. Everything with a clock time renders here. */
+export const DASHBOARD_TZ = "America/New_York";
+
+const EASTERN = new Intl.DateTimeFormat("en-US", {
+  timeZone: DASHBOARD_TZ,
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZoneName: "short",
+});
+
+const EASTERN_DAY = new Intl.DateTimeFormat("en-US", {
+  timeZone: DASHBOARD_TZ,
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
+function parts(fmt: Intl.DateTimeFormat, d: Date): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of fmt.formatToParts(d)) out[p.type] = p.value;
+  return out;
+}
+
+/**
+ * A real timestamp, in Eastern. `"Sep 30 2026, 11:34pm (EDT)"`.
+ *
+ * 🔴 FOR TIMESTAMPS ONLY — a moment that actually happened. A GoHighLevel DATE
+ * field is NOT one: it is stored at UTC midnight and means a calendar day, so
+ * converting it would render March 14 as March 13. Those go through
+ * `formatGhlDate`, which stays in UTC, and the reason is at the top of this
+ * file.
+ *
+ * "" when there is no usable value — never "Invalid Date", and never today's
+ * date standing in for a missing one.
+ */
+export function formatEastern(iso: unknown): string {
+  if (iso == null || iso === "") return "";
+  const d = iso instanceof Date ? iso : new Date(String(iso));
+  if (isNaN(d.getTime())) return "";
+  const p = parts(EASTERN, d);
+  const mer = (p.dayPeriod || "").toLowerCase();
+  return `${p.month} ${p.day} ${p.year}, ${p.hour}:${p.minute}${mer} (${p.timeZoneName})`;
+}
+
+/**
+ * The Eastern calendar DAY of a timestamp. `"Sep 30 2026"`.
+ *
+ * ⚠️ THE DAY MUST BE TAKEN IN THE SAME ZONE AS THE CLOCK, which is the whole
+ * trap: `2026-10-01T03:34Z` is the 1st in UTC and the 30th in Eastern, so a
+ * date part computed from `getUTCDate()` beside an Eastern time prints the
+ * right time on the wrong day. Anything showing a day without a time uses this.
+ */
+export function formatEasternDay(iso: unknown): string {
+  if (iso == null || iso === "") return "";
+  const d = iso instanceof Date ? iso : new Date(String(iso));
+  if (isNaN(d.getTime())) return "";
+  const p = parts(EASTERN_DAY, d);
+  return `${p.month} ${p.day} ${p.year}`;
+}
+
+/** `"Sep 30"` — the Eastern day without the year, for a dense note header. */
+export function formatEasternShort(iso: unknown): string {
+  const full = formatEasternDay(iso);
+  return full ? full.replace(/ \d{4}$/, "") : "";
+}
+
+/**
+ * `"Sep 30 2026, 11:34pm"` — Eastern, with the zone label left off.
+ *
+ * ⚠️ FOR A LIST WHERE EVERY ROW IS THE SAME ZONE and one header says so.
+ * Repeating "(EDT)" down forty rows is wallpaper; dropping it where a reader
+ * cannot know the zone is the fault wallpaper is preferable to. The caller
+ * chooses, and the ones that do are named in the round report.
+ */
+export function formatEasternNoZone(iso: unknown): string {
+  const s = formatEastern(iso);
+  return s ? s.replace(/ \([A-Z]{2,5}\)$/, "") : "";
 }

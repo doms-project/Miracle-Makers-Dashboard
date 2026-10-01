@@ -32,6 +32,7 @@ import {
 } from "@/lib/transfer";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
+import { formatEasternDay } from "@/lib/dates";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
 import type { ApiError } from "@/lib/types";
@@ -248,7 +249,11 @@ async function preflight(oppId: string): Promise<
     contactLast: contact.lastName || record.last,
     contactEmail: contact.email,
     contactPhone: contact.phone,
-    notes: notes.map((n) => `${n.dateAdded ? `${n.dateAdded.slice(0, 10)} · ` : ""}${n.who || "Unknown"}: ${n.txt}`),
+    // ⚠️ ROUND 168 — WAS A RAW ISO SLICE, so a note written at 9pm Eastern
+    // carried tomorrow's date into the OTHER company's record, permanently.
+    // A seventh timestamp site, not on the round's list — found by sweeping for
+    // `.slice(0, 10)` rather than by reading the brief.
+    notes: notes.map((n) => `${n.dateAdded ? `${formatEasternDay(n.dateAdded)} · ` : ""}${n.who || "Unknown"}: ${n.txt}`),
     selfContactDefs,
     selfOppDefs,
     peerContactDefs,

@@ -44,12 +44,21 @@ import {
   hasValue,
 } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import RecordFooter from "@/components/RecordFooter";
 import TransferDialog from "@/components/TransferDialog";
 import ReassignDialog from "@/components/ReassignDialog";
 import UserPicker from "@/components/UserPicker";
 import HybridPicker from "@/components/HybridPicker";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { toDateInput, formatGhlDate, hasTime, nameImpliesTime } from "@/lib/dates";
+import {
+  toDateInput,
+  formatGhlDate,
+  hasTime,
+  nameImpliesTime,
+  formatEastern,
+  formatEasternDay,
+  formatEasternNoZone,
+} from "@/lib/dates";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
@@ -126,7 +135,10 @@ type SortKey =
   | "src"
   | "rep"
   | "cm"
-  | "checked";
+  | "checked"
+  // ROUND 168 — the Created column. Sortable like every other, from `createdAt`
+  // which is already on every record in the board payload.
+  | "created";
 
 // ITEM A2 — CAREGIVER COLUMNS. Deliberately NOT the client set: Harmony ID,
 // Office, County, Road Blocker and Case Manager are client concepts and would be
@@ -177,6 +189,11 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "rep", label: "Sales Rep" },
   { key: "cm", label: "Case Mgr" },
   { key: "checked", label: "Checked" },
+  // ⚠️ ROUND 168 — LAST, DELIBERATELY. Every column before it is something a
+  // rep works from; when a record was created is provenance, and putting it
+  // mid-row would push Case Mgr and Checked off a narrow screen for a value
+  // nobody scans.
+  { key: "created", label: "Created" },
 ];
 
 // ---- small inline icons (ported from the design) ----
@@ -558,6 +575,14 @@ function recordStr(r: OpportunityRecord, key: string): string {
     case "native:stage":
     case "stage":
       return r.stage;
+    // ⚠️ ROUND 168 — THE RAW ISO, NOT THE DISPLAY STRING. `cmpBy`'s date branch
+    // runs `Date.parse` over this, and "Sep 30 2026, 11:34pm (EDT)" parses to
+    // NaN in some engines and to the wrong instant in others — a sort that
+    // silently falls back to 0 for every row. The column formats it; the
+    // comparator needs the value.
+    case "native:created":
+    case "created":
+      return r.createdAt || "";
     case "native:owner":
     case "rep":
       return r.rep;
@@ -1423,7 +1448,7 @@ function MasterCard({
             }`}
             title={
               age.source === "history"
-                ? `Days since this record last changed stage — recorded at the move (${age.at.slice(0, 10)})`
+                ? `Days since this record last changed stage — recorded at the move (${formatEasternDay(age.at)})`
                 : "Days since GoHighLevel's stage date, which a bulk edit can move without the record moving. Not recorded by this dashboard."
             }
           >
@@ -2919,6 +2944,14 @@ export default function Dashboard() {
   const dimensions = useMemo<Dim[]>(() => {
     const out: Dim[] = [
       { key: "native:stage", label: "Stage", kind: "stage", sortable: true, groupable: true },
+      // ═══ ROUND 168 — THE "CREATED" DIMENSION ═════════════════════════════
+      // 🔴 ZERO EXTRA CALLS. `createdAt` has been on every record in the board
+      // payload since the referral dashboard needed it; nothing fetches
+      // anything for this. One definition drives the column, the sort arrow and
+      // the Newest/Oldest options, so they cannot disagree about the order.
+      // ⚠️ NOT GROUPABLE. Grouping by a timestamp makes one group per record —
+      // a degenerate dimension, the same reason Owner is withheld from a rep.
+      { key: "native:created", label: "Created", kind: "date", sortable: true, groupable: false },
     ];
     if (isAdminViewer)
       out.push({ key: "native:owner", label: "Sales Rep (Owner)", kind: "owner", sortable: true, groupable: true });
@@ -3452,6 +3485,17 @@ export default function Dashboard() {
       <td>
         {r.checked ? (
           <span className="tick">✓</span>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      {/* 🔴 ROUND 168 — EASTERN, WITH NO ZONE LABEL ON EVERY ROW. Forty rows of
+          "(EDT)" is wallpaper; the column header's tooltip carries it once.
+          ⚠️ "—" WHEN GOHIGHLEVEL SENT NO TIMESTAMP, never today's date — the
+          same rule days-in-stage follows. */}
+      <td className="createdcell">
+        {r.createdAt ? (
+          formatEasternNoZone(r.createdAt)
         ) : (
           <span className="muted">—</span>
         )}
@@ -7077,7 +7121,7 @@ export default function Dashboard() {
                 <p>
                   <b>
                     {kpi.since
-                      ? `Recording since ${kpi.since.slice(0, 10)}.`
+                      ? `Recording since ${formatEasternDay(kpi.since)}.`
                       : "Nothing recorded yet."}
                   </b>{" "}
                   Moves before then were never captured, so an early month reads
@@ -7564,7 +7608,11 @@ export default function Dashboard() {
                       key={c.key}
                       className={`sortable ${sortKey === c.key ? "sorted" : ""}`}
                       onClick={() => toggleSort(c.key)}
-                      title={`Sort by ${c.label}`}
+                      title={
+                        c.key === "created"
+                          ? "Sort by when the record was created — times are Eastern, matching GoHighLevel"
+                          : `Sort by ${c.label}`
+                      }
                     >
                       {c.label}
                       <span className="sortcaret">
@@ -8952,6 +9000,21 @@ export default function Dashboard() {
                   </div>
                 </details>
               ) : null}
+
+              {/* ═══ ROUND 168 — THE RECORD FOOTER, AS GOHIGHLEVEL SHOWS IT ═══
+                  🔴 LAST IN THE PANEL, AND THAT IS WHERE IT BELONGS. It is
+                  provenance, not work: nobody opens a case to read when it was
+                  created. Putting it above the fields would push the thing a
+                  rep came for further down every single time.
+                  ⚠️ IT DOES NOT COLLAPSE. "Created by" is the whole reason this
+                  was asked for — it answers "who do I ask about this" — and a
+                  detail somebody has to open is one they will not. */}
+              <RecordFooter
+                opportunityId={selected.id}
+                ssoBlob={sso.blob}
+                createdAt={selected.createdAt}
+                updatedAt={selected.version}
+              />
 
               {/* ITEM 1 — THE SECTIONS THIS RECORD DID NOT ANSWER.
                   Pulled in WHOLE, never field by field: a rep filling

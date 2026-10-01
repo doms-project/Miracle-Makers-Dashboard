@@ -2176,3 +2176,26 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
   text-transform:none;letter-spacing:0;font-size:10px}
 .rfdivtag-mine{background:var(--gold-soft);color:var(--gold-ink);border-color:#f0dcb4;
   text-transform:none;letter-spacing:0;font-size:10px}
+
+/* ═══ ROUND 168 — THE RECORD FOOTER AND THE CREATED COLUMN ══════════════════
+   ⚠️ Swept before writing: no `.recfoot*` or `.createdcell` existed. The
+   footer is `rec`-prefixed rather than reusing `.sysinfo`, which is a
+   <details> with its own summary chrome — the footer must not collapse. */
+.recfoot{margin-top:18px;padding:12px 14px;background:var(--canvas);
+  border:1px solid var(--line);border-radius:var(--radius)}
+.recfootrow{display:flex;gap:10px;align-items:baseline;padding:2px 0;font-size:11.5px}
+.recfootk{flex:0 0 92px;color:var(--ink-3)}
+.recfootv{color:var(--ink-2)}
+.recfootid{display:inline-flex;align-items:center;gap:7px}
+.recfootid code{font-size:10.5px;background:var(--bg);border:1px solid var(--line);
+  border-radius:5px;padding:1px 5px;color:var(--ink-2)}
+.recfootcopy{border:1px solid var(--plum-line);background:var(--plum-soft);color:var(--plum);
+  font:inherit;font-size:10px;font-weight:700;padding:1px 7px;border-radius:5px;cursor:pointer}
+.recfootcopy:hover{background:var(--plum);color:#fff;border-color:var(--plum)}
+/* One line for the whole block, not a zone label on every row. */
+.recfoothint{margin-top:7px;font-size:10.5px;color:var(--ink-3)}
+.recfootbad{color:var(--blk)}
+
+/* A timestamp must not wrap mid-value — "Sep 30 2026," on one line and
+   "11:34pm" on the next reads as two dates. */
+.createdcell{white-space:nowrap;font-size:11.5px;color:var(--ink-2)}

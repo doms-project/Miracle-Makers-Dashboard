@@ -378,8 +378,27 @@ ok("🔴 a viewer holding one division reports 1, not 0 — the sentence turns o
    p.body.meta.viewerDivisions === 1, p.body.meta.viewerDivisions);
 ok("⚠️ an admin reports null — nothing is withheld from them to explain",
    a.body.meta.viewerDivisions === null, a.body.meta.viewerDivisions);
-ok("🔴 and the recruiter reports 1 too — they HOLD a division, it just matches nothing",
-   r.body.meta.viewerDivisions === 1, r.body.meta.viewerDivisions);
+// ═══ ROUND 168 — WHY THIS ASSERTION CHANGED, AND WHY IT IS THE SAME CLAIM ═══
+//
+// 🔴 IT READ `viewerDivisions === 1`, and round 168 makes it 0 — correctly. The
+// recruiter holds "OLTL Caregiver Applicants", which derived the phantom
+// division "OLTL Caregiver": not a Partner Division value, matching no partner,
+// but non-empty — so the count was 1 and the sentence was right for the wrong
+// reason. Narrowing derived access to real Partner Division values makes it 0,
+// which is the true number of referral divisions they hold.
+//
+// ⚠️ THE THING THIS ASSERTION PROTECTS IS THE SENTENCE, NOT THE INTEGER. Its
+// own note said "they HOLD a division, it just matches nothing" — and 0 used to
+// mean "holds no pipeline at all", so without a new state the screen would have
+// told a recruiter who holds a pipeline that they hold none, and sent them to
+// check a grant they already have. That is the `unmatched` kind, which exists
+// BECAUSE this assertion went red.
+ok("🔴 ROUND 168 — the recruiter is \"unmatched\", NOT \"none\": they HOLD a pipeline",
+   r.body.meta.referralScopeKind === "unmatched", r.body.meta.referralScopeKind);
+ok("…and the count is now the honest 0, not a phantom 1",
+   r.body.meta.viewerDivisions === 0, r.body.meta.viewerDivisions);
+ok("🔴 CONTROL — a viewer with a REAL division is still \"derived\", not unmatched",
+   p.body.meta.referralScopeKind === "derived", p.body.meta.referralScopeKind);
 
 // 🔴 APPLICANTS ARE DELIBERATELY NOT SCOPED. divisionLabel of an applicant
 // pipeline is "OLTL Caregiver", which matches no Partner Division value — so

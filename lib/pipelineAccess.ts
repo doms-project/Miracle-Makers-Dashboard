@@ -275,18 +275,75 @@ export function referralDivisions(
   userId: string,
   pipelineNameById: Map<string, string>,
   isAdmin: boolean,
+  /**
+   * ═══ ROUND 168 — WHAT A PARTNER CAN ACTUALLY BE LABELLED WITH ═════════════
+   *
+   * 🔴 DERIVED DIVISIONS CAME FROM PIPELINE NAMES AND PIPELINES ARE NOT
+   * DIVISIONS. `userDivisions` runs every HOME pipeline through
+   * `divisionLabel`, which only strips a workflow suffix — so "ODP DSP
+   * Applicant" became "ODP DSP" and "OLTL Caregiver Applicants" became "OLTL
+   * Caregiver". Bill, holding four ODP pipelines, derived three divisions of
+   * which exactly one can ever match a partner, and his Referrals heading read
+   * "ODP DSP + ODP + ODP Staff" with a switcher.
+   *
+   * ⚠️ ROUND 167 IS WHAT MADE IT VISIBLE, AND THAT WAS THE RIGHT CHANGE. The
+   * heading used to come from the records, which never carry those names.
+   * Putting access into the heading — so a held division with no data still
+   * shows — surfaced a fault one layer below it. The filter was always correct;
+   * only the label was wrong, which is why a live check found no leak.
+   *
+   * 🔴 NARROWED HERE AND NOT IN `userDivisions`, DELIBERATELY. That function
+   * has three other callers and not one of them is a permission decision:
+   *
+   *     app/api/opportunities/route.ts:48            the owner picker's labels
+   *     app/api/opportunities/[id]/notes/route.ts    the [DIVISION] note prefix
+   *     app/api/opportunities/[id]/move/route.ts     the same prefix on a move
+   *
+   * Those ask "which programme does this person work in", where "ODP DSP" is a
+   * true and useful answer — and the note prefix is already written on live
+   * records. Round 162 drew this line; this keeps it.
+   *
+   * ⚠️ AN EMPTY LIST MEANS "NO OPINION", NOT "NOTHING IS ALLOWED". If
+   * `Partner Division` is not a dropdown on an account, its options read `[]` —
+   * and filtering against that would empty EVERY non-admin's referral access
+   * because a field is the wrong type. A total silent lockout is far worse than
+   * three phantom divisions, so the derivation passes through untouched.
+   *
+   * ⚠️ AND AN EXPLICIT OVERRIDE IS NEVER FILTERED. An admin naming a division
+   * means it, even one no partner carries yet — round 162's orphan chips exist
+   * to show exactly that. Only the DERIVED path is narrowed.
+   */
+  partnerDivisionOptions?: readonly string[] | null,
 ): string[] | null {
   if (isAdmin) return null;
   const entry = userId ? referralAccessStore.getStore()?.get(userId) : undefined;
   // 🔴 ABSENT IS DERIVED, AND IT IS THE DEFAULT ON PURPOSE. Anyone an admin has
   // never touched keeps the behaviour that already works: a grant on OLTL
   // Enrollment means OLTL referrals, with nobody saying so twice.
-  if (!entry) return userDivisions(userId, pipelineNameById);
+  if (!entry) return narrowToOptions(userDivisions(userId, pipelineNameById), partnerDivisionOptions);
   if (entry.mode === "agency") return null;
   // ⚠️ AND AN EXPLICIT EMPTY LIST IS RETURNED AS SUCH. `[]` here means "sees no
   // referrals" — an instruction, not an absence. Falling back to derived on an
   // empty list is the one bug this whole three-state design exists to prevent.
   return [...entry.divisions];
+}
+
+/**
+ * Keep only the divisions a partner or an event can actually be labelled with.
+ *
+ * ⚠️ "All" IS EXCLUDED FROM THE ALLOW-LIST. It is a value a RECORD can hold,
+ * meaning "appears under every division", and it is handled by `inDivision` on
+ * the way out. A viewer whose derived access was "All" would match every record
+ * by name as well, which is a different and much wider thing than holding a
+ * division.
+ */
+function narrowToOptions(
+  derived: string[],
+  options?: readonly string[] | null,
+): string[] {
+  if (!options || !options.length) return derived;
+  const allow = new Set(options.filter((o) => o && o !== "All"));
+  return derived.filter((d) => allow.has(d));
 }
 
 /**
@@ -299,6 +356,10 @@ export function referralDivisions(
  *   "derived"   no override; divisions come from the pipelines they hold.
  *   "none"      no override AND no pipelines. The case manager's intended
  *               state: nothing is misconfigured and nobody needs to fix it.
+ *   "unmatched" holds pipelines, but not one of their divisions is a value a
+ *               partner can carry — a recruiter with only applicant pipelines.
+ *               Different from "none": they DO hold something, so telling them
+ *               they hold nothing sends them to check a grant they have.
  *   "explicit"  an override holding an EMPTY division list. They may hold
  *               several pipelines; an admin decided they see no referrals.
  *
@@ -312,16 +373,46 @@ export function referralDivisions(
  * order, so the two cannot disagree. A second function reading a second source
  * is how two answers to one question get shipped.
  */
-export type ReferralScopeKind = "all" | "derived" | "none" | "explicit";
+export type ReferralScopeKind = "all" | "derived" | "none" | "explicit" | "unmatched";
 
 export function referralScopeKind(
   userId: string,
   pipelineNameById: Map<string, string>,
   isAdmin: boolean,
+  /**
+   * ⚠️ ROUND 168 — THE SAME ALLOW-LIST, AND IT HAS TO BE THE SAME. This decides
+   * which sentence a viewer reads about why they see nothing, so it must agree
+   * with `referralDivisions` about what "derived" resolves to. Without it a
+   * viewer holding only applicant pipelines would be told "you hold pipelines
+   * in these divisions" while the resolver had narrowed them to none.
+   */
+  partnerDivisionOptions?: readonly string[] | null,
 ): ReferralScopeKind {
   if (isAdmin) return "all";
   const entry = userId ? referralAccessStore.getStore()?.get(userId) : undefined;
-  if (!entry) return userDivisions(userId, pipelineNameById).length ? "derived" : "none";
+  if (!entry) {
+    const raw = userDivisions(userId, pipelineNameById);
+    if (narrowToOptions(raw, partnerDivisionOptions).length) return "derived";
+    // ═══ ROUND 168 — THE FOURTH STATE, FOUND BY A PROOF FROM ROUND 143 ═══════
+    //
+    // 🔴 "HOLDS PIPELINES, NONE OF WHICH IS A REFERRAL DIVISION." A recruiter
+    // granted only "OLTL Caregiver Applicants" used to derive "OLTL Caregiver"
+    // — a phantom division that matched no partner but WAS non-empty, so
+    // `viewerDivisions` read 1 and the empty-state sentence correctly said
+    // "they belong to divisions you do not hold".
+    //
+    // ⚠️ ITEM 1'S NARROWING MAKES THAT LIST EMPTY, AND EMPTY USED TO MEAN
+    // "holds no pipeline at all" — so the sentence would have told a recruiter
+    // who holds a pipeline that they hold none, and sent them to check grants
+    // they already have. task2-partners-proof caught it: its assertion is
+    // annotated "they HOLD a division, it just matches nothing", which is the
+    // distinction this state exists to keep.
+    //
+    // 🔴 FOUR CAUSES, FOUR SENTENCES. This is the third time one number has
+    // gained a cause in this file — round 162 added the override, round 167
+    // split the sentence, and this is the narrowing's turn.
+    return raw.length ? "unmatched" : "none";
+  }
   if (entry.mode === "agency") return "all";
   return entry.divisions.length ? "derived" : "explicit";
 }
