@@ -4,6 +4,7 @@ import {
   upsertContact,
   createOpportunity,
   getSelectedPipelines,
+  getPipelineConfig,
   listContactOpportunities,
   getEditableFieldDefs,
   explainGhlError,
@@ -11,6 +12,7 @@ import {
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
+import { recruitingGroup } from "@/lib/pipelineConfig";
 import { emit } from "@/lib/webhooks";
 import type { ApiError } from "@/lib/types";
 import {
@@ -152,9 +154,25 @@ async function postHandler(request: Request) {
 
     // ── the pipeline, DRIVEN BY THE DIVISION ───────────────────────────────
     const pipelines = await getSelectedPipelines("caregiver");
+    // 🔴 ROUND 170 — THE GROUP TRAVELS WITH THE PIPELINE. Without it
+    // `pipelineForDivision` saw only names, and `/oltl|chc/i` matched BOTH
+    // "OLTL Caregiver Applicants" and "OLTL Staff Applicants" — so an OLTL_CHC
+    // applicant was filed as staff. `recruitingGroup` is the one place the
+    // caregiver-by-default rule lives (round 113/114); this is its first
+    // caller, which is why nothing enforced it.
+    //
+    // ⚠️ NEVER FATAL. An unreadable config means every pipeline reads as
+    // "caregiver", which is the pre-round-120 behaviour — the bug this fixes,
+    // not a new one. Refusing the whole intake because a custom value could not
+    // be read would be worse than routing as the account did last month.
+    const cfg = await getPipelineConfig().catch(() => null);
     const choice = pipelineForDivision(
       division,
-      pipelines.map((p) => ({ id: p.id, name: p.name })),
+      pipelines.map((p) => ({
+        id: p.id,
+        name: p.name,
+        group: recruitingGroup(cfg, p.id),
+      })),
     );
 
     // 🔴 OLTL_CHC HAS NO PIPELINE. The caregiver form's DEFAULT branch routes

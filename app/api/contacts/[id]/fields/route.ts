@@ -89,6 +89,9 @@ export async function PATCH(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  /** See the mirror inside the try. */
+  let wantsPhoneOut = false;
+  let wantsEmailOut = false;
   try {
     const { id } = await ctx.params;
     const body = (await request.json().catch(() => ({}))) as {
@@ -121,6 +124,12 @@ export async function PATCH(
     const newLast = String(body.name?.lastName ?? "").trim();
     const wantsEmail = typeof body.email === "string";
     const wantsPhone = typeof body.phone === "string";
+    // ⚠️ MIRRORED INTO THE OUTER SCOPE so the catch can name which field
+    // collided. A `const` in the try is invisible to the catch, and the
+    // duplicate-contact message is only sharper than the generic one because it
+    // knows what was sent.
+    wantsEmailOut = wantsEmail;
+    wantsPhoneOut = wantsPhone;
     const newEmail = String(body.email ?? "").trim();
     const newPhone = String(body.phone ?? "").trim();
 
@@ -360,19 +369,79 @@ export async function PATCH(
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
-    return errorOut(e, "Could not save the contact's fields.");
+    // ⚠️ THE SENT FLAGS, so the duplicate message can name the field. They are
+    // declared inside the try; `wantsPhoneOut`/`wantsEmailOut` mirror them here
+    // because a catch cannot see a block-scoped const from the try.
+    return errorOut(e, "Could not save the contact's fields.", {
+      phone: wantsPhoneOut,
+      email: wantsEmailOut,
+    });
   }
 }
 
-function errorOut(e: unknown, fallback: string) {
+/**
+ * ═══ 🔴 ROUND 170 — THE DUPLICATE-CONTACT 400, SAID PROPERLY ════════════════
+ *
+ * LIVE: typing a phone number that another person already has produced
+ * "GoHighLevel returned 400 for PUT /contacts/… This location does not allow
+ * duplicated contacts." on a rep's screen — an HTTP method, a path, and
+ * GoHighLevel's word for an account.
+ *
+ * 🔴 AND THIS ROUTE NEVER CONSULTED THE MAPPING TABLE. `explainGhlError` has
+ * rewritten GoHighLevel's messages into readable ones since round 94, and
+ * `errorOut` here passed `e.message`/`e.detail` straight through. The table
+ * existed; this route did not ask it.
+ *
+ * ⚠️ AND IT CAN SAY MORE THAN THE TABLE CAN. `explainGhlError` does not know
+ * whether a phone or an email was sent; this handler does, because it decided
+ * what to send. So the generic sentence covers every other caller and this one
+ * names the field.
+ */
+function duplicateFieldMessage(
+  e: GhlError,
+  sent: { phone: boolean; email: boolean },
+): string | null {
+  const raw = `${e.message} ${e.detail ?? ""}`;
+  if (!/duplicated\s+contacts/i.test(raw) && !/DUPLICATED_CONTACT/i.test(raw))
+    return null;
+  // ⚠️ BOTH SENT — the collision could be either, and claiming one would be a
+  // guess. GoHighLevel's message does not say which.
+  if (sent.phone && sent.email)
+    return "That phone number or email address already belongs to another person in GoHighLevel. Nothing was changed.";
+  if (sent.phone)
+    return "That phone number already belongs to another person in GoHighLevel. Nothing was changed.";
+  if (sent.email)
+    return "That email address already belongs to another person in GoHighLevel. Nothing was changed.";
+  return null;
+}
+
+function errorOut(
+  e: unknown,
+  fallback: string,
+  sent?: { phone: boolean; email: boolean },
+) {
   if (e instanceof SsoError)
     return NextResponse.json({ error: e.message, status: e.status } as ApiError, {
       status: e.status,
     });
-  if (e instanceof GhlError)
+  if (e instanceof GhlError) {
+    const dup = sent ? duplicateFieldMessage(e, sent) : null;
+    if (dup)
+      return NextResponse.json(
+        {
+          error: dup,
+          // ⚠️ GOHIGHLEVEL'S OWN WORDS KEPT AS THE DETAIL, not discarded. The
+          // rep reads the sentence; whoever they forward it to needs the
+          // original to search for.
+          detail: `GoHighLevel said: “${e.detail || e.message}”.`,
+          status: 409,
+        } as ApiError,
+        { status: 409 },
+      );
     return NextResponse.json({ error: e.message, detail: e.detail } as ApiError, {
       status: e.status >= 400 ? e.status : 502,
     });
+  }
   return NextResponse.json(
     { error: fallback, detail: String(e) } as ApiError,
     { status: 500 },

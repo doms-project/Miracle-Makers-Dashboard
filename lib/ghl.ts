@@ -189,6 +189,31 @@ export async function explainGhlError(e: unknown): Promise<string> {
       );
     return "This client already has a case in the destination pipeline. GoHighLevel allows only ONE opportunity per contact per pipeline, so this record can't be moved there. Close or move the existing case first, then try again. (GoHighLevel's own message says \"create\" — it fires on updates too; nothing was duplicated.)";
   }
+  // ═══ 🔴 ROUND 170 — "This location does not allow duplicated contacts." ════
+  //
+  // LIVE, on the record panel: changing a phone number to one another person
+  // already has produced
+  //
+  //     GoHighLevel returned 400 for PUT /contacts/… This location does not
+  //     allow duplicated contacts.
+  //
+  // Three things wrong with that on a rep's screen: it names an HTTP method and
+  // a path, it says "location" (a GoHighLevel word for the account), and it
+  // does not say WHICH value collided or that nothing changed.
+  //
+  // ⚠️ GENERIC HERE, SPECIFIC AT THE ROUTE. This function cannot know whether a
+  // phone or an email was sent — the same limit the duplicate-opportunity case
+  // records above ("THE ROUTE KNOWS WHICH IT IS AND THIS FUNCTION DOES NOT").
+  // So this covers every caller that hits the rule — import, Add Lead, Add
+  // partner, the caregiver intake — and the contact-fields route, which knows
+  // exactly which field it sent, says the sharper sentence itself.
+  if (/duplicated\s+contacts/i.test(raw) || /DUPLICATED_CONTACT/i.test(raw))
+    return (
+      "That phone number or email address already belongs to another person in " +
+      "GoHighLevel, and this account does not allow two contacts to share one. " +
+      "Nothing was changed. Find the other person and merge or correct them in " +
+      "GoHighLevel, then try again."
+    );
   // 🔴 WRAP ONCE — round 94's item 8, and round 118's item 1 found it again.
   //
   // This returned `${e.message} — ${e.detail}`, and every route's `fail()` puts
@@ -5729,7 +5754,15 @@ export async function applyCaseManagers(
           ? "the record has no owner"
           : !onClientPipeline
             ? "this pipeline is not client-scoped, so case managers do not apply to it"
-            : "that owner has no entry in the map and this function added nothing to this record",
+            // 🔴 ROUND 170 — THE OWNER IS NAMED, AND THEIR ID IS BESIDE IT.
+            // This read "that owner has no entry in the map", which is the most
+            // common line in the webhook log (21 of 26 users are unmapped) and
+            // told whoever read it nothing they could act on. The NAME is who
+            // to ask about; the ID is what the Access tab's map is keyed on, so
+            // it is what somebody adding the entry actually needs. Both, because
+            // a name alone cannot be looked up and an id alone cannot be
+            // recognised.
+            : `${rec.rep || "that owner"} (${ownerId}) has no entry in the case-manager map, so this function added nothing to this record`,
         noRecordField,
       });
 
@@ -6224,43 +6257,57 @@ export async function searchCaregiverContacts(
 }
 
 export async function createCaregiverRelation(
-  clientContactId: string,
-  caregiverContactId: string,
+  /**
+   * 🔴 ROUND 170 — NAMED ARGUMENTS, BECAUSE THE POSITIONAL ONES WERE A LIE FROM
+   * ONE SIDE. This took `(clientContactId, caregiverContactId)` and every
+   * caller passed `(the open record's own contact, the picked contact)` — true
+   * on a CLIENT's panel and false on a caregiver's, where the open record is
+   * the caregiver. A parameter whose name is right half the time is how the
+   * slot order went unresolved for forty rounds: reading the signature told you
+   * the wrong thing and reading the caller told you nothing.
+   *
+   * The caller now has to say which is which, and the compiler asks.
+   */
+  roles: { clientContactId: string; caregiverContactId: string },
 ): Promise<string> {
+  const { clientContactId, caregiverContactId } = roles;
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
   });
-  // ⚠️ SLOT ORDER IS UNRESOLVED — DO NOT "FIX" IT WITHOUT EVIDENCE.
+  // ═══ 🔴 ROUND 170 — SLOT ORDER IS RESOLVED, BY A LIVE WRITE ═══════════════
   //
-  // Report 29 claimed this was inverted and changed it. The claim was made by
-  // reading THIS function alone, without checking the caller, and the only real
-  // relation in the account contradicts it: a link created through the dashboard
-  // audits as OK (caregiver in the caregiver slot).
+  // The comment that stood here said the order was unresolved and named the two
+  // explanations that demanded opposite fixes:
   //
-  // What is actually established:
-  //   - the caller passes (a.contactId, body.caregiverContactId), i.e. the
-  //     OPPORTUNITY'S OWN CONTACT first and the picked contact second;
-  //   - so this puts the opportunity's contact in firstRecordId, which the
-  //     definition labels "Caregiver";
-  //   - in the intended flow (open a CLIENT's case, add their caregiver) that
-  //     would store the client in the caregiver slot — inverted;
-  //   - but the one observed relation is OK, which is explainable EITHER by
-  //     GoHighLevel normalising the slots on create, OR by that link having been
-  //     made from the CAREGIVER's own record (so the roles were reversed by the
-  //     user's action, landing correctly by accident).
+  //   (a) GoHighLevel normalises the slots on create;
+  //   (b) the one relation that read correctly had been made from the
+  //       CAREGIVER's record, so the roles were reversed by the user's action
+  //       and landed right by accident.
   //
-  // Those two explanations demand OPPOSITE fixes, and there is no data to choose
-  // between them. scripts/relation-slot-order-probe.mjs settles it in one write:
-  // POST with a known first/second and read back which slot each landed in.
+  // 🔴 IT IS (b). Live: an applicant linked to a client FROM THE CLIENT'S
+  // PANEL, then /api/relations/counts for that client answered
+  // `{"caregivers":0,"clients":1}` — the client is in the CAREGIVER slot and
+  // the caregiver is in the client slot. GoHighLevel does not normalise
+  // anything; it stores exactly the order it is given.
   //
-  // Until then this keeps the ORIGINAL ordering, unchanged since the feature
-  // shipped — because flipping it on an unproven theory would invert the one
-  // relation that currently reads correctly.
+  // ⚠️ AND THE OLD COMMENT WAS RIGHT TO REFUSE THE FLIP. Report 29 changed this
+  // by reading one function; the evidence then available genuinely did not
+  // choose between (a) and (b), and guessing would have inverted the only
+  // relation that read correctly. What was missing was one write, which is now
+  // made.
+  //
+  // 🔴 AND IT IS PLACED BY `getAssociationDirection`, NOT BY A HARDCODED ORDER.
+  // That is the same function `countCaregiverRelations` reads to decide which
+  // slot means what, so the writer and the reader cannot disagree — which is
+  // the only thing that makes the round-29 flip-flop impossible to repeat. A
+  // literal `firstRecordId: caregiver…` here would be correct today and silent
+  // the day somebody re-creates the association with its labels the other way.
+  const dir = await getAssociationDirection();
   const body = {
     locationId,
     associationId: caregiverAssociationId,
-    firstRecordId: clientContactId,
-    secondRecordId: caregiverContactId,
+    firstRecordId: dir.firstIsCaregiver ? caregiverContactId : clientContactId,
+    secondRecordId: dir.firstIsCaregiver ? clientContactId : caregiverContactId,
   };
   const res = await ghlSend<{ relation?: RawRelation; id?: string }>(
     "POST",

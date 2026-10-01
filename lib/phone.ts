@@ -94,6 +94,24 @@ export function emailKey(input: unknown): string {
  *   nameKey("Mary Ann", "Smith")   === nameKey("Mary", "Ann Smith")
  *   nameKey("  mary   ann smith ") === nameKey("Mary Ann", "Smith")
  *
+ * ═══ 🔴 ROUND 170 — HOW GOHIGHLEVEL ACTUALLY SPLITS, MEASURED ══════════════
+ *
+ * Round 169 left this unprobed and refused to state a rule. The live run
+ * answers it: **GoHighLevel keeps only the FIRST WORD as the first name.**
+ *
+ *     sent    firstName "TEST Mary Ann"   lastName "Smith"
+ *     stored  firstName "TEST"            lastName "Mary Ann Smith"
+ *
+ * ⚠️ SO A MULTI-WORD FIRST NAME CANNOT BE STORED AS ONE. "Mary Ann" will always
+ * come back as "Mary" / "Ann …", and this function is what makes that a
+ * non-event: the full name is unchanged, so the rename confirms, and the panel
+ * shows the split GoHighLevel chose rather than reverting.
+ *
+ * ⚠️ AND NOTHING TRIES TO BEAT IT. Sending the name pre-split, or re-sending
+ * after reading it back, would be fighting a normalisation that is not ours to
+ * change — and round 134's rule is that a read-back compares meaning, not the
+ * arrangement.
+ *
  * ⚠️ PUNCTUATION IS KEPT, DELIBERATELY. "O'Brien" and "OBrien" are different
  * spellings of a surname and a rename from one to the other is a real change
  * somebody meant — stripping punctuation the way `norm()` does elsewhere would

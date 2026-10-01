@@ -8401,7 +8401,20 @@ export default function Dashboard() {
                       <b>About this person, not this case.</b>{" "}
                       {cFields && cFields.opportunityCount > 1
                         ? `This name shows on all ${cFields.opportunityCount} of their records.`
-                        : "This name follows them onto every record they hold."}
+                        : "This name follows them onto every record they hold."}{" "}
+                      {/* 🔴 ROUND 170 — SAID BEFORE IT HAPPENS, not explained
+                          afterwards. GoHighLevel keeps only the FIRST WORD as
+                          the first name — measured: "TEST Mary Ann"/"Smith" was
+                          stored as "TEST"/"Mary Ann Smith". A rep typing "Mary
+                          Ann" will see it come back split, and a warning that
+                          only appears after the save reads as a fault. The
+                          round-169 notice still fires if the full name does not
+                          match; this stops the ordinary case looking like one. */}
+                      <span className="renamehint">
+                        GoHighLevel keeps only the first word as the first name,
+                        so “Mary Ann” will be stored as “Mary” with “Ann” moved
+                        into the last name. The full name is kept.
+                      </span>
                     </>
                   }
                   onSave={(v) => saveContactName(v.firstName, v.lastName)}

@@ -2209,3 +2209,8 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .savewarn{margin-top:5px;font-size:11px;line-height:1.5;color:var(--gold-ink);
   background:var(--gold-soft);border:1px solid #f0dcb4;border-radius:6px;padding:5px 8px}
 .savewarn b{color:var(--gold-ink)}
+
+/* ROUND 170 — the rename hint. Quieter than the scope line above it: that one
+   says what the field IS, this one warns about a normalisation. Swept: no
+   `.renamehint` existed. */
+.renamehint{display:block;margin-top:4px;color:var(--ink-3)}

@@ -70,7 +70,30 @@ export interface DivisionRouting {
 
 export function pipelineForDivision(
   division: CgDivision,
-  caregiverPipelines: { id: string; name: string }[],
+  /**
+   * ═══ ROUND 170 — `group` IS NEW, AND IT IS WHY OLTL APPLICANTS WENT TO STAFF
+   *
+   * 🔴 LIVE: Add Applicant with division OLTL_CHC filed into **OLTL Staff
+   * Applicants**, not OLTL Caregiver Applicants. The website form routes
+   * correctly; only the dashboard got it wrong.
+   *
+   * The cause is one regex against one list. `MATCHERS.OLTL_CHC` is
+   * `/oltl|chc/i`, and the caller passes every CAREGIVER-SCOPE pipeline —
+   * which on this account includes BOTH "OLTL Caregiver Applicants" and "OLTL
+   * Staff Applicants". Both match; the first in config order wins; it was the
+   * staff one.
+   *
+   * ⚠️ SCOPE AND GROUP ARE DIFFERENT QUESTIONS, and that is the whole bug.
+   * Scope says which board picker lists a pipeline ("caregiver"), so a staff
+   * pipeline is correctly caregiver-SCOPED. Group says which KIND of recruit it
+   * holds, and a caregiver applicant must never land in a staff one. Round 120
+   * added `group` for exactly this distinction and this function never saw it.
+   *
+   * 🔴 THE EXCLUSION IS HERE RATHER THAN AT THE CALLER so a second caller
+   * inherits it. "Never offer a Staff-group pipeline for a caregiver applicant"
+   * is a property of the routing, not of one route's bookkeeping.
+   */
+  caregiverPipelines: { id: string; name: string; group?: "caregiver" | "staff" }[],
 ): DivisionRouting {
   if (division === "REJECTED")
     return {
@@ -79,9 +102,33 @@ export function pipelineForDivision(
       contactOnly: true,
     };
 
+  // 🔴 STAFF PIPELINES ARE REMOVED BEFORE THE NAME IS EVEN LOOKED AT. Filtering
+  // after the regex would still have let a staff pipeline be the only hit and
+  // then be chosen; dropping them first means the name match runs over the only
+  // population a caregiver applicant may land in.
+  //
+  // ⚠️ `group` ABSENT MEANS "caregiver" — the default `recruitingGroup` sets,
+  // and the same default the stored config omits rather than writes out. An
+  // unconfigured pipeline is a caregiver one, which is what every account had
+  // before round 120.
+  const eligible = caregiverPipelines.filter((p) => p.group !== "staff");
   const re = MATCHERS[division];
-  const hits = re ? caregiverPipelines.filter((p) => re.test(p.name)) : [];
+  const hits = re ? eligible.filter((p) => re.test(p.name)) : [];
   if (hits.length) return { pipelines: hits, why: "", contactOnly: false };
+
+  // ⚠️ AND IF A STAFF PIPELINE WOULD HAVE MATCHED, SAY SO. "No caregiver
+  // pipeline matches OLTL / CHC" on an account that visibly has an OLTL
+  // pipeline reads as a fault in the dashboard. Naming the reason sends whoever
+  // reads it to the Pipelines screen, which is where the fix is.
+  const staffWouldHaveMatched = re
+    ? caregiverPipelines.filter((p) => p.group === "staff" && re.test(p.name))
+    : [];
+  if (staffWouldHaveMatched.length)
+    return {
+      pipelines: [],
+      why: `${staffWouldHaveMatched.map((p) => `“${p.name}”`).join(" and ")} matches ${CG_DIVISION_LABELS[division]} but is a STAFF pipeline, so a caregiver applicant must not be filed there. Create a caregiver pipeline for this division, or change that pipeline's recruiting group under Admin → Pipelines.`,
+      contactOnly: false,
+    };
 
   return {
     pipelines: [],
