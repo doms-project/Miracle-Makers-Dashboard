@@ -61,13 +61,21 @@ export class GhlError extends Error {
   // GHL's own machine-readable code (e.g. OPPORTUNITY_NO_DUPLICATE). What the
   // friendly-message mapping keys off, rather than matching on prose.
   code?: string;
-  /** ROUND 173 — the colliding contact, when the refusal body names it. */
+  /** The colliding contact, named by the refusal itself. */
   dupContactId?: string;
+  dupField?: string;
+  dupName?: string;
   constructor(
     message: string,
     status: number,
     detail?: string,
-    meta?: { traceId?: string; code?: string; dupContactId?: string },
+    meta?: {
+      traceId?: string;
+      code?: string;
+      dupContactId?: string;
+      dupField?: string;
+      dupName?: string;
+    },
   ) {
     super(message);
     this.name = "GhlError";
@@ -76,6 +84,8 @@ export class GhlError extends Error {
     this.traceId = meta?.traceId;
     this.code = meta?.code;
     this.dupContactId = meta?.dupContactId;
+    this.dupField = meta?.dupField;
+    this.dupName = meta?.dupName;
   }
 }
 
@@ -85,7 +95,21 @@ export function ghlErrorMeta(raw: string): {
   traceId?: string;
   code?: string;
   /**
-   * 🔴 ROUND 173 — THE CONTACT GOHIGHLEVEL REFUSED THE WRITE *BECAUSE OF*,
+   * ✅ ROUND 174 — PROBED LIVE 5 OCT, AND THE ANSWER IS YES. `POST /contacts/`
+   * refuses a duplicate phone at ONE SECOND with HTTP 400 "This location does
+   * not allow duplicated contacts.", and the body carries
+   *
+   *     meta.contactId      the colliding contact — the right id
+   *     meta.matchingField  "phone"
+   *     meta.contactName    their name
+   *
+   * 🔴 SO THIS IS THE PRIMARY SOURCE OF TRUTH for "does somebody already have
+   * this number". It is instant by construction — the same store the write
+   * would have hit — where `/contacts/search` returned ZERO hits on the same
+   * contact at one second old. No longer a maybe; see
+   * scripts/duplicate-refusal-probe.mjs for the run.
+   *
+   * 🔴 THE CONTACT GOHIGHLEVEL REFUSED THE WRITE *BECAUSE OF*,
    * when the refusal body names it.
    *
    * A duplicate refusal is the only instant, authoritative answer to "does this
@@ -96,6 +120,10 @@ export function ghlErrorMeta(raw: string): {
    * is handled, not assumed away.
    */
   dupContactId?: string;
+  /** ✅ "phone" or "email" — WHICH detail collided. From GoHighLevel, not inferred. */
+  dupField?: string;
+  /** ✅ The colliding contact's name, so the 409 needs no extra read. */
+  dupName?: string;
 } {
   try {
     const j = JSON.parse((raw || "").trim()) as Record<string, unknown>;
@@ -117,17 +145,21 @@ export function ghlErrorMeta(raw: string): {
     // than becoming "".
     const meta = (j.meta ?? {}) as Record<string, unknown>;
     const nested = (meta.contact ?? {}) as Record<string, unknown>;
-    const dup = [
-      meta.contactId,
-      meta.contact_id,
-      nested.id,
-      j.contactId,
-      (j as Record<string, unknown>).contact_id,
-    ].find((v) => typeof v === "string" && v);
+    const str = (v: unknown): string | undefined =>
+      typeof v === "string" && v ? v : undefined;
     return {
       traceId,
       code: m ? m[1] : undefined,
-      dupContactId: typeof dup === "string" ? dup : undefined,
+      dupContactId:
+        str(meta.contactId) ??
+        str(meta.contact_id) ??
+        str(nested.id) ??
+        str(j.contactId) ??
+        str((j as Record<string, unknown>).contact_id),
+      // ⚠️ READ, NEVER INFERRED. Guessing "phone" when both a phone and an
+      // email were sent points the person at the field that was fine.
+      dupField: str(meta.matchingField) ?? str(meta.matching_field),
+      dupName: str(meta.contactName) ?? str(meta.contact_name) ?? str(nested.name),
     };
   } catch {
     return {};
@@ -1573,6 +1605,10 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   shared: [],
   stageChangedAt: [], // native GHL timestamp, not a custom field
   createdAt: [], // native GHL timestamp, not a custom field
+  // ⚠️ NOT A CUSTOM FIELD EITHER. Listed because this map is exhaustive over
+  // OpportunityRecord and the compiler enforces it — which is how a new field
+  // cannot be silently left unmapped.
+  statusChangedAt: [],
   version: [], // native GHL updatedAt, not a custom field
 };
 
@@ -1674,6 +1710,12 @@ function normalizeOpportunity(
     // record that has not moved since August is WRONG and has nothing on screen
     // to say so. Anything rendering this number needs that sentence beside it.
     stageChangedAt: String(opp.lastStageChangeAt ?? ""),
+    // 🔴 ROUND 174 — NOW READ, AND ONLY FOR DATING WON/LOST. The note above
+    // still stands: identical to lastStageChangeAt on every record sampled, and
+    // a bulk write moves it. It is carried as its OWN field — never as a
+    // fallback for stageChangedAt — so the two can never be confused, and the
+    // one screen that reads it prints the caveat beside the number.
+    statusChangedAt: String(opp.lastStatusChangeAt ?? ""),
     createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.

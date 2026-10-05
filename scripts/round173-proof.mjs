@@ -194,7 +194,21 @@ const server = http.createServer((req, res) => {
         return send(400, {
           message: "This location does not allow duplicated contacts.",
           traceId: "tr-dup",
-          ...(refusalNamesContact ? { meta: { contactId: clash.id } } : {}),
+          // ✅ ROUND 174 — THE LIVE SHAPE, PROBED 5 OCT: the refusal carries
+          // meta.contactId, meta.matchingField and meta.contactName. A fake
+          // sending only the id would leave the "which detail matched" half
+          // untested — rule 2, in the direction nobody checks.
+          ...(refusalNamesContact
+            ? {
+                meta: {
+                  contactId: clash.id,
+                  matchingField: j.phone && phoneKey(clash.phone) === phoneKey(j.phone)
+                    ? "phone"
+                    : "email",
+                  contactName: `${clash.firstName || ""} ${clash.lastName || ""}`.trim(),
+                },
+              }
+            : {}),
         });
       const fresh = add({
         firstName: j.firstName || "", lastName: j.lastName || "",
@@ -309,6 +323,12 @@ ok("the refusal names him, from the create's own answer",
   /Gavin Giver/.test(second.body.error || ""), second.body.error);
 ok("…and says which link identified him", second.body.existing?.via === "refusal",
   second.body.existing);
+// ✅ ROUND 174 — THE MESSAGE NAMES THE DETAIL, FROM GOHIGHLEVEL'S OWN
+// matchingField rather than from which fields happened to be sent.
+ok("🔴 ROUND 174 — the message names the PHONE specifically",
+  /This phone number belongs to/.test(second.body.error || ""), second.body.error);
+ok("…and GoHighLevel's matchingField is what said so",
+  second.body.existing?.matchedOn === "phone", second.body.existing);
 
 console.log("\n1b · 🔴 THE OWNER'S CASE — two family members, 30 seconds apart");
 const FAMILY = "+14845550888";
@@ -349,6 +369,41 @@ for (const [label, mod, url, body] of paths) {
     r.status === 409 && mutations.length === w, { s: r.status, w: mutations.slice(w) });
 }
 ok("🔴 after all five, Ana's name is untouched", nameOf(ana) === "Ana Ortiz", nameOf(ana));
+
+console.log("\n1c2 · 🔴 BOTH SENT, AND THE EMAIL IS THE ONE THAT COLLIDES");
+// 🔴 THE CONTROL FOR `matchingField` — AND REVERT L CAUGHT MY FIRST VERSION
+// PASSING FOR THE WRONG REASON. It collided with a SEEDED contact, which the
+// index can see, so the pre-check answered and the refusal was never reached:
+// the assertion was green with `matchingField` ignored entirely. Rule 12 — an
+// assertion that can pass for reasons unrelated to the code is corrosive.
+//
+// ✅ SO IT COLLIDES WITH SOMEBODY CREATED SECONDS AGO, invisible to the index,
+// where the create's refusal is the only possible source of the answer.
+{
+  const fresh = await post(applicantsRoute, "http://x/api/caregivers", {
+    firstName: "Esme", lastName: "Early",
+    email: "esme@e.test", phone: "+14845550654", division: "OLTL_CHC",
+  });
+  ok("a contact is created with both a phone and an email", fresh.status === 200, fresh.body);
+  now += 3_000;
+  ok("🔴 CONTROL — the index cannot see them at 3 seconds",
+    !indexed().some((c) => c.id === fresh.body.contactId), fresh.body.contactId);
+  const w2 = mutations.length;
+  const r2 = await post(clientsRoute, "http://x/api/clients", {
+    firstName: "Zed", lastName: "Quill",
+    phone: "+14845550123", email: "esme@e.test",
+    pipelineId: P_CLIENT, stageId: "c_s1",
+  });
+  ok("refused on the email", r2.status === 409, { s: r2.status, b: r2.body });
+  ok("🔴 …and the message says EMAIL, not phone",
+    /This email belongs to/.test(r2.body.error || ""), r2.body.error);
+  ok("…naming the person the refusal body named",
+    /Esme Early/.test(r2.body.error || ""), r2.body.error);
+  ok("…and it was the REFUSAL that identified them, not the index",
+    r2.body.existing?.via === "refusal", r2.body.existing);
+  ok("…matchedOn is email", r2.body.existing?.matchedOn === "email", r2.body.existing);
+  ok("…nothing changed", mutations.length === w2, mutations.slice(w2));
+}
 
 console.log("\n1d · ⚠️ WHEN THE REFUSAL DOES NOT NAME THE CONTACT");
 // 🔴 THE PROBE MAY COME BACK "no". The duplicate lookup is then the instant

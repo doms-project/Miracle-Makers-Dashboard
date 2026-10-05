@@ -442,3 +442,451 @@ export function monthWindow(now: number): StageKpiWindow {
   const to = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
   return { from: from.toISOString(), to: to.toISOString() };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 174 — THE MOVES KPIs.
+//
+// 🔴 EVERY NUMBER HERE COMES OFF THE BOARD PAYLOAD THIS PAGE ALREADY HAS. No
+// function below fetches anything, and none of them can: they take arrays. The
+// cost of the whole screen is zero extra requests, which is the constraint the
+// round was given and the reason it is arithmetic rather than an API.
+//
+// 🔴 AND EVERY ONE CARRIES THE CASE IDS BEHIND IT. A KPI you cannot click into
+// is a number nobody can check — and the records are already in memory, so the
+// drill-down costs nothing but the field.
+//
+// ⚠️ THE FILTERS ARE APPLIED BY THE CALLER, ONCE, TO THE RECORD ARRAY. That is
+// deliberate: "every number follows the filters" is then true by construction
+// rather than by five functions each remembering to. Only the WINDOW is passed
+// in, because a window cuts rows inside a record rather than records.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** What the KPIs need from a record, beyond what stageAge/stageKpi read. */
+export interface KpiRecord extends StageKpiRecord {
+  pipelineId: string;
+  pipelineName: string;
+  ownerId: string;
+  /** GoHighLevel's status: open / won / lost / abandoned. */
+  status: string;
+  /**
+   * ⚠️ WHEN THE STATUS LAST CHANGED, AND IT IS THE ONE FIGURE ON THIS SCREEN
+   * WITH A CAVEAT ATTACHED. See OpportunityRecord.statusChangedAt: a bulk edit
+   * moves it, and it only ever describes the CURRENT status.
+   */
+  statusChangedAt?: string;
+}
+
+export interface StageDef {
+  id: string;
+  name: string;
+  position?: number;
+}
+
+/** Stages in the pipeline's own order. Position first, declaration order after. */
+export function orderedStages(stages: StageDef[]): StageDef[] {
+  return [...stages].sort((a, b) => {
+    const pa = a.position ?? Number.MAX_SAFE_INTEGER;
+    const pb = b.position ?? Number.MAX_SAFE_INTEGER;
+    return pa - pb;
+  });
+}
+
+const inRange = (at: string, w?: StageKpiWindow): boolean => {
+  if (!w || (!w.from && !w.to)) return true;
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return false;
+  if (w.from && t < Date.parse(w.from)) return false;
+  if (w.to && t >= Date.parse(w.to)) return false;
+  return true;
+};
+
+/** Rows that are real movement: a creation row is not one. */
+function movesOf(r: KpiRecord, historyFieldId: string | null): StageHistoryRow[] {
+  if (!historyFieldId) return [];
+  return parseStageHistory(r.cf[historyFieldId]).filter(
+    (row) => !isCreationRow(row.at, r.createdAt),
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 1 · THE STAGE FUNNEL
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface FunnelRow {
+  stageId: string;
+  name: string;
+  /** Cases recorded as REACHING this stage in the window. */
+  reached: number;
+  /** Of those, how many are recorded moving to a LATER stage. */
+  movedOn: number;
+  /** movedOn / reached, or null when nothing reached it (never 0%). */
+  pct: number | null;
+  caseIds: string[];
+  movedOnIds: string[];
+}
+
+export interface Funnel {
+  pipelineId: string;
+  pipelineName: string;
+  rows: FunnelRow[];
+}
+
+/**
+ * Cases that reached each stage, and the share that moved on.
+ *
+ * 🔴 "REACHED" MEANS A RECORDED ROW SAYS SO, AND NOTHING ELSE. A case sitting
+ * in a stage today with no row for it passed through before the recorder
+ * existed, and counting it would mix two different facts under one heading —
+ * the screen says so instead.
+ *
+ * ⚠️ "MOVED ON" IS BY POSITION, NOT BY THE NEXT ROW. A case that skipped a
+ * stage still moved on from the one before it; requiring the immediately
+ * adjacent stage would score a skip as a stall.
+ *
+ * 🔴 `pct` IS null, NOT 0, WHEN NOTHING REACHED A STAGE. "0% moved on" reads
+ * as a stall; "—" reads as what it is.
+ */
+export function stageFunnel(
+  records: KpiRecord[],
+  historyFieldId: string | null,
+  stagesByPipeline: Record<string, StageDef[]>,
+  opts: { window?: StageKpiWindow } = {},
+): Funnel[] {
+  const byPipeline = new Map<string, KpiRecord[]>();
+  for (const r of records) {
+    const list = byPipeline.get(r.pipelineId);
+    if (list) list.push(r);
+    else byPipeline.set(r.pipelineId, [r]);
+  }
+
+  const out: Funnel[] = [];
+  for (const [pipelineId, recs] of byPipeline) {
+    const stages = orderedStages(stagesByPipeline[pipelineId] || []);
+    if (!stages.length) continue;
+    const posOf = new Map(stages.map((s, i) => [s.id, i]));
+
+    const reached = new Map<string, Set<string>>();
+    const movedOn = new Map<string, Set<string>>();
+    for (const s of stages) {
+      reached.set(s.id, new Set());
+      movedOn.set(s.id, new Set());
+    }
+
+    for (const r of recs) {
+      const rows = movesOf(r, historyFieldId).filter((row) => inRange(row.at, opts.window));
+      // Highest position this case is recorded as having reached in the window.
+      let top = -1;
+      for (const row of rows) {
+        const p = posOf.get(row.to);
+        if (p === undefined) continue;
+        reached.get(row.to)?.add(r.id);
+        if (p > top) top = p;
+      }
+      // Anything below the top it reached, it moved on FROM.
+      if (top >= 0)
+        for (const [sid, p] of posOf)
+          if (p < top && reached.get(sid)?.has(r.id)) movedOn.get(sid)?.add(r.id);
+    }
+
+    out.push({
+      pipelineId,
+      pipelineName: recs[0]?.pipelineName || "",
+      rows: stages.map((s) => {
+        const hit = reached.get(s.id) ?? new Set<string>();
+        const on = movedOn.get(s.id) ?? new Set<string>();
+        return {
+          stageId: s.id,
+          name: s.name,
+          reached: hit.size,
+          movedOn: on.size,
+          pct: hit.size ? Math.round((on.size / hit.size) * 100) : null,
+          caseIds: [...hit],
+          movedOnIds: [...on],
+        };
+      }),
+    });
+  }
+  out.sort((a, b) => a.pipelineName.localeCompare(b.pipelineName));
+  return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 2 · TIME IN STAGE
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface StageDuration {
+  stageId: string;
+  name: string;
+  avg: number;
+  median: number;
+  /** Completed intervals measured, NOT cases. One case can contribute several. */
+  n: number;
+  caseIds: string[];
+}
+
+export interface TimeInStage {
+  recorded: StageDuration[];
+  /**
+   * 🔴 THE SEPARATE, LABELLED FIGURE — never mixed into `recorded`. Cases with
+   * no recorded rows at all, dated by GoHighLevel's own stage date. That field
+   * is moved by bulk writes (fourteen records share a 2,880-minute gap from one
+   * correction while still at NEW LEAD), so averaging it in with measured
+   * intervals would launder a known-bad number into a good one.
+   */
+  approximate: { n: number; avg: number; median: number; caseIds: string[] };
+}
+
+const median = (xs: number[]): number => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : Math.round(((s[m - 1] + s[m]) / 2) * 10) / 10;
+};
+const mean = (xs: number[]): number =>
+  xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : 0;
+
+/**
+ * Days spent in each stage, from consecutive recorded rows.
+ *
+ * 🔴 COMPLETED INTERVALS ONLY. The last row has no next row, so the case is
+ * STILL in that stage and its stay has no length yet. Counting time-so-far as
+ * if it were finished drags every average toward "however long ago we looked".
+ *
+ * ⚠️ AN INTERVAL BELONGS TO THE WINDOW ITS START ROW FALLS IN. A stay that
+ * began in March and ended in October is March's; splitting it would invent a
+ * duration neither row supports.
+ */
+export function timeInStage(
+  records: KpiRecord[],
+  historyFieldId: string | null,
+  stageNames: Map<string, string>,
+  opts: { window?: StageKpiWindow; now?: number } = {},
+): TimeInStage {
+  const per = new Map<string, { days: number[]; ids: Set<string> }>();
+  const approx: number[] = [];
+  const approxIds: string[] = [];
+  const now = opts.now ?? Date.now();
+
+  for (const r of records) {
+    const rows = historyFieldId ? parseStageHistory(r.cf[historyFieldId]) : [];
+    if (rows.length < 2) {
+      // 🔴 NO MEASURABLE INTERVAL. Falls to GoHighLevel's date, and lands in
+      // the approximate bucket — which the screen prints on its own line.
+      const t = Date.parse(r.stageChangedAt || "");
+      if (Number.isFinite(t) && now >= t) {
+        const d = Math.floor((now - t) / 86_400_000);
+        approx.push(d);
+        approxIds.push(r.id);
+      }
+      continue;
+    }
+    for (let i = 0; i < rows.length - 1; i++) {
+      if (!inRange(rows[i].at, opts.window)) continue;
+      const a = Date.parse(rows[i].at);
+      const b = Date.parse(rows[i + 1].at);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) continue;
+      const stage = rows[i].to;
+      let cur = per.get(stage);
+      if (!cur) {
+        cur = { days: [], ids: new Set() };
+        per.set(stage, cur);
+      }
+      cur.days.push(Math.round(((b - a) / 86_400_000) * 10) / 10);
+      cur.ids.add(r.id);
+    }
+  }
+
+  return {
+    recorded: [...per.entries()]
+      .map(([stageId, v]) => ({
+        stageId,
+        name: stageNames.get(stageId) || stageId,
+        avg: mean(v.days),
+        median: median(v.days),
+        n: v.days.length,
+        caseIds: [...v.ids],
+      }))
+      .sort((a, b) => b.median - a.median || a.name.localeCompare(b.name)),
+    approximate: {
+      n: approx.length,
+      avg: mean(approx),
+      median: median(approx),
+      caseIds: approxIds,
+    },
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 3 · SPEED TO FIRST MOVE
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface FirstMoveTally {
+  id: string;
+  avg: number;
+  median: number;
+  n: number;
+  caseIds: string[];
+}
+
+/**
+ * Days from `createdAt` to the first move off the entry stage, per rep.
+ *
+ * 🔴 THE CREATION ROW IS NOT A MOVE, so it is filtered before the first row is
+ * taken — otherwise every case would read about a minute and the number would
+ * measure the workflow's own delay rather than anybody's work.
+ *
+ * ⚠️ CREDITED TO THE ROW'S OWNER, NOT THE RECORD'S. The record's owner today
+ * may not be who moved it; the row recorded who did at the time, which is the
+ * whole reason round 163 wrote it down.
+ */
+export function speedToFirstMove(
+  records: KpiRecord[],
+  historyFieldId: string | null,
+  opts: { window?: StageKpiWindow } = {},
+): { perRep: FirstMoveTally[]; noFirstMove: number; noFirstMoveIds: string[] } {
+  const per = new Map<string, { days: number[]; ids: Set<string> }>();
+  let noFirstMove = 0;
+  const noIds: string[] = [];
+
+  for (const r of records) {
+    const first = movesOf(r, historyFieldId)[0];
+    const born = Date.parse(r.createdAt || "");
+    if (!first || !Number.isFinite(born)) {
+      noFirstMove += 1;
+      noIds.push(r.id);
+      continue;
+    }
+    if (!inRange(first.at, opts.window)) continue;
+    const t = Date.parse(first.at);
+    if (!Number.isFinite(t) || t < born) continue;
+    const who = first.ownerId || "";
+    let cur = per.get(who);
+    if (!cur) {
+      cur = { days: [], ids: new Set() };
+      per.set(who, cur);
+    }
+    cur.days.push(Math.round(((t - born) / 86_400_000) * 10) / 10);
+    cur.ids.add(r.id);
+  }
+
+  return {
+    perRep: [...per.entries()]
+      .map(([id, v]) => ({
+        id,
+        avg: mean(v.days),
+        median: median(v.days),
+        n: v.days.length,
+        caseIds: [...v.ids],
+      }))
+      .sort((a, b) => a.median - b.median || b.n - a.n),
+    noFirstMove,
+    noFirstMoveIds: noIds,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4 · WON / LOST
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface WonLostTally {
+  id: string;
+  won: number;
+  lost: number;
+  /** won / (won + lost), or null when neither happened. Never 0% by default. */
+  winRate: number | null;
+  wonIds: string[];
+  lostIds: string[];
+}
+
+/**
+ * Won and lost per rep in the window, dated by `statusChangedAt`.
+ *
+ * 🔴 CURRENT STATUS ONLY, AND THE SCREEN SAYS SO. A case reopened after being
+ * won reads as open: GoHighLevel keeps one status and one timestamp, so the
+ * history of a status does not exist to be read. Option 1 of the three in
+ * report 173; recording status changes the way stage changes are recorded is
+ * its own round.
+ *
+ * ⚠️ AND `statusChangedAt` IS MOVED BY BULK EDITS. That caveat rides beside
+ * every number from here.
+ */
+export function wonLost(
+  records: KpiRecord[],
+  opts: { window?: StageKpiWindow } = {},
+): { perRep: WonLostTally[]; undated: number; undatedIds: string[] } {
+  const per = new Map<string, { won: string[]; lost: string[] }>();
+  let undated = 0;
+  const undatedIds: string[] = [];
+
+  for (const r of records) {
+    const st = (r.status || "").toLowerCase();
+    if (st !== "won" && st !== "lost") continue;
+    const at = r.statusChangedAt || "";
+    if (!at) {
+      // 🔴 COUNTED AND NAMED, NEVER DROPPED INTO THE WINDOW SILENTLY. A won
+      // case with no date cannot be placed in a period, and treating it as
+      // in-period would inflate whichever period was being looked at.
+      undated += 1;
+      undatedIds.push(r.id);
+      continue;
+    }
+    if (!inRange(at, opts.window)) continue;
+    const who = r.ownerId || "";
+    let cur = per.get(who);
+    if (!cur) {
+      cur = { won: [], lost: [] };
+      per.set(who, cur);
+    }
+    (st === "won" ? cur.won : cur.lost).push(r.id);
+  }
+
+  return {
+    perRep: [...per.entries()]
+      .map(([id, v]) => {
+        const total = v.won.length + v.lost.length;
+        return {
+          id,
+          won: v.won.length,
+          lost: v.lost.length,
+          winRate: total ? Math.round((v.won.length / total) * 100) : null,
+          wonIds: v.won,
+          lostIds: v.lost,
+        };
+      })
+      .sort((a, b) => b.won - a.won || a.id.localeCompare(b.id)),
+    undated,
+    undatedIds,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 5 · THE WINDOWS THE FILTER OFFERS
+// ───────────────────────────────────────────────────────────────────────────
+
+export type KpiRange = "week" | "month" | "lastMonth" | "all" | "custom";
+
+/**
+ * 🔴 UTC, LIKE monthWindow, AND FOR THE SAME REASON. Stage rows are stored in
+ * UTC; a window built in the viewer's zone would move the boundary under them
+ * and two people in two zones would read different totals for one month. The
+ * dashboard DISPLAYS Eastern (round 168) and COMPARES in UTC — those are
+ * different jobs and conflating them is how a month gains a day.
+ */
+export function rangeWindow(range: KpiRange, now: number): StageKpiWindow {
+  const d = new Date(now);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  const iso = (t: number) => new Date(t).toISOString();
+  if (range === "all") return { from: null, to: null };
+  if (range === "week") {
+    // Monday as the first day: a sales week that starts on Sunday puts two
+    // weekends in one bucket.
+    const dow = (d.getUTCDay() + 6) % 7;
+    const start = Date.UTC(y, m, d.getUTCDate() - dow);
+    return { from: iso(start), to: iso(start + 7 * 86_400_000) };
+  }
+  if (range === "month") return { from: iso(Date.UTC(y, m, 1)), to: iso(Date.UTC(y, m + 1, 1)) };
+  if (range === "lastMonth")
+    return { from: iso(Date.UTC(y, m - 1, 1)), to: iso(Date.UTC(y, m, 1)) };
+  return { from: null, to: null };
+}
