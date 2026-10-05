@@ -15,7 +15,7 @@ import {
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
 import { recruitingGroup } from "@/lib/pipelineConfig";
-import { checkExistingPerson } from "@/lib/existingPerson";
+import { checkExistingPerson, createPersonOrConflict } from "@/lib/existingPerson";
 import { emit } from "@/lib/webhooks";
 import type { ApiError } from "@/lib/types";
 import {
@@ -171,15 +171,19 @@ async function postHandler(request: Request) {
       contact = { id: cgExistingId };
     } else {
       push("Record Type", "Caregiver");
-      contact = await upsertContact({
+      // 🔴 ROUND 173 — CREATE, NEVER UPSERT. This is the path the live failure
+      // started from: an applicant created here, then seven seconds later a
+      // person met on the same number, and the upsert merged onto them.
+      const made = await createPersonOrConflict({
         firstName,
         lastName,
-        name: `${firstName} ${lastName}`.trim(),
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
         source: (body.source || "").trim() || undefined,
         ...(contactFields.length ? { customFields: contactFields } : {}),
       });
+      if (!made.ok) return NextResponse.json(made.conflict, { status: 409 });
+      contact = { id: made.id };
     }
     if (!contact.id)
       return NextResponse.json(

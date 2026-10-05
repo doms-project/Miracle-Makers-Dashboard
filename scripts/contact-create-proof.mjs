@@ -296,12 +296,23 @@ ok("…via /contacts/", writes.at(-1)?.endpoint === "create", writes.map((w) => 
 ok("…with the org in firstName", writes.at(-1)?.body?.firstName === "Main Line Health",
   writes.at(-1)?.body);
 
-// CONTROL — with an email it must still UPSERT, because that deduplicates.
+// 🔴 ROUND 173 — THIS CONTROL ASSERTED THE BUG, AND IT WAS RIGHT UNTIL IT WAS
+// NOT. It read "with an email it upserts instead, so duplicates still merge" —
+// and merging is exactly what renamed a contact created seconds earlier,
+// because the pre-check that was supposed to prevent it read a search index
+// lagging by up to a minute. The dedup now comes from the create's own
+// duplicate refusal, which is instant.
+//
+// ⚠️ THE CONTROL'S JOB IS UNCHANGED: a key must take a DIFFERENT path from a
+// name-only add, or "via /contacts/" above would be satisfied by every add
+// going the same way. It still does — the difference is now the refusal, not
+// the endpoint — so this asserts the endpoint is never the merging one.
 const p2 = await post({
   action: "add-partner", org: "Bryn Mawr Rehab", email: "refer@bmr.org", division: "ODP",
 });
-ok("🔴 CONTROL — with an email it upserts instead, so duplicates still merge",
-  p2.status === 200 && writes.at(-1)?.endpoint === "upsert", writes.map((w) => w.endpoint));
+ok("🔴 ROUND 173 — with an email it creates and NEVER upserts",
+  p2.status === 200 && writes.at(-1)?.endpoint === "create" &&
+  !writes.some((w) => w.endpoint === "upsert"), writes.map((w) => w.endpoint));
 
 const a = await post({
   action: "add-attendee", eventId: "ev1", firstName: "Nina", outcome: "Warm",
@@ -312,8 +323,11 @@ ok("…via /contacts/", writes.at(-1)?.endpoint === "create", writes.map((w) => 
 const a2 = await post({
   action: "add-attendee", eventId: "ev1", firstName: "Omar", phone: "610-555-7777",
 });
-ok("🔴 CONTROL — with a phone the attendee upserts",
-  a2.status === 200 && writes.at(-1)?.endpoint === "upsert", writes.map((w) => w.endpoint));
+// 🔴 ROUND 173 — same correction, attendee side. A phone no longer sends this
+// through the merging endpoint; the create's refusal is what deduplicates.
+ok("🔴 ROUND 173 — with a phone the attendee creates, and never upserts",
+  a2.status === 200 && writes.at(-1)?.endpoint === "create" &&
+  !writes.some((w) => w.endpoint === "upsert"), writes.map((w) => w.endpoint));
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 3b · 🔴 A PERSON'S NAME IS NOT AN IDENTITY ═══");

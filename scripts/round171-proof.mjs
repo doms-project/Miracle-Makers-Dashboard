@@ -283,7 +283,7 @@ delete process.env.PIPELINE_ACCESS_MAP;
 delete process.env.WEBHOOK_URL;
 
 const G = await import("../lib/ghl.ts");
-const { stageKpi } = await import("../lib/stageKpi.ts");
+const { stageKpi, CREATION_WINDOW_MS } = await import("../lib/stageKpi.ts");
 const refRoute = await import("../app/api/referrals/route.ts");
 const cgRoute = await import("../app/api/opportunities/[id]/caregivers/route.ts");
 const searchRoute = await import("../app/api/opportunities/[id]/caregivers/search/route.ts");
@@ -566,10 +566,24 @@ ok("…and says so as a creation row", k.creationRows === 1, k.creationRows);
 
 // 🔴 THE EDGE OF THE WINDOW, BOTH SIDES. A constant nobody tests is a constant
 // that can be changed to zero without a proof noticing.
-k = stageKpi([krec("N3", "A", ["2026-09-01T10:01:59.000Z|A|u_hay|"], born)], FID);
-ok("119 seconds after creation is still the creation", k.creationRows === 1 && k.moves === 0, k);
-k = stageKpi([krec("N4", "A", ["2026-09-01T10:02:01.000Z|A|u_hay|"], born)], FID);
-ok("🔴 CONTROL — 121 seconds after creation is a MOVE",
+// 🔴 ROUND 173 — DERIVED FROM THE CONSTANT NOW, NOT HARD-CODED AT 2 MINUTES.
+// These read "119 seconds" and "121 seconds" and went red when the window was
+// widened to five minutes on live measurement — a proof asserting a number
+// whose value is a judgement call, which is the trap round 128 set twice with
+// message wording.
+//
+// ⚠️ AND THE LITERAL VALUES DID NOT JUST VANISH. round173-proof asserts a
+// 3-minute row is creation and a 6-minute row is a move, in whole minutes and
+// independent of the constant — so the constant being wrong is still caught
+// somewhere. What this pair tests is that the BOUNDARY IS SHARP, wherever it
+// sits, which is the property that cannot go stale.
+const W = CREATION_WINDOW_MS;
+const atMs = (ms) => new Date(Date.parse(born) + ms).toISOString();
+k = stageKpi([krec("N3", "A", [`${atMs(W - 1000)}|A|u_hay|`], born)], FID);
+ok("a second INSIDE the window is still the creation",
+  k.creationRows === 1 && k.moves === 0, k);
+k = stageKpi([krec("N4", "A", [`${atMs(W + 1000)}|A|u_hay|`], born)], FID);
+ok("🔴 CONTROL — a second OUTSIDE the window is a MOVE",
   k.moves === 1 && k.unknownOrigin === 1 && k.creationRows === 0, k);
 
 // 🔴 A MISSING createdAt COUNTS, rather than being quietly dropped.

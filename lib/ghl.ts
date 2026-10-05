@@ -61,11 +61,13 @@ export class GhlError extends Error {
   // GHL's own machine-readable code (e.g. OPPORTUNITY_NO_DUPLICATE). What the
   // friendly-message mapping keys off, rather than matching on prose.
   code?: string;
+  /** ROUND 173 — the colliding contact, when the refusal body names it. */
+  dupContactId?: string;
   constructor(
     message: string,
     status: number,
     detail?: string,
-    meta?: { traceId?: string; code?: string },
+    meta?: { traceId?: string; code?: string; dupContactId?: string },
   ) {
     super(message);
     this.name = "GhlError";
@@ -73,12 +75,28 @@ export class GhlError extends Error {
     this.detail = detail;
     this.traceId = meta?.traceId;
     this.code = meta?.code;
+    this.dupContactId = meta?.dupContactId;
   }
 }
 
 // Pull the machine-readable bits out of a GHL error body. Kept separate from
 // ghlMessage() so the human text and the lookup keys never overwrite each other.
-export function ghlErrorMeta(raw: string): { traceId?: string; code?: string } {
+export function ghlErrorMeta(raw: string): {
+  traceId?: string;
+  code?: string;
+  /**
+   * 🔴 ROUND 173 — THE CONTACT GOHIGHLEVEL REFUSED THE WRITE *BECAUSE OF*,
+   * when the refusal body names it.
+   *
+   * A duplicate refusal is the only instant, authoritative answer to "does this
+   * phone already belong to somebody" — the search index lags new contacts by
+   * up to a minute. If the body carries the colliding contact's id, the 409
+   * confirmation can name them and offer to record them. Whether it does is
+   * UNPROVEN on this account: see scripts/duplicate-refusal-probe.mjs. Absent
+   * is handled, not assumed away.
+   */
+  dupContactId?: string;
+} {
   try {
     const j = JSON.parse((raw || "").trim()) as Record<string, unknown>;
     const traceId =
@@ -94,7 +112,23 @@ export function ghlErrorMeta(raw: string): { traceId?: string; code?: string } {
       typeof j.message === "string" ? j.message : ""
     } ${Array.isArray(j.message) ? j.message.join(" ") : ""}`;
     const m = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+){1,6})\b/.exec(hay);
-    return { traceId, code: m ? m[1] : undefined };
+    // ⚠️ EVERY SHAPE THE BODY MIGHT USE, AND NONE OF THEM GUESSED AT. Each is
+    // read only if it is actually a string; a missing id stays missing rather
+    // than becoming "".
+    const meta = (j.meta ?? {}) as Record<string, unknown>;
+    const nested = (meta.contact ?? {}) as Record<string, unknown>;
+    const dup = [
+      meta.contactId,
+      meta.contact_id,
+      nested.id,
+      j.contactId,
+      (j as Record<string, unknown>).contact_id,
+    ].find((v) => typeof v === "string" && v);
+    return {
+      traceId,
+      code: m ? m[1] : undefined,
+      dupContactId: typeof dup === "string" ? dup : undefined,
+    };
   } catch {
     return {};
   }
@@ -4727,6 +4761,53 @@ export async function findContactByEmailOrPhone(args: {
     }
   }
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 173 · ITEM 1 — THE INSTANT DUPLICATE LOOKUP.
+//
+// 🔴 WHY `findContactByEmailOrPhone` IS NOT ENOUGH, PROVED LIVE ON v172. It
+// asks `/contacts/search`, which is an INDEX and lags a new contact by up to a
+// minute. `/contacts/upsert` matches on phone INSTANTLY. So between a create
+// and the index catching up there is a window where the check sees nobody and
+// the write overwrites somebody — observed at 7 seconds, absent at 12.
+//
+// ⚠️ THIS ENDPOINT IS UNPROVEN ON THIS ACCOUNT. It is GoHighLevel's documented
+// duplicate lookup and it is the obvious candidate for an instant answer, but
+// no call in this repo has ever used it. Rule 7's shape: the probe
+// (scripts/duplicate-refusal-probe.mjs) answers whether it sees a contact
+// created one second earlier. Until it does, this is a BEST EFFORT in a chain
+// whose first link needs no endpoint at all — the create's own refusal.
+// ═══════════════════════════════════════════════════════════════════════════
+export async function lookupDuplicateContact(args: {
+  phone?: string;
+  email?: string;
+}): Promise<{ id: string; name: string } | null> {
+  const { locationId } = requireEnv();
+  // ⚠️ `e164` RETURNS AN OBJECT, NOT A STRING — and the compiler said so. The
+  // normalised form is what GoHighLevel stores; the typed value is the fallback
+  // when it could not be normalised.
+  const phone = e164(args.phone || "").value || (args.phone || "").trim();
+  const email = (args.email || "").trim();
+  if (!phone && !email) return null;
+  const params = new URLSearchParams({ locationId });
+  if (phone) params.set("number", phone);
+  if (email) params.set("email", email);
+  try {
+    const data = await ghlGet<{ contact?: { id?: string; [k: string]: unknown } }>(
+      `/contacts/search/duplicate?${params.toString()}`,
+    );
+    const c = data.contact;
+    const id = String(c?.id ?? "");
+    if (!id) return null;
+    return { id, name: contactDisplay(c as RawContact) };
+  } catch {
+    // ⚠️ A 404 HERE MEANS "no duplicate" ON SOME TENANTS AND "no such route" ON
+    // OTHERS, AND THE TWO ARE THE SAME SHAPE. Neither is an error worth
+    // failing a write over, and neither is proof of absence — which is why the
+    // caller never treats null from this as "nobody has that number".
+    return null;
+  }
 }
 
 export async function createOpportunity(o: {

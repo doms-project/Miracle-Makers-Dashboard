@@ -390,8 +390,19 @@ const ref = await post({
 });
 console.log(`HTTP ${ref.status} · ${JSON.stringify(ref.body)}`);
 const oppPost = sent.filter((x) => x.url === "/opportunities/" || x.url === "/opportunities");
+// 🔴 ROUND 173 — THE CONTACT WRITE IS A PLAIN CREATE NOW, NOT AN UPSERT, and
+// that is the point of the round: an upsert MERGES onto whoever shares the
+// phone, and the pre-check that was supposed to stop that read a search index
+// lagging by up to a minute. This counted upserts, so it went red against
+// working code. It counts the contact write whichever endpoint makes it, and
+// asserts separately that the endpoint is no longer the merging one.
 const upserts = sent.filter((x) => x.url === "/contacts/upsert");
-console.log(`  writes: ${upserts.length} contact upsert · ${oppPost.length} opportunity create`);
+const creates = sent.filter((x) => x.url === "/contacts/" || x.url === "/contacts");
+const contactWrites = upserts.length + creates.length;
+console.log(`  writes: ${contactWrites} contact (${creates.length} create · ${upserts.length} upsert) · ${oppPost.length} opportunity create`);
+console.log(
+  `  ${upserts.length === 0 ? "ok  " : "FAIL"} 🔴 ROUND 173 — the contact write does NOT upsert`,
+);
 console.log(`  the opportunity body actually sent:\n  ${JSON.stringify(oppPost[0]?.body)}`);
 const ob = oppPost[0]?.body || {};
 console.log(
@@ -401,7 +412,7 @@ console.log(
   `  ${(ob.customFields || []).some((f) => f.value === "p1") ? "ok  " : "FAIL"} Referring Partner is in the SAME request`,
 );
 console.log(
-  `  ${oppPost.length === 1 && upserts.length === 1 ? "ok  " : "FAIL"} exactly two writes, not three`,
+  `  ${oppPost.length === 1 && contactWrites === 1 ? "ok  " : "FAIL"} exactly two writes, not three`,
 );
 
 console.log("\n─── 5 · THE SECOND WRITE FAILS — SAY WHAT SURVIVED ───────────");
