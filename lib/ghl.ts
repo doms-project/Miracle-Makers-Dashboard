@@ -15,6 +15,7 @@ import { formatEasternNoZone } from "./dates";
 import { e164, emailKey, phoneKey } from "./phone";
 import { mapLimit, type Settled } from "./concurrency";
 import { getCaseManagers } from "./pipelineAccess";
+import { indexCaseHolders, matchCaseHolders } from "./peopleSearch";
 
 // Account-specific — MUST come from env (re-derive per account with
 // scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
@@ -6459,53 +6460,203 @@ export async function getClientCaseRows(): Promise<OpportunityRecord[]> {
   return records;
 }
 
-// Typeahead: search contacts filtered to Record Type = "Caregiver" so clients
-// never appear. Record Type on this tenant is a contact custom field; we filter
-// defensively both at the API (when supported) and in code.
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 172 — THE CAREGIVERS PICKER, DELIBERATELY.
+//
+// 🔴 WHAT WAS WRONG, AND IT WAS WORSE THAN "the filter is loose".
+//
+//   1. THE FALLBACK SHOWED EVERYONE. The old body ended
+//        const list = filtered.length ? filtered : contacts;
+//      so when NO hit carried "Caregiver" the picker returned every match —
+//      clients included. With 118 of 120 client contacts carrying no Record
+//      Type at all (probed 1 October), that branch was the common one: typing
+//      a client's name returned that client, under a "Caregivers" heading, on
+//      a control whose entire job is to pick a caregiver.
+//
+//   2. THE TEST SCANNED EVERY CUSTOM FIELD.
+//        if (String(f?.value).toLowerCase() === "caregiver") return true;
+//      — any field whose value happened to read "Caregiver" passed. Attendee
+//      Profile is free text and "Caregiver" is an obvious thing to type in it.
+//
+//   3. SO THE RULE IN FORCE DEPENDED ON THE OTHER HITS. Two searches, two
+//      different behaviours, decided by whether somebody unrelated in the same
+//      response happened to be tagged. That is not a loose filter; it is no
+//      filter, intermittently.
+//
+// ✅ ROLES FROM FACTS, AS IN ROUND 171. A caregiver is somebody who
+//
+//      carries Record Type = "Caregiver"      — the label, read exactly, on
+//                                               the Record Type FIELD only
+//   OR holds a case in a caregiver-scoped pipeline
+//
+// and the second half is what makes the first half safe to tighten: an
+// applicant whose Record Type was never set is still found, by the case that
+// made them an applicant.
+//
+// 🔴 AND WHEN NOBODY MATCHES, NOBODY IS SHOWN. "No caregiver matches" is a
+// true sentence. A list of other people is not a lesser answer to the same
+// question — it is a confident answer to a different one, and it is the shape
+// that puts a client in a caregiver slot.
+//
+// ⚠️ ZERO REQUESTS PER KEYSTROKE. Both halves are cached lists and the match
+// runs in memory. The old version spent one `/contacts/search` per keystroke
+// against a 100-per-10-second budget; this spends none, and a cold instance
+// pays one paged search plus the caregiver board.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The field and the value, named once — and the field is read BY NAME. */
+const CAREGIVER_RECORD_TYPE_FIELD = "Record Type";
+const CAREGIVER_RECORD_TYPE = "Caregiver";
+
+const CAREGIVER_CASE_TTL_MS = 60_000;
+let caregiverCaseCache: { at: number; rows: OpportunityRecord[] } | null = null;
+let caregiverLabelCache: { at: number; rows: ContactByField[] } | null = null;
+
+/**
+ * Visible to proofs; never called in production.
+ *
+ * ⚠️ IT DROPS THE FIELD DEFINITIONS TOO. The label half resolves "Record Type"
+ * through `getEditableFieldDefs`, which is memoised for the life of the
+ * process — so a proof that changes which fields the account has and only
+ * clears the two caches here would be testing yesterday's definitions.
+ */
+export function resetCaregiverPickerCache(): void {
+  caregiverCaseCache = null;
+  caregiverLabelCache = null;
+  bustFieldCaches();
+}
+
+/** Every case in every caregiver-scoped pipeline. Cached, like the client side. */
+export async function getCaregiverCaseRows(): Promise<OpportunityRecord[]> {
+  const now = Date.now();
+  if (caregiverCaseCache && now - caregiverCaseCache.at < CAREGIVER_CASE_TTL_MS)
+    return caregiverCaseCache.rows;
+  const { records } = await getOltlOpportunities("caregiver");
+  caregiverCaseCache = { at: now, rows: records };
+  return records;
+}
+
+/**
+ * Contacts whose **Record Type field** is exactly "Caregiver".
+ *
+ * 🔴 BY FIELD ID, NOT BY SCANNING VALUES. The field is resolved by NAME from
+ * the account's own definitions, and only that field is read. `cfHasValue`
+ * inside `ghlSearchContacts` then re-checks the value in code, so a filter
+ * GoHighLevel ignores cannot pass itself off as a caregiver list.
+ */
+async function caregiversByLabel(): Promise<ContactByField[]> {
+  const now = Date.now();
+  if (caregiverLabelCache && now - caregiverLabelCache.at < CAREGIVER_CASE_TTL_MS)
+    return caregiverLabelCache.rows;
+  const defs = await getEditableFieldDefs("contact");
+  const rt = defs.find((d) => norm(d.name) === norm(CAREGIVER_RECORD_TYPE_FIELD));
+  if (!rt) throw new GhlError(
+    `This account has no "${CAREGIVER_RECORD_TYPE_FIELD}" contact field.`,
+    409,
+    "Caregivers can still be found by the applicant case they hold, but nobody can be found by their label until that field exists.",
+    { code: "NO_RECORD_TYPE_FIELD" },
+  );
+  const res = await ghlSearchContacts(rt.id, CAREGIVER_RECORD_TYPE);
+  caregiverLabelCache = { at: now, rows: res.rows };
+  return res.rows;
+}
+
+export interface CaregiverHit {
+  id: string;
+  name: string;
+  /** Their applicant pipeline, or "" when they are known only by their label. */
+  pipelineName: string;
+  stage: string;
+  /** Applicant cases beyond the one shown. */
+  more: number;
+}
+
+export interface CaregiverSearchResult {
+  results: CaregiverHit[];
+  /**
+   * ⚠️ TRUE WHEN THE LABEL HALF COULD NOT BE READ. The case half still works,
+   * so the picker is narrower rather than broken — and the empty state has to
+   * be able to say which, or "no caregiver matches" would be a claim nobody
+   * checked. Round 155's rule, on this control.
+   */
+  labelsUnavailable: boolean;
+}
+
+/**
+ * The picker.
+ *
+ * 🔴 NO ACCESS FILTER HERE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+ *
+ * The Clients picker on a caregiver's record IS scoped to the viewer's
+ * pipeline grants (round 171), and the asymmetry is deliberate:
+ *
+ *   a CLIENT is somebody receiving care. Who may see them is the question the
+ *     whole access map exists to answer, and a recruiter holding no client
+ *     pipeline has no business reading a list of client names.
+ *
+ *   a CAREGIVER is staff. 🔴 REPS LINK CAREGIVERS THEY DO NOT RECRUIT — that
+ *     is the normal case, not the edge one: the person staffing a case and the
+ *     person who hired the caregiver are different people in different
+ *     divisions. Scoping this list to the viewer's own applicant pipelines
+ *     would leave a Private Pay rep unable to attach the caregiver actually
+ *     doing the work, and they would create a duplicate contact instead.
+ *
+ * ⚠️ SO THE PROTECTION IS THE FIELDS, NOT THE ROWS. Name, applicant pipeline
+ * and stage, and nothing else: no phone, no email, no compliance or health
+ * detail. Those are withheld from the PAYLOAD and not merely from the screen
+ * — round 155 settled that hiding a value in the component leaves it in the
+ * response for anyone reading the network tab.
+ *
+ * ⚠️ AND IT IS STILL GATED. The route requires edit rights on the record the
+ * picker was opened from, which is what stops it being a contact dump.
+ */
 export async function searchCaregiverContacts(
   query: string,
-): Promise<{ id: string; name: string; email: string }[]> {
-  const { locationId } = requireEnv();
-  if (!query.trim()) return [];
-  const body = {
-    locationId,
-    page: 1,
-    pageLimit: 20,
-    query: query.trim(),
-  };
-  const data = await ghlSend<{ contacts?: RawContact[] }>(
-    "POST",
-    "/contacts/search",
-    body,
+): Promise<CaregiverSearchResult> {
+  if (!query.trim()) return { results: [], labelsUnavailable: false };
+
+  const cases = await getCaregiverCaseRows();
+  let labels: ContactByField[] = [];
+  let labelsUnavailable = false;
+  try {
+    labels = await caregiversByLabel();
+  } catch {
+    // 🔴 NARROWER, NOT SILENT. The case half still answers; the caller is told
+    // the label half did not, so an empty picker cannot be reported as "nobody
+    // matches" when the truth is "half the question went unasked".
+    labelsUnavailable = true;
+  }
+
+  const holders = indexCaseHolders(
+    cases.map((r) => ({
+      contactId: r.contactId,
+      contactName: r.contactName,
+      first: r.first,
+      last: r.last,
+      pipelineName: r.pipelineName,
+      stage: r.stage,
+      status: r.status,
+      createdAt: r.createdAt,
+    })),
   );
-  const contacts = data.contacts || [];
-  const isCaregiver = (c: RawContact): boolean => {
-    // Look for a Record Type value of "Caregiver" anywhere obvious.
-    const rt =
-      (c.recordType as string) ??
-      (c.type as string) ??
-      (c.contactType as string) ??
-      "";
-    if (String(rt).toLowerCase().includes("caregiver")) return true;
-    // customFields may carry Record Type; scan permissively.
-    const cf = c.customFields;
-    if (Array.isArray(cf)) {
-      for (const f of cf as { value?: unknown }[]) {
-        if (String(f?.value ?? "").toLowerCase() === "caregiver") return true;
-      }
-    }
-    return false;
+  const byId = new Map(holders.map((h) => [h.contactId, h]));
+  // A labelled caregiver with no case is still a caregiver — and has no
+  // pipeline or stage to show, which is the honest rendering of that.
+  for (const l of labels)
+    if (!byId.has(l.id))
+      byId.set(l.id, { contactId: l.id, name: l.name, pipelineName: "", stage: "", more: 0 });
+
+  const hits = matchCaseHolders([...byId.values()], query);
+  return {
+    results: hits.map((h) => ({
+      id: h.contactId,
+      name: h.name,
+      pipelineName: h.pipelineName,
+      stage: h.stage,
+      more: h.more,
+    })),
+    labelsUnavailable,
   };
-  const filtered = contacts.filter(isCaregiver);
-  // If the tenant doesn't expose Record Type on search, fall back to all
-  // matches rather than showing nothing (the picker still assigns a real
-  // contact; the caller is warned in the UI note).
-  const list = filtered.length ? filtered : contacts;
-  return list.map((c) => ({
-    id: String(c.id ?? c.contactId ?? ""),
-    name: contactDisplay(c),
-    email: String(c.email ?? ""),
-  }));
 }
 
 export async function createCaregiverRelation(

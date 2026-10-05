@@ -78,9 +78,34 @@ async function getHandler(
     const openRecordIsCaregiver = cgPipes.some((p) => p.id === target.pipelineId);
 
     if (!openRecordIsCaregiver) {
-      const results = await searchCaregiverContacts(q);
+      // 🔴 ROUND 172 — NO ACCESS FILTER ON THIS SIDE, DELIBERATELY, AND THE
+      // ASYMMETRY WITH THE CLIENT BRANCH BELOW IS THE POINT.
+      //
+      // Reps link caregivers they do not recruit: the person staffing a case
+      // and the person who hired the caregiver are routinely in different
+      // divisions. Scoping this to the viewer's own applicant pipelines would
+      // leave a Private Pay rep unable to attach the caregiver actually doing
+      // the work — and they would create a duplicate contact instead, which is
+      // worse for everybody including whoever the scoping was meant to protect.
+      //
+      // ⚠️ SO THE PROTECTION IS THE FIELDS, NOT THE ROWS. `searchCaregiverContacts`
+      // returns a name, an applicant pipeline and a stage; no phone, no email,
+      // no compliance or health detail, withheld from the PAYLOAD and not just
+      // from the screen. And the gate above still applies: you must be able to
+      // edit the record this picker was opened from.
+      //
+      // 🔴 `withheld` IS 0 AND IT IS A FACT, NOT A PLACEHOLDER. Nothing is
+      // filtered out, so the count a filtered list owes its consumers is zero
+      // here — which is what lets the empty state say "No caregiver matches"
+      // without hedging.
+      const cg = await searchCaregiverContacts(q);
       return NextResponse.json(
-        { results, role: "caregiver", withheld: 0 },
+        {
+          results: cg.results,
+          role: "caregiver",
+          withheld: 0,
+          labelsUnavailable: cg.labelsUnavailable,
+        },
         { headers: { "Cache-Control": "no-store" } },
       );
     }
@@ -132,7 +157,6 @@ async function getHandler(
         results: results.map((p) => ({
           id: p.contactId,
           name: p.name,
-          email: "",
           pipelineName: p.pipelineName,
           stage: p.stage,
           more: p.more,

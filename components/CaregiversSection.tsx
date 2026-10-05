@@ -22,8 +22,13 @@ const contactUrl = (contactId: string) =>
 type SearchHit = {
   id: string;
   name: string;
-  email: string;
-  /** ROUND 171 — present only on the CLIENT side: which case identifies them. */
+  /**
+   * 🔴 ROUND 172 — NO EMAIL AND NO PHONE, ON EITHER SIDE. This carried
+   * `email` and the row printed it. A picker needs enough to tell two people
+   * apart and nothing more, and the case does that better than an address
+   * does. Removed from the TYPE as well as the markup so a future row cannot
+   * put it back by reading a field that was still arriving.
+   */
   pipelineName?: string;
   stage?: string;
   /** Cases this person holds beyond the one shown. */
@@ -70,6 +75,10 @@ export default function CaregiversSection({
   // the client list by the viewer's grants, so an empty picker has two causes
   // that look identical: nobody matches, or nobody you may see matches.
   const [hitsWithheld, setHitsWithheld] = useState(0);
+  // 🔴 ROUND 172 — TRUE WHEN THE RECORD-TYPE HALF OF THE CAREGIVER SEARCH
+  // COULD NOT BE READ. "No caregiver matches" is only true if both halves were
+  // asked; saying it when one of them failed is a claim nobody checked.
+  const [labelsOut, setLabelsOut] = useState(false);
   const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
   const [actionErr, setActionErr] = useState<unknown>(null);
@@ -168,6 +177,7 @@ export default function CaregiversSection({
     if (!q.trim()) {
       setHits([]);
       setHitsWithheld(0);
+      setLabelsOut(false);
       return;
     }
     debounce.current = setTimeout(async () => {
@@ -183,6 +193,7 @@ export default function CaregiversSection({
         if (res.ok) {
           setHits(j.results || []);
           setHitsWithheld(Number(j.withheld) || 0);
+          setLabelsOut(!!j.labelsUnavailable);
         }
       } catch {
         /* ignore transient search errors */
@@ -334,14 +345,33 @@ export default function CaregiversSection({
                 </div>
               ) : hits.length === 0 ? (
                 <div className="cgmuted" style={{ padding: "8px 10px" }}>
-                  {/* 🔴 "none you can see" IS A DIFFERENT SENTENCE FROM "none".
-                      Following the advice of the wrong one creates a duplicate
-                      of somebody who is already there — round 145's lesson, on
-                      this picker. */}
-                  No {singular}s match
-                  {hitsWithheld
-                    ? ` that you can see — ${hitsWithheld} match${hitsWithheld === 1 ? "" : "es"} outside your pipeline access.`
-                    : "."}
+                  {/* 🔴 ROUND 172 — NOBODY MATCHING MEANS NOBODY IS SHOWN.
+                      The old picker answered an empty caregiver search with
+                      every other match it had, which is a confident answer to
+                      a different question and is how a client reached a
+                      caregiver slot.
+                      ⚠️ AND THE SENTENCE DIFFERS BY SIDE BECAUSE THE REASON
+                      DOES: the client list is scoped to your grants (round
+                      171) and the caregiver list is not scoped at all (round
+                      172), so only one of them can be empty because of you. */}
+                  {otherRole === "caregiver" ? (
+                    labelsOut ? (
+                      <>
+                        No caregiver matches — and only half the search ran.
+                        Their <b>Record Type</b> could not be read, so anyone
+                        without an applicant case was not looked for.
+                      </>
+                    ) : (
+                      "No caregiver matches."
+                    )
+                  ) : (
+                    <>
+                      No clients match
+                      {hitsWithheld
+                        ? ` that you can see — ${hitsWithheld} match${hitsWithheld === 1 ? "" : "es"} outside your pipeline access.`
+                        : "."}
+                    </>
+                  )}
                 </div>
               ) : (
                 hits.map((h) => {
@@ -359,14 +389,18 @@ export default function CaregiversSection({
                           is shown rather than implied. Two people with the same
                           name are told apart by their pipeline and stage, and
                           nothing else here could do it. */}
+                      {/* 🔴 THE CASE, AND NOTHING ELSE. It tells two people
+                          with one name apart, which is all a picker needs;
+                          an address, a number or a compliance flag is detail
+                          this control has no business carrying. A caregiver
+                          known only by their Record Type has no case to show,
+                          and showing nothing is the honest rendering. */}
                       {h.pipelineName ? (
                         <span className="cghitmeta">
                           {h.pipelineName}
                           {h.stage ? ` · ${h.stage}` : ""}
                           {h.more ? ` · +${h.more} more case${h.more === 1 ? "" : "s"}` : ""}
                         </span>
-                      ) : h.email ? (
-                        <span className="cghitmeta">{h.email}</span>
                       ) : null}
                       {linked ? <span className="cghitmeta">· already added</span> : null}
                     </button>
