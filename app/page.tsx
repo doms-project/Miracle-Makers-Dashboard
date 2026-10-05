@@ -7244,7 +7244,21 @@ export default function Dashboard() {
               Moves is granted with the Master view, in the Access tab.
             </div>
           ) : (
-            <div className="mvwrap">
+            /* 🔴 THE SAME BUG THE ADMIN SCREENS HAD, AND THIS FILE ALREADY
+               DOCUMENTS IT TWO BRANCHES ABOVE: `.main` is `overflow:hidden`,
+               and this view was rendered straight into the switch with no
+               scrolling container of its own — `.mvwrap` is padding and
+               nothing else. So anything taller than the viewport was CLIPPED,
+               with no scrollbar to reach it.
+               ⚠️ IT SURVIVED ROUND 165 BECAUSE THE RAIL WAS SHORT: notes and
+               two columns fitted. Round 174 added a filter bar, four KPI
+               blocks of tables and a drill-down, so most of the screen became
+               unreachable — a feature that renders and cannot be read.
+               🔴 AND THAT IS THE LESSON, NOT THE FIX: a finding recorded at
+               one branch did not reach its neighbour. Same shape as round
+               133's contact rule versus round 124's venue, and round 134's
+               "compare meaning" versus the name check. */
+            <div className="scroll mvwrap">
               <div className="mvhead">
                 <h2 className="mvtitle">Moves</h2>
                 {/* 🔴 ROUND 174 — EVERY NUMBER BELOW FOLLOWS THESE, because

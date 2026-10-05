@@ -2115,6 +2115,10 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    .bar, .row, .who) would have been the fourth. `.mv` is not used anywhere
    else — swept before writing this.
    ═══════════════════════════════════════════════════════════════════════════ */
+/* ⚠️ PADDING ONLY — the scrolling comes from `.scroll` beside it in the JSX,
+   which is the same pairing the admin screens use (`.scroll adminscroll`).
+   Written here because `.mvwrap` alone looks complete and is not: without a
+   scrolling ancestor this view is clipped by `.main`'s overflow:hidden. */
 .mvwrap{padding:18px 22px 40px}
 .mvhead{display:flex;align-items:center;gap:16px;margin:0 0 14px}
 .mvtitle{margin:0;font-size:19px;font-weight:700;color:var(--ink)}
