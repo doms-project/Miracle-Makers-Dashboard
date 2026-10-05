@@ -22,8 +22,15 @@ const ok = (n, c, got) => {
 
 const FID = "169kLJWuSzuEiagrAmKo";   // the live field id
 const NOW = Date.parse("2026-09-30T12:00:00.000Z");
-const rec = (id, stageId, rows, stageChangedAt) => ({
-  id, stageId, stageChangedAt, cf: { [FID]: rows.join("\n") },
+// 🔴 ROUND 171 — EVERY FIXTURE NOW CARRIES A createdAt, AND IT IS DELIBERATELY
+// NOWHERE NEAR ANY ROW. Row 1 of a log is a MOVE now unless it lands within two
+// minutes of the case being created, so a fixture with no createdAt would make
+// every scenario below depend on a rule none of them is about. January keeps
+// these sections testing transitions, owners, managers and windows — exactly
+// what they tested before — while the creation rule gets its own proof.
+const BORN = "2026-01-01T00:00:00.000Z";
+const rec = (id, stageId, rows, stageChangedAt, createdAt = BORN) => ({
+  id, stageId, stageChangedAt, createdAt, cf: { [FID]: rows.join("\n") },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -37,19 +44,28 @@ const one = rec("r1", "B", ["2026-09-10T09:00:00.000Z|A|u_ern|u_carla",
 const first = rec("r2", "A", ["2026-09-11T09:00:00.000Z|A|u_ern|u_carla"]);
 
 let k = stageKpi([one, first], FID);
-ok("two rows on one record = ONE move", k.moves === 1, k.moves);
-ok("🔴 the lone first row is NOT a move", k.firstSightings === 2, k.firstSightings);
-ok("perRep credits the transition only", k.perRep[0]?.moves === 1, k.perRep);
+// 🔴 ROUND 171 — UPDATED, AND THE OLD ASSERTION WAS THE BUG. It read "the lone
+// first row is NOT a move" and it was GREEN on a Moves screen that counted
+// zero. The stage workflow fires on a stage CHANGE, so a first row away from
+// the case's creation is somebody moving it from a stage we never saw.
+ok("three rows across two records = THREE moves", k.moves === 3, k.moves);
+ok("🔴 ROUND 171 — two of them have an unknown starting stage",
+  k.unknownOrigin === 2, k.unknownOrigin);
+ok("🔴 …and none of them is a creation row (nothing is near January)",
+  k.creationRows === 0, k.creationRows);
+ok("perRep credits all three to the one rep", k.perRep[0]?.moves === 3, k.perRep);
 ok("both records counted as having history", k.recordsWithHistory === 2, k.recordsWithHistory);
 
-// The positive control for firstSightings: it must MOVE when a real move is
-// added, or "not counted" could mean "nothing is ever counted".
+// The positive control: `unknownOrigin` must stay a SUBSET of `moves` rather
+// than a parallel total, or "counted" could quietly mean "counted twice".
 const k2 = stageKpi([one, rec("r2", "C", [
   "2026-09-11T09:00:00.000Z|A|u_ern|u_carla",
   "2026-09-13T09:00:00.000Z|C|u_ern|u_carla",
 ])], FID);
-ok("🔴 CONTROL — giving the second record a real move raises moves to 2",
-  k2.moves === 2 && k2.firstSightings === 2, { m: k2.moves, f: k2.firstSightings });
+ok("🔴 CONTROL — a second transition raises moves to 4, unknownOrigin stays 2",
+  k2.moves === 4 && k2.unknownOrigin === 2, { m: k2.moves, f: k2.unknownOrigin });
+ok("🔴 CONTROL — unknownOrigin never exceeds moves",
+  k2.unknownOrigin < k2.moves, { u: k2.unknownOrigin, m: k2.moves });
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 2 · 🔴 A MOVE WITH NO OWNER BELONGS TO NOBODY ═══");
@@ -59,12 +75,12 @@ console.log("\n═══ 2 · 🔴 A MOVE WITH NO OWNER BELONGS TO NOBODY ══
 const orphan = rec("r3", "B", ["2026-09-10T09:00:00.000Z|A||",
                                "2026-09-12T09:00:00.000Z|B||"]);
 k = stageKpi([one, orphan], FID);
-ok("the ownerless move is counted in the total", k.moves === 2, k.moves);
+ok("the ownerless moves are counted in the total", k.moves === 4, k.moves);
 ok("🔴 …and credited to NO rep", k.perRep.length === 1, k.perRep);
-ok("the shortfall is stated", k.unattributed === 1, k.unattributed);
+ok("the shortfall is stated", k.unattributed === 2, k.unattributed);
 ok("perRep + unattributed === moves",
   k.perRep.reduce((a, r) => a + r.moves, 0) + k.unattributed === k.moves, k);
-ok("the same for managers", k.unmanaged === 1 && k.perManager.length === 1, {
+ok("the same for managers", k.unmanaged === 2 && k.perManager.length === 1, {
   u: k.unmanaged, m: k.perManager,
 });
 
@@ -77,7 +93,7 @@ const watched = rec("r4", "B", [
 ]);
 k = stageKpi([watched], FID);
 const mgrTotal = k.perManager.reduce((a, r) => a + r.moves, 0);
-ok("one move, two managers, each credited once", mgrTotal === 2 && k.moves === 1,
+ok("two moves, two managers, each credited on both", mgrTotal === 4 && k.moves === 2,
   { mgrTotal, moves: k.moves });
 ok("🔴 the manager column EXCEEDS the move count", mgrTotal > k.moves, { mgrTotal, moves: k.moves });
 ok("the rep column does not", k.perRep.reduce((a, r) => a + r.moves, 0) === k.moves, k.perRep);
@@ -95,12 +111,13 @@ const straddle = rec("r5", "B", [
 ]);
 const sept = { from: "2026-09-01T00:00:00.000Z", to: "2026-10-01T00:00:00.000Z" };
 k = stageKpi([straddle], FID, { window: sept });
-ok("🔴 the in-window row stays a MOVE, not a first sighting",
-  k.moves === 1 && k.firstSightings === 0, { m: k.moves, f: k.firstSightings });
+ok("🔴 the in-window row stays a DERIVED transition, not an unknown origin",
+  k.moves === 1 && k.unknownOrigin === 0, { m: k.moves, f: k.unknownOrigin });
 // CONTROL — the August row really is outside, or the window does nothing.
 const kAll = stageKpi([straddle], FID);
-ok("🔴 CONTROL — without the window the August first-sighting reappears",
-  kAll.firstSightings === 1 && k.firstSightings === 0, { win: k.firstSightings, all: kAll.firstSightings });
+ok("🔴 CONTROL — without the window the August row reappears, origin unknown",
+  kAll.moves === 2 && kAll.unknownOrigin === 1 && k.unknownOrigin === 0,
+  { win: k.unknownOrigin, all: kAll.unknownOrigin, m: kAll.moves });
 ok("`since` ignores the window and reaches August",
   k.since === "2026-08-20T09:00:00.000Z", k.since);
 
@@ -150,7 +167,7 @@ const dirty = rec("r8", "B", [
   "2026-09-12T09:00:00.000Z|B|u_ern|u_carla",
 ]);
 k = stageKpi([dirty], FID);
-ok("the malformed line does not throw", k.moves === 1, k.moves);
+ok("the malformed line does not throw", k.moves === 2, k.moves);
 ok("🔴 …and is reported rather than vanishing", k.skipped === 1, k.skipped);
 ok("a clean log reports zero skipped", stageKpi([one], FID).skipped === 0);
 ok("countStageHistoryLines ignores blanks", countStageHistoryLines("a\n\n  \nb") === 2);
@@ -158,21 +175,26 @@ ok("countStageHistoryLines ignores blanks", countStageHistoryLines("a\n\n  \nb")
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n═══ 7 · THE CLUSTER IS SURFACED, NOT FILTERED ═══");
 // ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ ROUND 171 — THE FIRST ROWS ARE STAGGERED NOW, AND THEY HAVE TO BE. They
+// all shared one minute, which was harmless while a first row was not a move
+// and is a SECOND cluster now that it is. Six records entering one stage in
+// one minute genuinely is a cluster — but then this section would be testing
+// two of them at once and its control could not fail.
 const bulk = [];
 for (let i = 0; i < 6; i++)
   bulk.push(rec(`b${i}`, "Z", [
-    "2026-09-01T09:00:00.000Z|Y|u_ern|u_carla",
+    `2026-09-0${i + 1}T09:00:00.000Z|Y|u_ern|u_carla`,
     `2026-09-20T11:30:0${i}.000Z|Z|u_ern|u_carla`,
   ]));
 k = stageKpi(bulk, FID, { clusterMin: 5 });
-ok("🔴 every clustered move is still COUNTED", k.moves === 6, k.moves);
+ok("🔴 every clustered move is still COUNTED", k.moves === 12, k.moves);
 ok("…and the cluster is reported separately",
   k.clusters.length === 1 && k.clusters[0].records === 6, k.clusters);
 ok("the cluster names its stage and minute",
   k.clusters[0].to === "Z" && k.clusters[0].at === "2026-09-20T11:30", k.clusters[0]);
-ok("🔴 CONTROL — six records spread across six minutes are NOT a cluster",
+ok("🔴 CONTROL — six records spread across six hours are NOT a cluster",
   stageKpi(bulk.map((r, i) => rec(r.id, "Z", [
-    "2026-09-01T09:00:00.000Z|Y|u_ern|u_carla",
+    `2026-09-0${i + 1}T09:00:00.000Z|Y|u_ern|u_carla`,
     `2026-09-20T1${i}:30:00.000Z|Z|u_ern|u_carla`,
   ])), FID, { clusterMin: 5 }).clusters.length === 0);
 

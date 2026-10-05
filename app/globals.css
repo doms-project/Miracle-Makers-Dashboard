@@ -2054,6 +2054,15 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .cmcount.on{background:var(--plum-deep);border-color:var(--plum-deep);color:#fff;}
 .cmdot{color:var(--ink-3);}
 .cmintro{margin-bottom:12px;}
+/* 🔴 ROUND 171 · ITEM 5 — COLUMN HEADINGS AND A PER-ROW PREVIEW.
+   Round 162's rule: distinct class names per section. These are `cmcol*` and
+   `cmpreview`, used nowhere else, so restyling the case-manager list cannot
+   reach the pipeline grid or the referral-access list beneath it. */
+.cmcolhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px;padding:0 12px 5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
+.cmcolwho{flex:0 0 190px;}
+.cmcolwhat{flex:1 1 240px;}
+.cmpreview{flex:1 1 100%;margin-top:2px;font-size:11.5px;color:var(--muted);}
+.cmpreviewmore{opacity:.75;}
 .cmlist{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
 .cmrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;}
 .cmwho{flex:0 0 190px;font-size:12.5px;font-weight:700;color:var(--ink);overflow-wrap:anywhere;}
@@ -2214,3 +2223,21 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    says what the field IS, this one warns about a normalisation. Swept: no
    `.renamehint` existed. */
 .renamehint{display:block;margin-top:4px;color:var(--ink-3)}
+
+/* ═══ ROUND 171 · ITEM 4 — "new person" vs "someone already here" ═════════
+   🔴 OWN PREFIX, round 162's rule. `pm*` (person met) appears nowhere else,
+   so restyling this dialog cannot reach the partner forms beside it. */
+.pmmodes{display:flex;gap:6px;margin:0 0 12px;}
+.pmmode{flex:1 1 auto;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;}
+.pmmode.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+.pmhits{display:flex;flex-direction:column;gap:4px;max-height:210px;overflow:auto;margin-bottom:10px;border:1px solid var(--line);border-radius:8px;padding:4px;}
+.pmhit{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 9px;border:0;border-radius:6px;background:transparent;text-align:left;cursor:pointer;}
+.pmhit:hover{background:var(--wash,#f4f5f7);}
+.pmhitname{font-size:12.5px;font-weight:700;color:var(--ink);}
+.pmmeta{font-size:11.5px;color:var(--muted);}
+.pmpicked{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 10px;margin-bottom:10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+.pmpicked>b{font-size:12.5px;}
+/* 🔴 A REFUSAL, NOT A FAULT — round 119 item 3. It reads as a question with
+   two answers, which is what it is, rather than as an error. */
+.pmconflict{margin:10px 0 0;padding:10px 12px;border:1px solid var(--warn-line,#e3c08a);border-radius:9px;background:var(--warn-bg,#fdf7ec);font-size:12.5px;color:var(--ink);}
+.pmconflictacts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:9px;}

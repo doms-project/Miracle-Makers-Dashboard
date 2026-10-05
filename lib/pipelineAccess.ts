@@ -437,3 +437,11 @@ export function buildIdMap(stored: Record<string, string[]> | undefined): Access
     map.set(k, new Set(ids.filter(Boolean)));
   return map;
 }
+
+// 🔴 ROUND 171 · ITEM 5 — THE WORDING LIVES IN lib/caseManagerLabels.ts, AND
+// IT HAD TO MOVE. It was written here, beside the map it describes, and
+// `next build` failed: this module owns the AsyncLocalStorage stores, so a
+// component importing it drags `node:async_hooks` into the browser bundle —
+// the exact failure round 165 hit with lib/stageKpi.ts, fixed the exact same
+// way. Re-exported so a server caller still finds it where it belongs.
+export { caseManagerColumns, caseManagerPreview } from "@/lib/caseManagerLabels";

@@ -7,12 +7,15 @@ import {
   getPipelineConfig,
   listContactOpportunities,
   getEditableFieldDefs,
+  getContactCustomFields,
+  updateContactCustomFields,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
 import { recruitingGroup } from "@/lib/pipelineConfig";
+import { checkExistingPerson } from "@/lib/existingPerson";
 import { emit } from "@/lib/webhooks";
 import type { ApiError } from "@/lib/types";
 import {
@@ -52,6 +55,12 @@ interface Body {
   workState?: string;
   /** Only honoured when the division maps to more than one pipeline. */
   pipelineId?: string;
+  /**
+   * 🔴 ROUND 171 · ITEM 4 — set when the recruiter picked somebody who already
+   * exists. Their name, phone, email and Record Type are then left alone; only
+   * the application is written.
+   */
+  contactId?: string;
 }
 
 /** A field def by NAME, normalised — ids differ per account, names do not. */
@@ -115,20 +124,63 @@ async function postHandler(request: Request) {
       const match = opts.length ? opts.find((o) => norm(o) === norm(value)) : value;
       if (match) contactFields.push({ id: def.id, value: match });
     };
-    push("Record Type", "Caregiver");
     push("CG - Division", division);
     if (body.workState && CG_WORK_STATES.includes(body.workState.trim().toUpperCase()))
       push("CG - Work State", body.workState.trim().toUpperCase());
 
-    const contact = await upsertContact({
-      firstName,
-      lastName,
-      name: `${firstName} ${lastName}`.trim(),
-      ...(email ? { email } : {}),
-      ...(phone ? { phone } : {}),
-      source: (body.source || "").trim() || undefined,
-      ...(contactFields.length ? { customFields: contactFields } : {}),
-    });
+    // ═══ 🔴 ROUND 171 · ITEM 4 — AN APPLICATION IS NOT A RENAME ════════════
+    //
+    // `upsertContact` matched on phone or email and sent the typed name, so an
+    // applicant who shares a household number with an existing client renamed
+    // that client. Two modes now, as on every other create path: a picked
+    // contact gets the application and nothing else; an unpicked one whose key
+    // already belongs to somebody is refused before any write.
+    const rtDef = defByName(defs, "Record Type");
+    const cgExistingId = (body.contactId || "").trim();
+    if (!cgExistingId) {
+      const clash = await checkExistingPerson({
+        phone,
+        email,
+        recordTypeFieldId: rtDef?.id,
+      });
+      if (clash) return NextResponse.json(clash, { status: 409 });
+    }
+
+    let contact: { id: string };
+    if (cgExistingId) {
+      // 🔴 RECORD TYPE "Caregiver" ONLY WHERE THERE IS NONE — the owner's one
+      // explicit carve-out, and it is safe for the same reason item 3 is not:
+      // writing it over an existing value would take that person out of
+      // whichever list their real one feeds.
+      let theirs = "";
+      try {
+        const cur = await getContactCustomFields(cgExistingId);
+        if (rtDef) {
+          const v = cur.values[rtDef.id];
+          theirs = (Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "")).trim();
+        }
+      } catch {
+        // ⚠️ UNREADABLE MEANS DO NOT TOUCH IT. A failed read is not evidence
+        // of a blank, and the whole item is about not overwriting a value we
+        // did not look at.
+        theirs = "(unreadable)";
+      }
+      if (!theirs) push("Record Type", "Caregiver");
+      if (contactFields.length)
+        await updateContactCustomFields(cgExistingId, contactFields);
+      contact = { id: cgExistingId };
+    } else {
+      push("Record Type", "Caregiver");
+      contact = await upsertContact({
+        firstName,
+        lastName,
+        name: `${firstName} ${lastName}`.trim(),
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+        source: (body.source || "").trim() || undefined,
+        ...(contactFields.length ? { customFields: contactFields } : {}),
+      });
+    }
     if (!contact.id)
       return NextResponse.json(
         {

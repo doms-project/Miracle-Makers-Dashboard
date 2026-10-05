@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 import { divisionLabel } from "@/lib/division";
+import { caseManagerColumns, caseManagerPreview } from "@/lib/caseManagerLabels";
 
 type User = { id: string; name: string; email: string; role: string };
 type Pipeline = {
@@ -631,6 +632,18 @@ export default function PipelineAccessTab({
         pipeline, with no grant needed. Applied whenever an owner is set.
       </div>
 
+      {/* ═══ 🔴 ROUND 171 · ITEM 5 — THIS LIST READS BACKWARDS, AND IT WAS SET
+          UP THE WRONG WAY ROUND ONCE ON THE LIVE ACCOUNT.
+          A row was a name and a row of names with nothing saying which way the
+          arrow pointed, and the two views SWAP the meaning of both columns.
+          Getting it backwards is not a typo — it silently gives the wrong
+          people access to the wrong cases, which is the one mistake this whole
+          tab exists to make visible. */}
+      <div className="cmcolhead">
+        <span className="cmcolwho">{caseManagerColumns(cmView).who}</span>
+        <span className="cmcolwhat">{caseManagerColumns(cmView).what}</span>
+      </div>
+
       <div className="cmlist">
         {(() => {
           const real = cmView === "manager" ? Object.keys(cmByManager) : Object.keys(caseManagers);
@@ -640,6 +653,18 @@ export default function PipelineAccessTab({
           return cmPending && !real.includes(cmPending) ? [...real, cmPending] : real;
         })().sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map((rowId) => {
           const chips = cmView === "manager" ? cmByManager[rowId] : caseManagers[rowId];
+          // 🔴 ONE SENTENCE PER ROW, IN THE ORDER THE RULE ACTUALLY RUNS:
+          // an owner is set, and a manager is added. A reader who has the two
+          // columns the wrong way round reads this and sees it immediately,
+          // which a heading alone does not give them.
+          const sorted = [...(chips || [])].sort((a, b) =>
+            nameOf(a).localeCompare(nameOf(b)),
+          );
+          const repName = cmView === "manager" ? sorted[0] : rowId;
+          const mgrName = cmView === "manager" ? rowId : sorted[0];
+          const preview = sorted.length
+            ? caseManagerPreview(nameOf(repName), nameOf(mgrName))
+            : "";
           return (
             <div className="cmrow" key={rowId}>
               <span className="cmwho">{nameOf(rowId)}</span>
@@ -675,6 +700,22 @@ export default function PipelineAccessTab({
                   {cmView === "manager" ? "+ rep" : "+ manager"}
                 </button>
               </span>
+              {preview ? (
+                <span className="cmpreview">
+                  {preview}
+                  {sorted.length > 1 ? (
+                    <span className="cmpreviewmore">
+                      {" "}
+                      {/* ⚠️ NO ROLE NOUN HERE EITHER — round 137. "+1 more
+                          rep" calls somebody a rep on the strength of where
+                          they sit in a map, which is the thing that rule
+                          forbids. The sentence above already says what they
+                          do. */}
+                      (and {sorted.length - 1} more)
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
               {cmAdding === rowId ? (
                 <CasePicker
                   users={users}

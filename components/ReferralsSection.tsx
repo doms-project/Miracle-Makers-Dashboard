@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import ConfirmDialog from "./ConfirmDialog";
-import { apiFetch } from "@/lib/apiFetch";
+import { apiFetch, ApiError } from "@/lib/apiFetch";
 import {
   CADENCE,
   DUE_SOON_DAYS,
@@ -5087,6 +5087,106 @@ function LogReferralDialog({
 // ⚠️ BULK IMPORT IS THE REAL ANSWER for an expo where 34 people were met. This
 // form is for the one you remember afterwards, and it says so.
 // ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 171 · ITEM 4 — THE SHARED PIECES OF "this person already exists".
+//
+// 🔴 ONE RENDERING OF THE SERVER'S SENTENCE, NOT ONE PER DIALOG. The wording
+// is the owner's and it is composed server-side (lib/peopleSearch.ts) so that
+// every path says the same thing; re-wording it here per dialog is how five
+// forms end up with five answers to one question.
+// ═══════════════════════════════════════════════════════════════════════════
+export interface PersonHit {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  recordType: string;
+  /** 🔴 FALSE MEANS "NOT SHOWN", NOT "NONE". See ContactHit.fieldsKnown. */
+  roleKnown: boolean;
+  caseLabel: string;
+}
+
+interface ConflictInfo {
+  sentence: string;
+  detail: string;
+  person: PersonHit;
+}
+
+/** What to print under a name: their role and their case, or why we can't. */
+function describePerson(h: PersonHit): string {
+  const role = h.roleKnown ? h.recordType || "no role" : "role not shown";
+  return [role, h.caseLabel].filter(Boolean).join(" · ");
+}
+
+/**
+ * Pull the 409 the server sends when a "new" person already exists.
+ *
+ * ⚠️ READ OFF THE BODY, NOT OFF THE MESSAGE. ApiError joins error and detail
+ * into one string for display; the structured `existing` object is what the
+ * "Record them" button needs, and parsing it back out of prose would be a
+ * second encoding of the same fact.
+ */
+function conflictOf(e: unknown): ConflictInfo | null {
+  if (!(e instanceof ApiError) || e.status !== 409 || !e.body) return null;
+  try {
+    const j = JSON.parse(e.body) as {
+      error?: string;
+      detail?: string;
+      existing?: {
+        id?: string;
+        name?: string;
+        recordType?: string;
+        caseLabel?: string;
+      };
+    };
+    if (!j.existing?.id) return null;
+    return {
+      sentence: j.error || "",
+      detail: j.detail || "",
+      person: {
+        id: j.existing.id,
+        name: j.existing.name || "",
+        email: "",
+        phone: "",
+        recordType: j.existing.recordType || "",
+        // The server READ their Record Type on this path, so an empty string
+        // here is a measured absence rather than an unseen one.
+        roleKnown: true,
+        caseLabel: j.existing.caseLabel || "",
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function ConflictNotice({
+  info,
+  onUse,
+}: {
+  info: ConflictInfo;
+  onUse: (id: string, person: PersonHit) => void;
+}) {
+  return (
+    <div className="pmconflict">
+      <b>{info.sentence}</b>
+      {info.detail ? <div className="pmmeta">{info.detail}</div> : null}
+      <div className="pmconflictacts">
+        <button
+          type="button"
+          className="cgsave"
+          onClick={() => onUse(info.person.id, info.person)}
+        >
+          Record {info.person.name || "them"}
+        </button>
+        <span className="pmmeta">
+          …or change the number above and add a different person.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function AddAttendeeDialog({
   ssoBlob,
   event,
@@ -5112,13 +5212,58 @@ function AddAttendeeDialog({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState("");
+  // ═══ 🔴 ROUND 171 · ITEM 4 — TWO MODES, LIKE "Log a referral" ════════════
+  //
+  // A "new person" form that silently merged onto whoever shared the phone
+  // number is how an existing caregiver got renamed and relabelled by a
+  // dialog that only ever said "Add person". The modes make the choice
+  // explicit, and the conflict below makes it explicit even when the user
+  // did not know there was one.
+  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [pq, setPq] = useState("");
+  const [people, setPeople] = useState<PersonHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<PersonHit | null>(null);
+  /** The server's "this number belongs to…" answer. Nothing was written. */
+  const [conflict, setConflict] = useState<ConflictInfo | null>(null);
 
-  const canSave = !!(firstName.trim() || phone.trim()) && !busy;
+  useEffect(() => {
+    if (mode !== "existing") return;
+    const q = pq.trim();
+    if (q.length < 2) {
+      setPeople([]);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const j = await apiFetch<{ people?: PersonHit[] }>(
+          `/api/referrals?only=people&q=${encodeURIComponent(q)}`,
+          { ssoBlob },
+        );
+        if (live) setPeople(j.people || []);
+      } catch {
+        /* a transient search failure must not take the dialog down */
+      } finally {
+        if (live) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [pq, mode, ssoBlob]);
 
-  const save = async () => {
+  const canSave =
+    (mode === "existing" ? !!picked : !!(firstName.trim() || phone.trim())) && !busy;
+
+  const save = async (useId?: string) => {
     setBusy(true);
     setErr(null);
+    setConflict(null);
     setDone("");
+    const existingId = useId ?? (mode === "existing" ? picked?.id : "");
     try {
       const j = await apiFetch<{ skipped?: string[]; noteSaved: boolean }>("/api/referrals", {
         method: "POST",
@@ -5126,9 +5271,16 @@ function AddAttendeeDialog({
           ssoKey: ssoBlob ?? undefined,
           action: "add-attendee",
           eventId: event.id,
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          phone: phone.trim(),
+          // 🔴 ON THE EXISTING PATH NO NAME, PHONE OR EMAIL IS SENT AT ALL.
+          // Not "sent and ignored by the server" — not sent. A field that
+          // travels is a field some future handler can decide to use.
+          ...(existingId
+            ? { contactId: existingId }
+            : {
+                firstName: firstName.trim(),
+                lastName: lastName.trim(),
+                phone: phone.trim(),
+              }),
           profile: profile.trim(),
           outcome,
           text: text.trim(),
@@ -5142,7 +5294,9 @@ function AddAttendeeDialog({
       onAdded();
       setTimeout(onClose, j.skipped?.length ? 3200 : 1200);
     } catch (e) {
-      setErr(e);
+      const c = conflictOf(e);
+      if (c) setConflict(c);
+      else setErr(e);
     } finally {
       setBusy(false);
     }
@@ -5164,27 +5318,112 @@ function AddAttendeeDialog({
             remember afterwards.
           </div>
 
-          {/* 🔴 THE IDENTITY REQUIREMENT, AND WHY IT IS NOT OPTIONAL. */}
-          <div className="irow">
-            <label htmlFor="ra-first">First name</label>
-            <input id="ra-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
-            <label htmlFor="ra-last">Last name</label>
-            <input id="ra-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+          {/* ═══ 🔴 ROUND 171 · ITEM 4 — WHICH PERSON IS THIS? ═══════════════
+              Somebody met at an expo is very often already on the account: a
+              caregiver who came to recruit, a partner's staffer, a family
+              member of a current client. Recording them as "new" is what
+              renamed and relabelled them. */}
+          <div className="pmmodes" role="group" aria-label="Who are you adding?">
+            <button
+              type="button"
+              className={`pmmode${mode === "new" ? " on" : ""}`}
+              aria-pressed={mode === "new"}
+              onClick={() => { setMode("new"); setConflict(null); }}
+            >
+              New person
+            </button>
+            <button
+              type="button"
+              className={`pmmode${mode === "existing" ? " on" : ""}`}
+              aria-pressed={mode === "existing"}
+              onClick={() => { setMode("existing"); setConflict(null); }}
+            >
+              Someone already in GoHighLevel
+            </button>
           </div>
-          <div className="irow">
-            <label htmlFor="ra-phone">Phone</label>
-            <input
-              id="ra-phone"
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-          </div>
-          <div className="rfdhint">
-            A first name <b>or</b> a phone number is required. Without one there
-            is no way to recognise this person the next time they are met, and
-            they would be added a second time instead.
-          </div>
+
+          {mode === "existing" ? (
+            <>
+              <div className="irow">
+                <label htmlFor="ra-find">Find them</label>
+                <input
+                  id="ra-find"
+                  value={pq}
+                  onChange={(e) => { setPq(e.target.value); setPicked(null); }}
+                  placeholder="Name, phone or email…"
+                />
+              </div>
+              {picked ? (
+                <div className="pmpicked">
+                  <b>{picked.name}</b>
+                  <span className="pmmeta">{describePerson(picked)}</span>
+                  <button type="button" className="ighost" onClick={() => setPicked(null)}>
+                    Change
+                  </button>
+                </div>
+              ) : searching ? (
+                <div className="rfdhint">Searching…</div>
+              ) : pq.trim().length >= 2 && !people.length ? (
+                <div className="rfdhint">
+                  Nobody matches. GoHighLevel&rsquo;s search takes about a
+                  minute to show a contact created moments ago, so a brand-new
+                  one may not be findable yet.
+                </div>
+              ) : people.length ? (
+                <div className="pmhits">
+                  {people.map((h) => (
+                    <button
+                      key={h.id}
+                      type="button"
+                      className="pmhit"
+                      onClick={() => setPicked(h)}
+                    >
+                      <span className="pmhitname">{h.name}</span>
+                      <span className="pmmeta">{describePerson(h)}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="rfdhint">
+                Their name, phone, email and <b>Record Type</b> are left exactly
+                as they are. Only the event, who they were and the outcome are
+                written.
+              </div>
+            </>
+          ) : (
+            <>
+              {/* 🔴 THE IDENTITY REQUIREMENT, AND WHY IT IS NOT OPTIONAL. */}
+              <div className="irow">
+                <label htmlFor="ra-first">First name</label>
+                <input id="ra-first" value={firstName} onChange={(e) => setFirst(e.target.value)} />
+                <label htmlFor="ra-last">Last name</label>
+                <input id="ra-last" value={lastName} onChange={(e) => setLast(e.target.value)} />
+              </div>
+              <div className="irow">
+                <label htmlFor="ra-phone">Phone</label>
+                <input
+                  id="ra-phone"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+              </div>
+              <div className="rfdhint">
+                A first name <b>or</b> a phone number is required. Without one there
+                is no way to recognise this person the next time they are met, and
+                they would be added a second time instead.
+              </div>
+              {/* 🔴 GoHighLevel KEEPS ONLY THE FIRST WORD AS THE FIRST NAME —
+                  round 170, measured. Said before the save, not after. */}
+              <div className="rfdhint">
+                GoHighLevel keeps only the first word as the first name, so
+                &ldquo;Mary Ann&rdquo; is stored as &ldquo;Mary&rdquo; with
+                &ldquo;Ann&rdquo; moved to the last name.
+              </div>
+            </>
+          )}
+
+          {conflict ? <ConflictNotice info={conflict} onUse={(id, p) => { setMode("existing"); setPicked(p); setConflict(null); void save(id); }} /> : null}
 
           <div className="irow">
             <label htmlFor="ra-prof">Who they were</label>
@@ -5243,7 +5482,7 @@ function AddAttendeeDialog({
             onClick={() => void save()}
             disabled={!canSave}
           >
-            {busy ? "Saving…" : "Add person"}
+            {busy ? "Saving…" : mode === "existing" ? "Record them" : "Add person"}
           </button>
         </div>
       </div>

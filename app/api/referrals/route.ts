@@ -16,12 +16,16 @@ import {
   addContactNote,
   getContactCustomFields,
   ghlSearchContacts,
+  ghlSearchContactsWhereSet,
+  ghlSearchContactsAnyOf,
+  getClientCaseRows,
   searchContacts,
   updateContactCustomFields,
   setContactOwner,
   getUserMap,
   explainGhlError,
   GhlError,
+  type ContactByField,
 } from "@/lib/ghl";
 import { mapLimit } from "@/lib/concurrency";
 import { divisionLabel } from "@/lib/division";
@@ -32,6 +36,8 @@ import {
   referralScopeKind,
 } from "@/lib/pipelineAccess";
 import { isAdminSession } from "@/lib/visibility";
+import { checkExistingPerson } from "@/lib/existingPerson";
+import { indexCaseHolders } from "@/lib/peopleSearch";
 import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { withGrants } from "@/lib/withGrants";
@@ -318,6 +324,67 @@ async function contactOpps(
  * any contact id handed to it is a way to read notes off contacts this view has
  * nothing to do with.
  */
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 171 · ITEM 2 — EVERYONE WHOSE `Event Attended` IS SET.
+//
+// 🔴 CAN GOHIGHLEVEL FILTER ON A FIELD BEING SET? UNPROVEN, AND THIS DOES NOT
+// GUESS. `eq` is the only operator this codebase has ever sent, and asserting
+// that `exists` works because the documentation implies it would be rule 7 for
+// the fourth time (GHL_SSO_KEY · MM_WEBHOOK_SECRET · CAREGIVER_ASSOCIATION_ID).
+// So the first call IS the probe, and its verdict is read from the rows that
+// come back rather than from the status code.
+//
+// ⚠️ THE FALLBACK IS THE CHEAPEST RELIABLE THING, AND "cheapest" IS MEASURED
+// AGAINST THE RIGHT AXIS. A sweep of every contact would answer it in pages of
+// 100 — and grow with the address book, which is exactly what the owner ruled
+// out. Asking `eq` once per EVENT grows with events: twelve events cost twelve
+// searches on an account of 300 contacts or 30,000.
+//
+// 🔴 AND IT IS RUN EVEN WHEN `exists` RETURNS NOTHING. An operator GoHighLevel
+// does not understand can return zero rows just as easily as all of them, and
+// from here those two are the same shape. "No attendees" is not a conclusion
+// worth drawing from an unproven filter, so `via: "empty"` falls through.
+// ═══════════════════════════════════════════════════════════════════════════
+async function attendeesByEventField(
+  fieldId: string,
+  eventIds: string[],
+): Promise<{
+  rows: ContactByField[];
+  /** "exists" · "per-event" · "none" — carried to the screen. */
+  via: "exists" | "per-event" | "none";
+  asked: number;
+}> {
+  if (!fieldId) return { rows: [], via: "none", asked: 0 };
+  let set: Awaited<ReturnType<typeof ghlSearchContactsWhereSet>>;
+  try {
+    set = await ghlSearchContactsWhereSet(fieldId);
+  } catch {
+    // ⚠️ A WOBBLE IS NOT A VERDICT. Fall through to the fan-out rather than
+    // remembering "unsupported" for the life of this instance.
+    set = { rows: [], via: "unsupported", truncated: false };
+  }
+  if (set.via === "exists" && set.rows.length)
+    return { rows: set.rows, via: "exists", asked: 1 };
+
+  if (!eventIds.length) return { rows: [], via: "none", asked: 0 };
+  try {
+    const fan = await ghlSearchContactsAnyOf(fieldId, eventIds);
+    return { rows: fan.rows, via: "per-event", asked: fan.asked };
+  } catch {
+    // The Record Type half of the union still stands; People met is the list
+    // it always was rather than an error on an otherwise working page.
+    return { rows: [], via: "none", asked: 0 };
+  }
+}
+
+/** The 409 body, as a response. The decision itself lives in lib/existingPerson.ts. */
+async function refuseExisting(
+  args: Parameters<typeof checkExistingPerson>[0],
+): Promise<NextResponse | null> {
+  const r = await checkExistingPerson(args);
+  return r ? NextResponse.json(r, { status: 409 }) : null;
+}
+
 async function measureTouches(
   asked: string[],
   F: { recordType: string },
@@ -494,6 +561,65 @@ export async function GET(request: Request) {
       // below and is reached by POST, so the contact id never enters a URL.
       // Removed rather than deprecated: leaving it would mean an id can still
       // reach a log by whichever caller forgot to change.
+
+      // ═══ 🔴 ROUND 171 · ITEM 4 — "Someone already in GoHighLevel" ════════
+      //
+      // The second mode of every create dialog needs three things per hit: a
+      // name, what they are, and whether they already have a case. All three
+      // come out of ONE search plus a board this process already holds.
+      //
+      // 🔴 NO PER-CONTACT READ, PER KEYSTROKE OR OTHERWISE. Ten hits hydrated
+      // individually would be ten requests against a 100-per-10-second budget,
+      // for a typeahead. The Record Type comes from the custom fields the
+      // search itself carried — and when it carried none, the screen says
+      // "not shown" rather than inventing "none".
+      //
+      // ⚠️ THE CASE COMES FROM THE CACHED CLIENT BOARD (60s), not from an
+      // opportunity search per hit. Same reasoning as the "attribute an
+      // existing lead" mode two blocks up: filter work already done.
+      if (only === "people") {
+        const q = (url.searchParams.get("q") || "").trim();
+        if (q.length < 2) return NextResponse.json({ people: [] });
+        const rtPeople = idOf(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id);
+        const [hits, caseRows] = await Promise.all([
+          searchContacts(q),
+          getClientCaseRows().catch(() => []),
+        ]);
+        const holders = new Map(
+          indexCaseHolders(
+            caseRows.map((r) => ({
+              contactId: r.contactId,
+              contactName: r.contactName,
+              first: r.first,
+              last: r.last,
+              pipelineName: r.pipelineName,
+              stage: r.stage,
+              status: r.status,
+              createdAt: r.createdAt,
+            })),
+          ).map((h) => [h.contactId, h]),
+        );
+        return NextResponse.json(
+          {
+            people: hits.map((h) => {
+              const holding = holders.get(h.id);
+              return {
+                id: h.id,
+                name: h.name,
+                email: h.email,
+                phone: h.phone,
+                recordType: h.fields[rtPeople] || "",
+                // 🔴 FALSE MEANS "WE DID NOT SEE", NOT "THEY HAVE NONE".
+                roleKnown: h.fieldsKnown,
+                caseLabel: holding
+                  ? `${holding.pipelineName}${holding.stage ? ` · ${holding.stage}` : ""}`
+                  : "",
+              };
+            }),
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
 
       // ── just the partners, for the "Referred by" picker on a client record ─
       // ⚠️ ONE search call and nothing else: no notes, no opportunity sweep.
@@ -945,7 +1071,45 @@ export async function GET(request: Request) {
       // "unplaced", which is unchanged.
       const visibleEventIds = new Set(events.map((e) => e.id));
       const allEventIds = new Set(allEvents.map((e) => e.id));
-      const allAttendees: RawAttendee[] = attendeeRes.rows.map((c) => ({
+
+      // ═══ 🔴 ROUND 171 · ITEM 2 — FOUND BY THE EVENT, NOT BY THE LABEL ═════
+      //
+      // People met were listed by Record Type = "Event Attendee" and nothing
+      // else, so the moment somebody met at an expo BECAME a caregiver or a
+      // client — or already was one when they were met — they fell out of the
+      // event's People met list AND out of its numbers. The event looked
+      // emptier the better it had worked.
+      //
+      // ✅ THE JOIN ALREADY EXISTS AND IT IS THE RIGHT ONE. `Event Attended`
+      // holds the event opportunity's id, it is written by the only path that
+      // records an attendee, and it is a FACT about being met rather than a
+      // label somebody might change afterwards.
+      //
+      // 🔴 A UNION, NOT A REPLACEMENT, AND BOTH HALVES EARN THEIR PLACE:
+      //
+      //   Record Type   catches an attendee whose Event Attended is BLANK.
+      //                 They are counted as "unplaced" today and deleting
+      //                 them from the list would be a silent loss.
+      //   Event Attended catches everyone the Record Type search now misses —
+      //                 which is the whole of this item.
+      //
+      // ⚠️ AND THE COST DOES NOT GROW WITH THE NUMBER OF CONTACTS, which is
+      // the owner's constraint on this round. Either one more search in total,
+      // or one per EVENT when GoHighLevel will not answer "is this field set"
+      // — see attendeesByEvent below. No per-contact read is added anywhere.
+      const extra = await attendeesByEventField(
+        attendeeEventField,
+        allEvents.map((e) => e.id),
+      );
+      const attendeeRowsById = new Map<string, (typeof attendeeRes.rows)[number]>();
+      for (const r of attendeeRes.rows) attendeeRowsById.set(r.id, r);
+      // ⚠️ THE EVENT-FIELD ROW WINS ON A COLLISION. Both carry the same
+      // contact; the one found by the join is the one proven to carry the
+      // field this list is about.
+      for (const r of extra.rows) attendeeRowsById.set(r.id, r);
+      const attendeeRows = [...attendeeRowsById.values()];
+
+      const allAttendees: RawAttendee[] = attendeeRows.map((c) => ({
         id: c.id,
         name: c.name,
         eventId: attendeeEventField ? c.fields[attendeeEventField] || "" : "",
@@ -977,6 +1141,14 @@ export async function GET(request: Request) {
       );
       /** Withheld from THIS viewer. A count, never the names. */
       const attendeesWithheld = allAttendees.length - attendees.length;
+      /**
+       * 🔴 HOW THE PEOPLE-MET LIST WAS BUILT, CARRIED TO THE SCREEN. "exists"
+       * means one search answered it; "per-event" means GoHighLevel would not,
+       * and anyone pointing at an event this payload does not include can only
+       * be found by their Record Type. That is a real limit on the list and the
+       * screen must be able to say so rather than quietly showing fewer people.
+       */
+      const attendeeSource = extra.via;
 
       // ═══ ROUND 167 — DANGLING ATTENDEES MOVE SERVER-SIDE ══════════════════
       //
@@ -1038,6 +1210,8 @@ export async function GET(request: Request) {
           applicantRefs,
           events,
           attendees,
+          /** ROUND 171 — how People met was found. See attendeeSource. */
+          attendeeSource,
           // ── everything the WRITE forms need, resolved once, server-side ────
           // ⚠️ The dialogs used to carry their own copies of these lists. A
           // dropdown offering a value the account has no option for produces a
@@ -1630,13 +1804,36 @@ export async function POST(request: Request) {
         // four call sites does not "finish the job" and answer the question by
         // accident.
         // ═══════════════════════════════════════════════════════════════════
-        const contact = await upsertContact({
-          firstName: clean(body.firstName),
-          lastName: clean(body.lastName),
-          name: who,
-          ...(cPhone ? { phone: cPhone } : {}),
-          ...(cEmail ? { email: cEmail } : {}),
-        });
+        // ═══ 🔴 ROUND 171 · ITEM 4 — "New enquiry" MUST NOT RENAME ANYBODY ═
+        //
+        // This is the path the owner's example is about: families share a
+        // phone. Logging "John Ortiz" with his mother's number upserted onto
+        // HER contact and sent the typed name, so she became John — on the
+        // case she already had, and on every other record of hers.
+        //
+        // ✅ THE EXISTING PERSON PATH WRITES NO CONTACT FIELDS AT ALL. The
+        // referral's case is what this action adds; their identity is not.
+        const refExistingId = (body.contactId || "").trim();
+        if (!refExistingId) {
+          const refClash = await refuseExisting({
+            phone: cPhone,
+            email: cEmail,
+            // ⚠️ Memoised (cache.contactFieldDefs) — no extra request.
+            recordTypeFieldId: (await getEditableFieldDefs("contact")).find(
+              (d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name),
+            )?.id,
+          });
+          if (refClash) return refClash;
+        }
+        const contact = refExistingId
+          ? { id: refExistingId }
+          : await upsertContact({
+              firstName: clean(body.firstName),
+              lastName: clean(body.lastName),
+              name: who,
+              ...(cPhone ? { phone: cPhone } : {}),
+              ...(cEmail ? { email: cEmail } : {}),
+            });
         if (!contact.id)
           return NextResponse.json(
             {
@@ -2148,7 +2345,13 @@ export async function POST(request: Request) {
       if (body.action === "add-attendee") {
         const firstName = (body.firstName || "").trim();
         const phone = (body.phone || "").trim();
-        if (!firstName && !phone)
+        // 🔴 ROUND 171 — THE IDENTITY RULE IS ABOUT CREATING, NOT RECORDING.
+        // "Someone already in GoHighLevel" supplies a contact id and may have
+        // neither a name nor a phone to re-type; refusing them here would make
+        // the second mode unusable on exactly the people it exists for. The
+        // reason the rule exists — "no way to recognise this person next time"
+        // — does not apply to somebody already recognised.
+        if (!(body.contactId || "").trim() && !firstName && !phone)
           return NextResponse.json(
             {
               error: "An attendee needs a first name or a phone number.",
@@ -2175,7 +2378,13 @@ export async function POST(request: Request) {
           if (m) cf.push({ id: def.id, value: m });
           else missing.push(`${name} has no option "${value}"`);
         };
-        put(PARTNER_FIELDS.recordType.name, PARTNER_FIELDS.recordType.id, ATTENDEE_RECORD_TYPE);
+        // 🔴 ROUND 171 · ITEM 3 — RECORD TYPE IS SET ONLY WHERE IT IS BLANK,
+        // AND IT IS DECIDED BELOW RATHER THAN HERE. This put() was
+        // unconditional, so recording an existing CAREGIVER as somebody met at
+        // an expo rewrote their Record Type to "Event Attendee" — which
+        // removes them from the caregiver picker — and an existing PARTNER out
+        // of the Partners list entirely. One field, single-choice, and the
+        // dashboard's three main lists all keyed on it.
         put(ATTENDEE_FIELDS.profile.name, ATTENDEE_FIELDS.profile.id, (body.profile || "").trim());
         put(ATTENDEE_FIELDS.outcome.name, ATTENDEE_FIELDS.outcome.id, (body.outcome || "").trim());
         // The join. Without the field the attendee is still created — they are
@@ -2189,6 +2398,30 @@ export async function POST(request: Request) {
         else if (!evDef) missing.push("the field linking an attendee to an event");
 
         const aEmail = clean(body.email);
+        const rtDef =
+          defs.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name)) ||
+          defs.find((d) => d.id === PARTNER_FIELDS.recordType.id);
+        const rtOption = rtDef
+          ? (rtDef.options || []).find((o) => norm(o) === norm(ATTENDEE_RECORD_TYPE)) ||
+            (rtDef.options?.length ? "" : ATTENDEE_RECORD_TYPE)
+          : "";
+
+        // ═══ 🔴 ROUND 171 · ITEM 4 — TWO MODES, LIKE "Log a referral" ═══════
+        //
+        // "Someone already in GoHighLevel" arrives as a contactId and writes
+        // ONLY what this action adds. "New person" arrives without one and is
+        // refused — before any write — when the phone or email already belongs
+        // to somebody. There is no third path that creates anyway.
+        const metExistingId = (body.contactId || "").trim();
+        if (!metExistingId) {
+          const clash = await refuseExisting({
+            phone,
+            email: aEmail,
+            recordTypeFieldId: rtDef?.id,
+            eventFieldId: evDef?.id,
+          });
+          if (clash) return clash;
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // 🔴 ROUND 122 · ITEM 1 — THE OVERWRITE, WHICH IS THE ACTUAL DATA LOSS.
@@ -2209,7 +2442,36 @@ export async function POST(request: Request) {
         // found.
         // ═══════════════════════════════════════════════════════════════════
         if (evDef && (body.eventId || "").trim()) {
-          const needle = phone || aEmail;
+          // 🔴 ROUND 171 — THE PICKED PERSON IS CHECKED DIRECTLY. This looked
+          // the contact up by phone or email, which is exactly what the
+          // "Someone already in GoHighLevel" mode does NOT have: you can pick
+          // somebody who has neither. Without this the one guard protecting an
+          // existing attendance was skipped on the only path likely to hit it.
+          if (metExistingId) {
+            try {
+              const cur = await getContactCustomFields(metExistingId);
+              const already = String(cur.values?.[evDef.id] ?? "").trim();
+              if (already && already !== (body.eventId || "").trim())
+                return NextResponse.json(
+                  {
+                    error:
+                      "That person is already recorded at another event, and a " +
+                      "contact can only hold one. Adding them here would erase " +
+                      "that — so nothing was changed.",
+                    detail:
+                      `Their Event Attended currently points at ${already}. GoHighLevel ` +
+                      "stores it as a single field on the contact, so the same person " +
+                      "cannot be recorded at two events until that changes.",
+                    status: 409,
+                    refusal: true,
+                  } as ApiError,
+                  { status: 409 },
+                );
+            } catch {
+              // ⚠️ Same posture as below: a failed look-up is not a refusal.
+            }
+          }
+          const needle = metExistingId ? "" : phone || aEmail;
           if (needle) {
             try {
               const hits = await searchContacts(needle);
@@ -2266,21 +2528,60 @@ export async function POST(request: Request) {
         // 400 "Pass at least one of number, email query parameter" as the
         // venue path. Latent rather than certain, which is why it went
         // unnoticed: most attendees have a phone.
-        const c = await ensureContact({
-          // 🔴 A PERSON'S NAME DOES NOT IDENTIFY THEM, so with no phone and no
-          // email this ALWAYS creates. Two people called Nina met at two
-          // different events are two different people, and reusing on a
-          // first-name match would file the second one's outcome onto the
-          // first one's record — a wrong merge, which is worse than a visible
-          // duplicate. Venues and partners are the opposite case and say so.
-          nameIdentifies: false,
-          firstName,
-          lastName: clean(body.lastName),
-          name: `${firstName} ${clean(body.lastName)}`.trim() || phone,
-          ...(phone ? { phone } : {}),
-          ...(aEmail ? { email: aEmail } : {}),
-          ...(cf.length ? { customFields: cf } : {}),
-        });
+        let c: { id: string };
+        if (metExistingId) {
+          // ═══ 🔴 AN EXISTING PERSON GETS THE EVENT AND NOTHING ELSE ═══════
+          //
+          // Not their name, not their phone, not their email, and their Record
+          // Type only if they have none. The owner's rule, and the reason it is
+          // a rule: every one of those fields is somebody else's answer to a
+          // question this dialog never asked.
+          //
+          // ⚠️ READ FIRST, THEN DECIDE. "Only when blank" cannot be done by a
+          // write — GoHighLevel has no conditional PUT — so the current value
+          // is read and the decision is made here. One request, on a path that
+          // is about to make one anyway.
+          let theirRecordType = "";
+          try {
+            const cur = await getContactCustomFields(metExistingId);
+            if (rtDef) {
+              const v = cur.values[rtDef.id];
+              theirRecordType = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
+            }
+          } catch {
+            // 🔴 UNREADABLE MEANS DO NOT TOUCH IT. A failed read is not
+            // evidence the field is blank, and the whole item is about not
+            // overwriting a value we did not look at.
+            theirRecordType = "(unreadable)";
+          }
+          const writes = [...cf];
+          if (rtDef && rtOption && !theirRecordType.trim())
+            writes.push({ id: rtDef.id, value: rtOption });
+          if (writes.length) await updateContactCustomFields(metExistingId, writes);
+          c = { id: metExistingId };
+        } else {
+          // 🔴 A BRAND-NEW PERSON GETS THE RECORD TYPE, because there is
+          // nothing of theirs to overwrite.
+          if (rtDef && rtOption) cf.push({ id: rtDef.id, value: rtOption });
+          else if (rtDef) missing.push(`${PARTNER_FIELDS.recordType.name} has no option "${ATTENDEE_RECORD_TYPE}"`);
+          const made = await ensureContact({
+            // 🔴 A PERSON'S NAME DOES NOT IDENTIFY THEM, so with no phone and
+            // no email this ALWAYS creates. Two people called Nina met at two
+            // different events are two different people, and reusing on a
+            // first-name match would file the second one's outcome onto the
+            // first one's record — a wrong merge, which is worse than a
+            // visible duplicate. Venues and partners are the opposite case and
+            // say so.
+            nameIdentifies: false,
+            firstName,
+            lastName: clean(body.lastName),
+            name: `${firstName} ${clean(body.lastName)}`.trim() || phone,
+            ...(phone ? { phone } : {}),
+            ...(aEmail ? { email: aEmail } : {}),
+            ...(cf.length ? { customFields: cf } : {}),
+          });
+          c = { id: made.id };
+        }
         if (!c.id)
           return NextResponse.json(
             { error: "GoHighLevel returned no contact id.", status: 502 } as ApiError,
@@ -2293,7 +2594,14 @@ export async function POST(request: Request) {
           } catch {
             noteSaved = false;
           }
-        return NextResponse.json({ ok: true, contactId: c.id, skipped: missing, noteSaved });
+        return NextResponse.json({
+          ok: true,
+          contactId: c.id,
+          skipped: missing,
+          noteSaved,
+          /** ROUND 171 — true when an existing person was recorded, not created. */
+          usedExisting: !!metExistingId,
+        });
       }
 
       // ── add a partner ──────────────────────────────────────────────────────
@@ -2366,8 +2674,54 @@ export async function POST(request: Request) {
         // — which is most of them — would have been created a second time. When
         // the caller picked somebody, write the partner fields onto THAT record.
         const existingId = (body.contactId || "").trim();
+        const rtPartnerId =
+          defs.find((d) => norm(d.name) === norm(PARTNER_FIELDS.recordType.name))?.id ||
+          PARTNER_FIELDS.recordType.id;
         if (existingId) {
-          if (cf.length) await updateContactCustomFields(existingId, cf);
+          // ═══ 🔴 ROUND 171 · ITEM 4 — PROMOTION MEETS "NEVER OVERWRITE" ════
+          //
+          // ⚠️ AND THIS IS THE ONE PLACE THE INSTRUCTION AND THE PRODUCT
+          // COLLIDE, SO IT IS WRITTEN DOWN RATHER THAN QUIETLY DECIDED. The
+          // rule says never write Record Type onto an existing person. But
+          // Record Type = "Referral Partner" is the ONLY thing that makes a
+          // contact appear in the Partners list, so a promotion that obeys the
+          // rule literally would save and then never show up — which is
+          // exactly the failure the refusal above this block exists to prevent.
+          //
+          // ✅ THE RESOLUTION: write it when they have none (118 of 120
+          // contacts on this account), and REFUSE when they have one, naming
+          // it. Promoting a caregiver would take them out of the caregiver
+          // picker, and that is a decision for a person, not for a dialog.
+          let theirs = "";
+          try {
+            const cur = await getContactCustomFields(existingId);
+            const v = cur.values[rtPartnerId];
+            theirs = (Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "")).trim();
+          } catch {
+            // 🔴 UNREADABLE MEANS DO NOT TOUCH IT — the same posture as the
+            // attendee path. A failed read is not evidence of a blank.
+            theirs = "(unreadable)";
+          }
+          if (theirs && norm(theirs) !== norm(PARTNER_RECORD_TYPE))
+            return NextResponse.json(
+              {
+                error: `${PARTNER_FIELDS.recordType.name} is already "${theirs}" on that contact.`,
+                detail:
+                  `Making them a ${PARTNER_RECORD_TYPE} would replace it, and ${PARTNER_FIELDS.recordType.name} holds one value — ` +
+                  `they would drop out of whichever list "${theirs}" feeds. Nothing was changed. ` +
+                  "Change it in GoHighLevel first if that is what you want, or add the organisation as a new partner.",
+                status: 409,
+                refusal: true,
+              } as ApiError,
+              { status: 409 },
+            );
+          // ⚠️ Their Record Type is written only when they had none. Every
+          // other partner field is what this action adds, so it goes.
+          const promoteWrites = cf.filter(
+            (f) => f.id !== rtPartnerId || !theirs,
+          );
+          if (promoteWrites.length)
+            await updateContactCustomFields(existingId, promoteWrites);
           const promoteOwner = clean(body.owner);
           if (promoteOwner) await setContactOwner(existingId, promoteOwner);
           return NextResponse.json({
@@ -2382,6 +2736,17 @@ export async function POST(request: Request) {
         const pEmail = clean(body.email);
         const pPhone = clean(body.phone);
         const pOwner = clean(body.owner);
+        // 🔴 ROUND 171 · ITEM 4 — "New organisation" must not rename a person.
+        // `ensureContact` upserts when there is a phone or an email, and the
+        // org name goes in as firstName — so adding "Main Line Health" with a
+        // switchboard number that somebody has as their mobile renamed that
+        // person to "Main". Refuse, and let the caller promote them instead.
+        const pClash = await refuseExisting({
+          phone: pPhone,
+          email: pEmail,
+          recordTypeFieldId: rtPartnerId,
+        });
+        if (pClash) return pClash;
         // 🔴 ROUND 166 — ensureContact. An organisation is exactly the case
         // that has a name and often nothing else: "Main Line Health" with no
         // switchboard number yet is a perfectly ordinary partner to add, and
