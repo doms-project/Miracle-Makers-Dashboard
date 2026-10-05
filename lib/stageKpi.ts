@@ -24,7 +24,66 @@ export interface StageKpiRecord {
   stageId: string;
   /** GoHighLevel's native `lastStageChangeAt`. */
   stageChangedAt?: string;
+  /**
+   * 🔴 ROUND 171 — WHEN THE CASE WAS CREATED, AND IT DECIDES WHETHER ROW 1 IS
+   * A MOVE. See CREATION_WINDOW_MS. "" or absent means we cannot tell, and the
+   * row is then COUNTED — see the comment there for why that direction.
+   */
+  createdAt?: string;
   cf: Record<string, unknown>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 ROUND 171 — ROW 1 IS NORMALLY A REAL MOVE, AND THE SCREEN COUNTED NONE.
+//
+// Live, build 169: "Counting 0 moves across 16 records — 16 first sightings
+// not counted." Every recorded case had exactly one row and `from === null` on
+// row 1 sent all sixteen to `firstSightings`. A Moves screen that counts zero
+// moves is not a cautious Moves screen; it is a blank one.
+//
+// ⚠️ THE OLD REASONING WAS SOUND AND ITS PREMISE WAS WRONG. It said the origin
+// "was never observed", which is true, and concluded the record never WENT
+// anywhere, which does not follow. The stage workflow fires ON A STAGE CHANGE.
+// So a first row means somebody moved this case and we do not know where from
+// — an unknown origin, not a non-event.
+//
+// ✅ THE ONE EXCEPTION, AND IT IS OBSERVED RATHER THAN ASSUMED. The workflow
+// also fires on creation: the live workflow test's brand-new case had TWO rows
+// after exactly one move. Row 1 there is the case appearing, not going.
+//
+// 🔴 WHY 2 MINUTES. The separator has to sit above the gap between a case
+// being created and its creation row landing, and below the gap between a case
+// being created and a human moving it:
+//
+//   below   the recorder stamps `at` when the WEBHOOK LANDS, not when the move
+//           happened. GoHighLevel dispatches a workflow in seconds and retries
+//           for longer, and this app's own writes are paced against a
+//           100-per-10s budget. Tens of seconds is ordinary; 2 minutes clears
+//           it with room.
+//   above   a move inside 2 minutes of creation means somebody created a case
+//           and dragged it before the dialog had finished closing. It happens,
+//           and when it does we undercount by one — stated, bounded, and the
+//           same direction the old code erred in.
+//
+// ⚠️ THE KNOWN COST, NAMED: an IMPORT that creates and immediately files
+// records reads as creation, not as moves. That is the right answer for an
+// import and the wrong one for a bulk re-stage done seconds after a load. The
+// constant is one number so the trade can be re-made without re-recording.
+//
+// 🔴 AND A MISSING createdAt COUNTS THE ROW. A record whose creation time we
+// cannot read is not evidence that the row IS creation — treating it as such
+// would silently drop moves for exactly the records we know least about. It
+// counts, with an unknown origin, where it is visible.
+// ═══════════════════════════════════════════════════════════════════════════
+export const CREATION_WINDOW_MS = 120_000;
+
+/** True when this row looks like the case appearing rather than going. */
+export function isCreationRow(rowAt: string, createdAt: string | undefined): boolean {
+  if (!createdAt) return false;
+  const a = Date.parse(rowAt);
+  const c = Date.parse(createdAt);
+  if (!Number.isFinite(a) || !Number.isFinite(c)) return false;
+  return Math.abs(a - c) <= CREATION_WINDOW_MS;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -130,26 +189,31 @@ export interface StageKpiResult {
   perManager: StageKpiTally[];
 
   /**
-   * 🔴 TRANSITIONS, NOT ROWS. A move needs an origin, and row 1 of any record
-   * has none — see `firstSightings`. perRep sums to AT MOST this (less
-   * `unattributed`); perManager sums to MORE, by design.
+   * 🔴 MOVES, INCLUDING THE ONES WHOSE ORIGIN WE NEVER SAW — round 171.
+   * perRep sums to AT MOST this (less `unattributed`); perManager sums to
+   * MORE, by design.
    */
   moves: number;
 
   /**
-   * 🔴 ROWS WITH `from === null`, EXCLUDED FROM `moves` AND PRINTED BESIDE IT.
+   * 🔴 MOVES COUNTED IN `moves` WHOSE STARTING STAGE IS UNKNOWN. Row 1 of a
+   * log, where the recorder had nothing to derive `from` from.
    *
-   * The recorder cannot know where a record came from on its first row —
-   * whatever fired the event, the origin was never observed. So the first row
-   * is evidence the record is SOMEWHERE, not that it WENT anywhere, and
-   * counting it would inflate every rep by one per record they own. In month
-   * one that is nearly the whole number.
-   *
-   * ⚠️ THIS IS AN UNDERCOUNT AND THE SCREEN SAYS SO. Where a first row WAS a
-   * real move, we lose it. The trade is deliberate: a bounded, stated
-   * undercount beats an unbounded, silent overcount.
+   * ⚠️ A SUBSET, NOT A SEPARATE TOTAL. It is printed so the reader knows how
+   * much of the number is "somebody moved this, from somewhere" rather than a
+   * fully observed A → B. Subtracting it from `moves` would be wrong.
    */
-  firstSightings: number;
+  unknownOrigin: number;
+
+  /**
+   * 🔴 ROWS THAT ARE THE CASE BEING CREATED, EXCLUDED FROM `moves`.
+   *
+   * The stage workflow fires on creation as well as on a change, so a case's
+   * first row can be the case appearing. Those are identified by their time
+   * sitting within CREATION_WINDOW_MS of `createdAt` — observed, not assumed:
+   * the live workflow test's new case had two rows after one move.
+   */
+  creationRows: number;
 
   /**
    * 🔴 TRANSITIONS WHOSE ROW CARRIES NO OWNER. Counted in `moves`, credited to
@@ -224,7 +288,8 @@ export function stageKpi(
     perRep: [],
     perManager: [],
     moves: 0,
-    firstSightings: 0,
+    unknownOrigin: 0,
+    creationRows: 0,
     unattributed: 0,
     unmanaged: 0,
     recordsWithHistory: 0,
@@ -276,9 +341,15 @@ export function stageKpi(
       if (!inWindow(row.at)) continue;
       counted = true;
 
+      // 🔴 ROUND 171 — THE ONLY ROW THAT IS NOT A MOVE IS THE CASE APPEARING.
+      // See CREATION_WINDOW_MS. Everything else with a null origin is somebody
+      // moving a case from a stage we never observed, which is a move.
       if (row.from === null) {
-        out.firstSightings += 1;
-        continue; // NOT a move — see StageKpiResult.firstSightings
+        if (isCreationRow(row.at, r.createdAt)) {
+          out.creationRows += 1;
+          continue;
+        }
+        out.unknownOrigin += 1;
       }
 
       out.moves += 1;

@@ -7208,13 +7208,35 @@ export default function Dashboard() {
                     with different pipeline access sees different totals.
                   </span>
                 </p>
-                {kpi.firstSightings ? (
+                {/* 🔴 ROUND 171 — TWO HONEST NUMBERS WHERE ONE WRONG ONE WAS.
+                    "16 first sightings not counted" was the whole of a screen
+                    reading zero moves, and it was not a caution: the stage
+                    workflow fires on a stage CHANGE, so those sixteen rows
+                    were sixteen real moves with an origin nobody recorded.
+                    One of these counts and one does not, and each says which. */}
+                {kpi.unknownOrigin ? (
                   <p>
-                    <b>{kpi.firstSightings} first sighting
-                    {kpi.firstSightings === 1 ? "" : "s"} not counted.</b>{" "}
-                    A record&rsquo;s first row says where it is, not where it
-                    came from — the origin was never observed, so it is not a
-                    move. This undercounts, and by exactly this many.
+                    <b>
+                      {kpi.unknownOrigin} move
+                      {kpi.unknownOrigin === 1 ? "" : "s"} had an unknown
+                      starting stage
+                    </b>{" "}
+                    — counted above. The log&rsquo;s first row records where a
+                    case arrived, not where it came from, so these are known to
+                    have moved and not known from where.
+                  </p>
+                ) : null}
+                {kpi.creationRows ? (
+                  <p>
+                    <b>
+                      {kpi.creationRows} row
+                      {kpi.creationRows === 1 ? "" : "s"} were the case being
+                      created
+                    </b>{" "}
+                    and are not counted — the workflow fires on creation too,
+                    and a case appearing has not gone anywhere. Identified by
+                    landing within two minutes of the case&rsquo;s own created
+                    time.
                   </p>
                 ) : null}
                 {kpi.unattributed ? (

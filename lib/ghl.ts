@@ -4196,9 +4196,26 @@ export async function addFieldOption(
 // and body shape as searchCaregiverContacts (proven live), minus the Record Type
 // filter — here we WANT every match, because the point is to notice that the
 // person already exists before creating them a second time.
-export async function searchContacts(
-  query: string,
-): Promise<{ id: string; name: string; email: string; phone: string }[]> {
+export interface ContactHit {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  /**
+   * 🔴 ROUND 171 — THE CUSTOM FIELDS THE SEARCH CARRIED, AND A FLAG SAYING
+   * WHETHER IT CARRIED ANY.
+   *
+   * ⚠️ AN EMPTY MAP AND AN ABSENT ONE ARE DIFFERENT ANSWERS, and conflating
+   * them is how "no Record Type" gets printed next to somebody who has one.
+   * `fieldsKnown` is false when the response carried no custom fields at all,
+   * and the caller must then say "not shown" rather than "none" — a screen
+   * that states an absence it did not observe is making it up.
+   */
+  fields: Record<string, string>;
+  fieldsKnown: boolean;
+}
+
+export async function searchContacts(query: string): Promise<ContactHit[]> {
   const { locationId } = requireEnv();
   if (!query.trim()) return [];
   const data = await ghlSend<{ contacts?: RawContact[] }>(
@@ -4206,12 +4223,20 @@ export async function searchContacts(
     "/contacts/search",
     { locationId, page: 1, pageLimit: 10, query: query.trim() },
   );
-  return (data.contacts || []).map((c) => ({
-    id: String(c.id ?? c.contactId ?? ""),
-    name: contactDisplay(c),
-    email: String(c.email ?? ""),
-    phone: String(c.phone ?? ""),
-  }));
+  return (data.contacts || []).map((c) => {
+    const cf = contactCfMap(c);
+    return {
+      id: String(c.id ?? c.contactId ?? ""),
+      name: contactDisplay(c),
+      email: String(c.email ?? ""),
+      phone: String(c.phone ?? ""),
+      fields: cf || {},
+      // ⚠️ NO EXTRA REQUEST, EVER. This reads what the one search already
+      // returned. Hydrating ten hits per keystroke would be ten per-contact
+      // reads against a 100-per-10-second budget.
+      fieldsKnown: cf != null && Object.keys(cf).length > 0,
+    };
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4458,6 +4483,178 @@ export async function ghlSearchContacts(
 
   return { rows: kept, total: total < 0 ? kept.length : total, truncated, hydrated, unreadable };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 171 · ITEM 2 — EVERYONE WHOSE `Event Attended` IS SET, WHATEVER THEY
+// ARE LABELLED.
+//
+// 🔴 THE QUESTION IS "IS THIS FIELD SET", AND THIS CODEBASE HAS NEVER ASKED
+// GOHIGHLEVEL ANYTHING BUT `eq`. lib/ghl.ts:4341 is the only filter shape ever
+// sent, and its own comment calls it "the one call in the referral dashboard
+// that could not be tested against a live account before shipping". Writing
+// `exists` and asserting it works would be rule 7 for the fourth time.
+//
+// ✅ SO IT IS TRIED AND MEASURED, NOT ASSUMED. The first call IS the probe —
+// it costs nothing extra. Three outcomes, and only one of them is "supported":
+//
+//   refused            GoHighLevel rejects the operator  -> unsupported
+//   applied            every row carries a value         -> supported
+//   silently ignored   rows come back without it         -> unsupported
+//
+// 🔴 THE THIRD IS THE ONE THAT MATTERS, and it is the failure `ghlSearchContacts`
+// already knows about: a filter GoHighLevel ignores returns EVERY contact in
+// the account with a 200. Treating that as the attendee list would put the
+// whole address book in People met. An outcome assertion cannot tell the two
+// apart — only reading the rows can.
+//
+// ⚠️ THE VERDICT IS MEMOISED PER PROCESS, not per call. One probe per warm
+// instance; a tenant does not gain or lose an operator between requests.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface FieldSetSearch {
+  rows: ContactByField[];
+  /**
+   * How the answer was obtained.
+   *
+   *   "exists"       rows came back AND every one carries the field. Trusted.
+   *   "empty"        no refusal and no rows. 🔴 NOT PROOF OF AN EMPTY ACCOUNT:
+   *                  an operator GoHighLevel does not understand could return
+   *                  nothing just as easily as everything, and the two are the
+   *                  same shape here. The caller must still run its fallback.
+   *   "unsupported"  refused, or applied to nothing it returned. Useless.
+   */
+  via: "exists" | "empty" | "unsupported";
+  truncated: boolean;
+}
+
+/** null = not probed yet. Reset only by a process restart. */
+let existsOperatorWorks: boolean | null = null;
+
+/** Visible to proofs and to the second fixture shape; never called in prod. */
+export function resetExistsProbe(): void {
+  existsOperatorWorks = null;
+}
+
+export async function ghlSearchContactsWhereSet(
+  fieldId: string,
+): Promise<FieldSetSearch> {
+  if (!fieldId || existsOperatorWorks === false)
+    return { rows: [], via: "unsupported", truncated: false };
+
+  const { locationId } = requireEnv();
+  const sent: Record<string, unknown> = {
+    locationId,
+    pageLimit: CF_PAGE,
+    filters: [{ field: `customFields.${fieldId}`, operator: "exists" }],
+    sort: [{ field: "dateAdded", direction: "desc" }],
+  };
+
+  const raw: RawContact[] = [];
+  let truncated = false;
+  let searchAfter: unknown[] | undefined;
+  for (let page = 0; page < CF_MAX_PAGES; page++) {
+    let data: { contacts?: RawContact[] };
+    try {
+      data = await ghlSend<{ contacts?: RawContact[] }>(
+        "POST",
+        "/contacts/search",
+        searchAfter ? { ...sent, searchAfter } : sent,
+      );
+    } catch (e) {
+      // ⚠️ REFUSED IS AN ANSWER, NOT A FAILURE. Anything in the 4xx range is
+      // "this tenant will not take that operator"; a 5xx is a wobble and must
+      // NOT be remembered as a permanent verdict.
+      const status = e instanceof GhlError ? e.status : 0;
+      if (status >= 400 && status < 500) existsOperatorWorks = false;
+      return { rows: [], via: "unsupported", truncated: false };
+    }
+    const batch = data.contacts || [];
+    raw.push(...batch);
+    if (batch.length < CF_PAGE) break;
+    const last = batch[batch.length - 1] as Record<string, unknown>;
+    const after = last.searchAfter;
+    if (!Array.isArray(after) || !after.length) {
+      truncated = true;
+      break;
+    }
+    searchAfter = after;
+    if (page === CF_MAX_PAGES - 1) truncated = true;
+  }
+
+  const rows: ContactByField[] = raw.map((c) => {
+    const rec = c as Record<string, unknown>;
+    return {
+      id: String(c.id ?? c.contactId ?? ""),
+      name: contactDisplay(c),
+      email: String(c.email ?? ""),
+      phone: String(rec.phone ?? ""),
+      assignedTo: String(rec.assignedTo ?? rec.assignedUserId ?? ""),
+      fields: contactCfMap(c) || {},
+      version: String(rec.dateUpdated ?? rec.updatedAt ?? ""),
+    };
+  });
+
+  // 🔴 THE CONTROL. A filter that was ignored returns rows without the field.
+  // An EMPTY result is not evidence either way — nobody may have the field set
+  // — so it is accepted without setting the verdict, and the caller's union
+  // still runs. Only a non-empty result proves the operator one way or other.
+  if (!rows.length) return { rows: [], via: "empty", truncated: false };
+  const applied = rows.every((r) => String(r.fields[fieldId] ?? "").trim() !== "");
+  if (!applied) {
+    existsOperatorWorks = false;
+    return { rows: [], via: "unsupported", truncated: false };
+  }
+  existsOperatorWorks = true;
+  return { rows, via: "exists", truncated };
+}
+
+/**
+ * The fallback for `ghlSearchContactsWhereSet`: ask `eq` once per known value.
+ *
+ * 🔴 IT GROWS WITH EVENTS, NOT WITH CONTACTS, AND THAT IS THE WHOLE POINT. The
+ * owner's constraint on this round is "no per-contact reads; the Referrals
+ * load's request count must not grow with the number of contacts". A sweep of
+ * the address book would — this does not. Twelve events cost twelve searches
+ * whether the account holds 300 contacts or 30,000.
+ *
+ * ⚠️ AND IT CANNOT FIND A DANGLING ATTENDEE, BY CONSTRUCTION. It only asks
+ * about events it was handed, so somebody pointing at a DELETED event is
+ * invisible to it. That is why the caller unions this with the Record Type
+ * search rather than replacing it — round 167 settled that people at a deleted
+ * event keep counting, and this path alone would undo that.
+ *
+ * ⚠️ CHUNKED AND PACED, like every other fan-out here. 100 requests per 10
+ * seconds, and round 152 produced 13,851 timeouts by ignoring it.
+ */
+export async function ghlSearchContactsAnyOf(
+  fieldId: string,
+  values: readonly string[],
+): Promise<{ rows: ContactByField[]; truncated: boolean; asked: number }> {
+  const want = [...new Set(values.map((v) => (v || "").trim()).filter(Boolean))];
+  if (!fieldId || !want.length) return { rows: [], truncated: false, asked: 0 };
+  const targets = want.slice(0, EVENT_FANOUT_CAP);
+  const truncated = want.length > targets.length;
+
+  const byId = new Map<string, ContactByField>();
+  for (let i = 0; i < targets.length; i += CF_CHUNK) {
+    const slice = targets.slice(i, i + CF_CHUNK);
+    const got = await mapLimit(slice, CF_CONCURRENCY, (v) =>
+      ghlSearchContacts(fieldId, v),
+    );
+    for (const s of got) {
+      // ⚠️ ONE EVENT FAILING COSTS ITS OWN PEOPLE AND NOBODY ELSE'S. Same
+      // posture as the board's per-pipeline settle.
+      if (!s.ok) continue;
+      for (const r of s.value.rows) byId.set(r.id, r);
+    }
+    if (i + CF_CHUNK < targets.length)
+      await new Promise((r) => setTimeout(r, CF_PAUSE_MS));
+  }
+  return { rows: [...byId.values()], truncated, asked: targets.length };
+}
+
+/** Events asked about one at a time before the list is called truncated. */
+const EVENT_FANOUT_CAP = 40;
 
 // ---------------------------------------------------------------------------
 // ITEM 5 — DOES THIS PERSON ALREADY EXIST?
@@ -6205,6 +6402,61 @@ export async function countCaregiverRelations(
     else caregivers++;
   }
   return { caregivers, clients };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 171 · ITEM 1 — THE OTHER SIDE OF THE PICKER, AND IT IS NOT A RECORD
+// TYPE.
+//
+// 🔴 ON A CAREGIVER'S RECORD THE HEADING SAID "Clients" AND THE SEARCH RETURNED
+// CAREGIVERS. Reported in round 170 and unfixed then because the value that
+// identifies a client was unprobed. It is probed now and the answer is that
+// THERE IS NO SUCH VALUE: of 120 contacts holding a client case, 118 carry no
+// Record Type, two say "Caregiver", and NOT ONE says "Client". No path in this
+// codebase has ever written it — Add Lead writes no Record Type at all — so a
+// filter on Record Type = "Client" would return nobody, forever.
+//
+// ✅ SO THE TEST IS THE THING THAT ACTUALLY MAKES SOMEBODY A CLIENT: they hold
+// a case in a client pipeline. That is a fact the account maintains by itself,
+// it cannot be wrong, and nothing has to be backfilled for it to start working.
+//
+// 🔴 AND NOTHING HERE WRITES "Client" ONTO ANYBODY. The owner's instruction is
+// explicit — "Don't set or backfill Client" — and the reason is item 3's: a
+// Record Type written to make a list work removes that person from whichever
+// list their real one feeds.
+//
+// ⚠️ CACHED FOR A MINUTE, BECAUSE THIS IS A TYPEAHEAD. The sweep is ~8-13
+// searches (one per client pipeline, per page); paying that per keystroke
+// against a 100-per-10s budget is how round 152 produced 13,851 timeouts. One
+// sweep per warm instance per minute, shared by every keystroke in it.
+//
+// ⚠️ AND A MINUTE IS NOT A COMPROMISE HERE. GoHighLevel's own search takes just
+// over a minute to show a contact created moments ago (owner, 1 October), so a
+// fresher cache would not produce a fresher answer.
+// ═══════════════════════════════════════════════════════════════════════════
+const CLIENT_CASE_TTL_MS = 60_000;
+let clientCaseCache: { at: number; rows: OpportunityRecord[] } | null = null;
+
+/** Visible to proofs; never called in production. */
+export function resetClientCaseCache(): void {
+  clientCaseCache = null;
+}
+
+/**
+ * Every case in every client-scoped pipeline, for the Clients picker.
+ *
+ * 🔴 RETURNS THE RECORDS, NOT A PICKER LIST. The access filter belongs to the
+ * route — it is the only layer that knows who is asking — and indexing belongs
+ * to lib/peopleSearch.ts, which is pure and provable without a server. This
+ * function is the transport and the cache, and nothing else.
+ */
+export async function getClientCaseRows(): Promise<OpportunityRecord[]> {
+  const now = Date.now();
+  if (clientCaseCache && now - clientCaseCache.at < CLIENT_CASE_TTL_MS)
+    return clientCaseCache.rows;
+  const { records } = await getOltlOpportunities("client");
+  clientCaseCache = { at: now, rows: records };
+  return records;
 }
 
 // Typeahead: search contacts filtered to Record Type = "Caregiver" so clients

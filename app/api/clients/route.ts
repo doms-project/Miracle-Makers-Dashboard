@@ -14,6 +14,7 @@ import {
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import { getUserHomePipelines } from "@/lib/pipelineAccess";
+import { checkExistingPerson } from "@/lib/existingPerson";
 import type { ApiError, NewClientPayload } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
@@ -250,6 +251,32 @@ async function postHandler(request: Request) {
     // exists" prompt is a courtesy — this is correct either way.
     let contactId = (body.contactId || "").trim();
     if (!contactId) {
+      // ═══ 🔴 ROUND 171 · ITEM 4 — A MATCH IS A QUESTION, NOT A MERGE ══════
+      //
+      // `upsertContact` deduplicates on phone or email and then writes the
+      // TYPED NAME onto whoever it matched. The modal's "already exists"
+      // prompt was called "a courtesy" in the comment this replaces — it was
+      // the only thing standing between a shared family phone and somebody
+      // being renamed on every record they hold, and a direct POST walked
+      // straight past it.
+      //
+      // ⚠️ THE MODAL ALREADY KNOWS HOW TO ANSWER THIS. It posts `contactId`
+      // when the rep picks the existing person, which is the branch above —
+      // so the refusal is the server saying the same thing the dialog says,
+      // rather than a new flow.
+      // ⚠️ THE ROLE COMES FROM THE CONTACT MODEL'S DEFS, NOT THE OPPORTUNITY
+      // ONE. `getEditableFieldDefs()` defaults to opportunities here, so the
+      // first version of this call produced "(no role)" for a caregiver — a
+      // stated absence that was really a missing lookup. Memoised, no request.
+      const contactDefs = await getEditableFieldDefs("contact");
+      const clash = await checkExistingPerson({
+        phone,
+        email,
+        recordTypeFieldId: contactDefs.find(
+          (d) => d.name.toLowerCase().replace(/[^a-z0-9]/g, "") === "recordtype",
+        )?.id,
+      });
+      if (clash) return NextResponse.json(clash, { status: 409 });
       const c = await upsertContact({
         firstName,
         lastName,

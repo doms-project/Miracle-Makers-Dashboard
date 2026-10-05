@@ -19,7 +19,16 @@ const LOCATION_ID =
 const contactUrl = (contactId: string) =>
   `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${contactId}`;
 
-type SearchHit = { id: string; name: string; email: string };
+type SearchHit = {
+  id: string;
+  name: string;
+  email: string;
+  /** ROUND 171 — present only on the CLIENT side: which case identifies them. */
+  pipelineName?: string;
+  stage?: string;
+  /** Cases this person holds beyond the one shown. */
+  more?: number;
+};
 
 // Task 4 — view + manage the caregivers associated with an enrollment's client
 // contact. Add is a searchable typeahead (caregiver contacts only); remove
@@ -57,6 +66,10 @@ export default function CaregiversSection({
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  // 🔴 ROUND 171 — THE STANDING CONSUMER RULE, CLIENT HALF. The route filters
+  // the client list by the viewer's grants, so an empty picker has two causes
+  // that look identical: nobody matches, or nobody you may see matches.
+  const [hitsWithheld, setHitsWithheld] = useState(0);
   const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
   const [actionErr, setActionErr] = useState<unknown>(null);
@@ -154,6 +167,7 @@ export default function CaregiversSection({
     if (debounce.current) clearTimeout(debounce.current);
     if (!q.trim()) {
       setHits([]);
+      setHitsWithheld(0);
       return;
     }
     debounce.current = setTimeout(async () => {
@@ -166,7 +180,10 @@ export default function CaregiversSection({
           { headers: headers(), cache: "no-store" },
         );
         const j = await res.json().catch(() => ({}));
-        if (res.ok) setHits(j.results || []);
+        if (res.ok) {
+          setHits(j.results || []);
+          setHitsWithheld(Number(j.withheld) || 0);
+        }
       } catch {
         /* ignore transient search errors */
       } finally {
@@ -317,7 +334,14 @@ export default function CaregiversSection({
                 </div>
               ) : hits.length === 0 ? (
                 <div className="cgmuted" style={{ padding: "8px 10px" }}>
-                  No {singular} contacts match.
+                  {/* 🔴 "none you can see" IS A DIFFERENT SENTENCE FROM "none".
+                      Following the advice of the wrong one creates a duplicate
+                      of somebody who is already there — round 145's lesson, on
+                      this picker. */}
+                  No {singular}s match
+                  {hitsWithheld
+                    ? ` that you can see — ${hitsWithheld} match${hitsWithheld === 1 ? "" : "es"} outside your pipeline access.`
+                    : "."}
                 </div>
               ) : (
                 hits.map((h) => {
@@ -331,7 +355,19 @@ export default function CaregiversSection({
                       onClick={() => add(h)}
                     >
                       <span className="cghitname">{h.name}</span>
-                      {h.email ? <span className="cghitmeta">{h.email}</span> : null}
+                      {/* 🔴 THE CASE IS WHY THEY ARE IN THIS LIST AT ALL, so it
+                          is shown rather than implied. Two people with the same
+                          name are told apart by their pipeline and stage, and
+                          nothing else here could do it. */}
+                      {h.pipelineName ? (
+                        <span className="cghitmeta">
+                          {h.pipelineName}
+                          {h.stage ? ` · ${h.stage}` : ""}
+                          {h.more ? ` · +${h.more} more case${h.more === 1 ? "" : "s"}` : ""}
+                        </span>
+                      ) : h.email ? (
+                        <span className="cghitmeta">{h.email}</span>
+                      ) : null}
                       {linked ? <span className="cghitmeta">· already added</span> : null}
                     </button>
                   );
