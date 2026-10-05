@@ -14,7 +14,7 @@ import {
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import { getUserHomePipelines } from "@/lib/pipelineAccess";
-import { checkExistingPerson } from "@/lib/existingPerson";
+import { checkExistingPerson, createPersonOrConflict } from "@/lib/existingPerson";
 import type { ApiError, NewClientPayload } from "@/lib/types";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
@@ -277,15 +277,19 @@ async function postHandler(request: Request) {
         )?.id,
       });
       if (clash) return NextResponse.json(clash, { status: 409 });
-      const c = await upsertContact({
+      // 🔴 ROUND 173 — CREATE, NEVER UPSERT. The pre-check above reads the
+      // search index, which lags a new contact by up to a minute; the upsert
+      // matched on phone instantly. Same question, two sources of truth, and
+      // the faster one did the overwriting.
+      const made = await createPersonOrConflict({
         firstName,
         lastName,
-        name: `${firstName} ${lastName}`.trim(),
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
         source: "Dashboard — Add Lead",
       });
-      contactId = c.id;
+      if (!made.ok) return NextResponse.json(made.conflict, { status: 409 });
+      contactId = made.id;
     }
     if (!contactId)
       return NextResponse.json(

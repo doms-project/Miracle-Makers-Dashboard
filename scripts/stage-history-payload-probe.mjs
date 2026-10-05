@@ -1,6 +1,17 @@
 // ---------------------------------------------------------------------------
 // ROUND 171 · ITEM 6 — DOES THE BOARD'S SEARCH CARRY THE WHOLE STAGE HISTORY?
 //
+// ✅ ANSWERED — 5 OCTOBER 2026, RUN TWICE ON THE LIVE ACCOUNT. The board's
+// search payload and the single-record GET returned BYTE-IDENTICAL Stage
+// History, three rows each, both times. The Moves screen is reading the whole
+// log; no truncation, no reformatting, and none of the three mitigations below
+// is needed.
+//
+// ⚠️ THE SCRIPT STAYS, AND NOT OUT OF SENTIMENT. "Search carries it" is true
+// of a three-row log and says nothing about a thirty-row one — the cut-off, if
+// there is one, is a length and these logs are young. Re-run it when a case
+// has many more rows; that is the question this file still answers.
+//
 // 🔴 READ-ONLY. GETs and nothing else. There is no write path in this file.
 //
 // ⚠️ WHY IT CANNOT BE ANSWERED FROM A FAKE. The Moves screen reads the log out

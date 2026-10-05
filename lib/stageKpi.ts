@@ -56,14 +56,18 @@ export interface StageKpiRecord {
 // being created and a human moving it:
 //
 //   below   the recorder stamps `at` when the WEBHOOK LANDS, not when the move
-//           happened. GoHighLevel dispatches a workflow in seconds and retries
-//           for longer, and this app's own writes are paced against a
-//           100-per-10s budget. Tens of seconds is ordinary; 2 minutes clears
-//           it with room.
-//   above   a move inside 2 minutes of creation means somebody created a case
-//           and dragged it before the dialog had finished closing. It happens,
-//           and when it does we undercount by one — stated, bounded, and the
-//           same direction the old code erred in.
+//           happened. ✅ MEASURED LIVE TWICE ON 5 OCTOBER: a case created at
+//           NEW LEAD got its creation row ~60 SECONDS later, both times — the
+//           stage workflow's own 30-second wait plus processing. 2 minutes was
+//           a guess with 60 seconds of headroom; 5 gives it four times that,
+//           which is what a measurement made twice rather than twenty deserves.
+//   above   a move inside 5 minutes of creation means somebody created a case
+//           and moved it in the same sitting. It happens, and when it does we
+//           undercount by one — stated, bounded, and the same direction the old
+//           code erred in. ⚠️ RAISING THE WINDOW WIDENS THAT UNDERCOUNT, and
+//           that is the trade: a creation row counted as a move is a wrong
+//           number nobody can see, while a fast first move lost is a known
+//           one. Lose the one we can name.
 //
 // ⚠️ THE KNOWN COST, NAMED: an IMPORT that creates and immediately files
 // records reads as creation, not as moves. That is the right answer for an
@@ -75,7 +79,7 @@ export interface StageKpiRecord {
 // would silently drop moves for exactly the records we know least about. It
 // counts, with an unknown origin, where it is visible.
 // ═══════════════════════════════════════════════════════════════════════════
-export const CREATION_WINDOW_MS = 120_000;
+export const CREATION_WINDOW_MS = 300_000;
 
 /** True when this row looks like the case appearing rather than going. */
 export function isCreationRow(rowAt: string, createdAt: string | undefined): boolean {

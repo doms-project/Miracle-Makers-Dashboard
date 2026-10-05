@@ -36,7 +36,7 @@ import {
   referralScopeKind,
 } from "@/lib/pipelineAccess";
 import { isAdminSession } from "@/lib/visibility";
-import { checkExistingPerson } from "@/lib/existingPerson";
+import { checkExistingPerson, createPersonOrConflict } from "@/lib/existingPerson";
 import { indexCaseHolders } from "@/lib/peopleSearch";
 import { emit } from "@/lib/webhooks";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
@@ -1825,15 +1825,23 @@ export async function POST(request: Request) {
           });
           if (refClash) return refClash;
         }
-        const contact = refExistingId
-          ? { id: refExistingId }
-          : await upsertContact({
-              firstName: clean(body.firstName),
-              lastName: clean(body.lastName),
-              name: who,
-              ...(cPhone ? { phone: cPhone } : {}),
-              ...(cEmail ? { email: cEmail } : {}),
-            });
+        // 🔴 ROUND 173 — CREATE, NEVER UPSERT. See lib/existingPerson.ts: the
+        // upsert matched on phone instantly while the pre-check's search
+        // lagged by up to a minute, so a second family member on one number
+        // renamed the first.
+        let contact: { id: string };
+        if (refExistingId) contact = { id: refExistingId };
+        else {
+          const made = await createPersonOrConflict({
+            firstName: clean(body.firstName),
+            lastName: clean(body.lastName),
+            name: who,
+            ...(cPhone ? { phone: cPhone } : {}),
+            ...(cEmail ? { email: cEmail } : {}),
+          });
+          if (!made.ok) return NextResponse.json(made.conflict, { status: 409 });
+          contact = { id: made.id };
+        }
         if (!contact.id)
           return NextResponse.json(
             {
@@ -2564,6 +2572,41 @@ export async function POST(request: Request) {
           // nothing of theirs to overwrite.
           if (rtDef && rtOption) cf.push({ id: rtDef.id, value: rtOption });
           else if (rtDef) missing.push(`${PARTNER_FIELDS.recordType.name} has no option "${ATTENDEE_RECORD_TYPE}"`);
+          // 🔴 ROUND 173 — NO UPSERT ON A "new person" PATH. `ensureContact`
+          // upserts whenever there is a phone or an email, and an upsert
+          // MERGES onto whoever shares that key — which is the overwrite this
+          // whole guard exists to prevent, reached by a different door when
+          // the search index had not caught up. With no key it still creates,
+          // which is what this call is now for.
+          const keyed = !!(phone || aEmail);
+          if (keyed) {
+            const outcome = await createPersonOrConflict({
+              firstName,
+              lastName: clean(body.lastName),
+              ...(phone ? { phone } : {}),
+              ...(aEmail ? { email: aEmail } : {}),
+              ...(cf.length ? { customFields: cf } : {}),
+            });
+            if (!outcome.ok)
+              return NextResponse.json(outcome.conflict, { status: 409 });
+            c = { id: outcome.id };
+            if (!c.id)
+              return NextResponse.json(
+                { error: "GoHighLevel returned no contact id.", status: 502 } as ApiError,
+                { status: 502 },
+              );
+            let noteOk = true;
+            if ((body.text || "").trim())
+              try {
+                await addContactNote(c.id, (body.text || "").trim(), session?.userId || "");
+              } catch {
+                noteOk = false;
+              }
+            return NextResponse.json({
+              ok: true, contactId: c.id, skipped: missing,
+              noteSaved: noteOk, usedExisting: false,
+            });
+          }
           const made = await ensureContact({
             // 🔴 A PERSON'S NAME DOES NOT IDENTIFY THEM, so with no phone and
             // no email this ALWAYS creates. Two people called Nina met at two
@@ -2757,6 +2800,25 @@ export async function POST(request: Request) {
         // `name` alone is refused by the create endpoint, `firstName` is
         // accepted. The org is not split across firstName/lastName: see the
         // note on createContact.
+        // 🔴 ROUND 173 — WITH A KEY, CREATE RATHER THAN UPSERT. An
+        // organisation's switchboard number is exactly the kind of number
+        // somebody also has as their mobile, and the upsert renamed them to
+        // the first word of the org. With no key the search-then-create below
+        // is unchanged, and it is the only path where a NAME may be reused.
+        if (pPhone || pEmail) {
+          const madeP = await createPersonOrConflict({
+            firstName: clean(body.firstName) || org,
+            lastName: clean(body.lastName),
+            ...(pEmail ? { email: pEmail } : {}),
+            ...(pPhone ? { phone: pPhone } : {}),
+            ...(pOwner ? { assignedTo: pOwner } : {}),
+            ...(cf.length ? { customFields: cf } : {}),
+          });
+          if (!madeP.ok) return NextResponse.json(madeP.conflict, { status: 409 });
+          return NextResponse.json({
+            ok: true, contactId: madeP.id, skipped: missing,
+          });
+        }
         const c = await ensureContact({
           // 🔴 AN ORGANISATION'S NAME IDENTIFIES IT. "Main Line Health" is one
           // company however many times it is typed, so an exact match is the

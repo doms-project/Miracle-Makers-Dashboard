@@ -7235,8 +7235,9 @@ export default function Dashboard() {
                     </b>{" "}
                     and are not counted — the workflow fires on creation too,
                     and a case appearing has not gone anywhere. Identified by
-                    landing within two minutes of the case&rsquo;s own created
-                    time.
+                    landing within five minutes of the case&rsquo;s own created
+                    time — measured live twice, the workflow takes about 60
+                    seconds to write that row.
                   </p>
                 ) : null}
                 {kpi.unattributed ? (
