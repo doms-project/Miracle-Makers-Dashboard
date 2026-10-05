@@ -64,6 +64,16 @@ export interface OpportunityRecord {
   // When the opportunity was created. "" when GoHighLevel sends no timestamp —
   // the referral dashboard then shows "—" and counts the referral as UNDATED
   // rather than as "referred today", which would inflate every 90-day figure.
+  /**
+   * 🔴 ROUND 174 — WHEN THE STATUS LAST CHANGED, FOR WON/LOST IN A PERIOD.
+   *
+   * ⚠️ IT IS NOT A SECOND `stageChangedAt`. It was identical to it on every
+   * record sampled live, and a bulk edit moves it without any status changing —
+   * so every number derived from it carries that sentence on screen. Option 1
+   * of the three in report 173; recording status changes properly is its own
+   * round.
+   */
+  statusChangedAt?: string;
   createdAt?: string;
   // ITEM 5 — OPTIMISTIC CONCURRENCY. GoHighLevel's `updatedAt`, carried through
   // to the client and sent back on every write. The server compares it to the

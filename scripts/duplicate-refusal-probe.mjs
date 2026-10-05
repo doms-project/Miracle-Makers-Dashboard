@@ -1,24 +1,37 @@
 // ---------------------------------------------------------------------------
-// ROUND 173 · ITEM 1 — THE PROBE. WHAT DOES A DUPLICATE REFUSAL TELL US?
+// THE DUPLICATE REFUSAL — PROBED, AND THE ANSWER IS RECORDED HERE.
 //
+// ✅ RUN LIVE ON 5 OCTOBER 2026. ALL FOUR QUESTIONS ANSWERED:
+//
+//   Q1  does `POST /contacts/` refuse a duplicate phone at ONE SECOND?
+//       ✅ YES — HTTP 400 "This location does not allow duplicated contacts."
+//
+//   Q2  does the refusal NAME the match?
+//       ✅ YES —  meta.contactId      the right id
+//                 meta.matchingField  "phone"
+//                 meta.contactName    included
+//
+//   Q3  does `/contacts/search/duplicate?number=` see a 1-second-old contact?
+//       ✅ YES.
+//
+//   Q4  CONTROL — does `/contacts/search` (the index) see it at one second?
+//       ✅ NO — zero hits. Which IS the defect: the check read this while the
+//          write matched on phone instantly.
+//
+// 🔴 SO THE ORDER IS SETTLED, AND IT IS IN lib/existingPerson.ts:
+//      1. meta.contactId        primary — instant, authoritative, no request
+//      2. the duplicate lookup  fallback — instant, one request
+//      3. the search index       last resort — the one that failed
+//
+// ⚠️ WHY THE SCRIPT STAYS. Q4 is the assertion that can change: if GoHighLevel
+// ever makes the index read-your-writes, the window closes and the ordering
+// becomes belt-and-braces rather than load-bearing. And another tenant may
+// answer Q2 differently — the code handles that, and this is how you check
+// rather than assume.
+// ---------------------------------------------------------------------------
 // 🔴 IT WRITES. Two contacts, deliberately, because the question cannot be
-// asked without one existing — and it prints their ids so they can be deleted.
-// Nothing else in this repo's scripts folder creates anything; this one must,
-// and it refuses to run without `I_UNDERSTAND_THIS_CREATES_CONTACTS=yes`.
-//
-// THREE QUESTIONS, IN THE ORDER THE FIX DEPENDS ON THEM:
-//
-//   1. Does `POST /contacts/` refuse a duplicate phone AT ALL, one second
-//      after the first contact was created? (If it merged instead, the whole
-//      approach is wrong and the report has to say so.)
-//   2. Does the refusal BODY name the colliding contact — a `meta.contactId`
-//      or anything like it? If yes, the 409 can name them with no extra call.
-//   3. If not: does `GET /contacts/search/duplicate?number=` see a contact
-//      created one second earlier? That is the instant-match route.
-//
-//   4. And the control: does `POST /contacts/search` (the index the old check
-//      used) see it at one second? It must NOT, or the live failure would not
-//      reproduce and this probe is measuring the wrong thing.
+// asked without one existing — and it prints their ids for deletion. It refuses
+// to run without `I_UNDERSTAND_THIS_CREATES_CONTACTS=yes`.
 //
 // Run:
 //   I_UNDERSTAND_THIS_CREATES_CONTACTS=yes \

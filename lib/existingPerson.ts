@@ -202,9 +202,23 @@ export async function createPersonOrConflict(
 
     const phone = (fields.phone || "").trim();
     const email = (fields.email || "").trim();
-    let id = e instanceof GhlError ? e.dupContactId || "" : "";
-    let name = "";
+    const err = e instanceof GhlError ? e : null;
+    let id = err?.dupContactId || "";
+    // ✅ ROUND 174 — THE NAME COMES OFF THE REFUSAL TOO, so the common path
+    // needs no extra read at all.
+    let name = err?.dupName || "";
     let via: "refusal" | "lookup" | "search" | "none" = id ? "refusal" : "none";
+    // ✅ WHICH DETAIL COLLIDED, FROM GOHIGHLEVEL. `meta.matchingField` is
+    // "phone" on the live probe; the fallback is only for a tenant that sends
+    // nothing, and it is a last resort rather than the rule.
+    const field = (err?.dupField || "").toLowerCase();
+    const matchedOn: "phone" | "email" = field.includes("email")
+      ? "email"
+      : field.includes("phone")
+        ? "phone"
+        : phone
+          ? "phone"
+          : "email";
 
     if (!id) {
       const dup = await lookupDuplicateContact({ phone, email });
@@ -231,14 +245,14 @@ export async function createPersonOrConflict(
           // create because the key is taken; we could not find out whose. That
           // is still a complete answer to "may I create this person" — no.
           error:
-            `${phone ? "That number" : "That email address"} already belongs to ` +
-            "somebody in GoHighLevel. Nothing was created.",
+            `${matchedOn === "phone" ? "That phone number" : "That email address"} already ` +
+            "belongs to somebody in GoHighLevel. Nothing was created.",
           detail:
             "GoHighLevel refused the new contact because the " +
-            `${phone ? "number" : "address"} is already in use, and the matching person ` +
-            "could not be looked up — a contact created in the last minute is not " +
-            "searchable yet. Search for them in GoHighLevel and add the event, " +
-            "referral or application to that record.",
+            `${matchedOn === "phone" ? "number" : "address"} is already in use, and the ` +
+            "matching person could not be looked up — a contact created in the last " +
+            "minute is not searchable yet. Search for them in GoHighLevel and add the " +
+            "event, referral or application to that record.",
           status: 409,
           refusal: true,
           existing: {
@@ -246,14 +260,14 @@ export async function createPersonOrConflict(
             name: "",
             recordType: "",
             caseLabel: "",
-            matchedOn: phone ? "phone" : "email",
+            matchedOn,
             atEvent: "",
           },
         },
       };
 
     // The full sentence, through the same composer every other path uses.
-    const full = await describeExisting({ id, name, phone, email });
+    const full = await describeExisting({ id, name, matchedOn });
     return {
       ok: false,
       conflict: {
@@ -268,8 +282,7 @@ export async function createPersonOrConflict(
 async function describeExisting(m: {
   id: string;
   name: string;
-  phone: string;
-  email: string;
+  matchedOn: "phone" | "email";
 }): Promise<ExistingPersonRefusal> {
   let recordType = "";
   let name = m.name;
@@ -296,7 +309,7 @@ async function describeExisting(m: {
     caseLabel = "";
   }
   return {
-    error: existingPersonSentence(m.phone ? "phone" : "email", {
+    error: existingPersonSentence(m.matchedOn, {
       id: m.id,
       name,
       recordType,
@@ -310,7 +323,7 @@ async function describeExisting(m: {
       name,
       recordType,
       caseLabel,
-      matchedOn: m.phone ? "phone" : "email",
+      matchedOn: m.matchedOn,
       atEvent: "",
     },
   };

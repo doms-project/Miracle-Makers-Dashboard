@@ -162,7 +162,11 @@ export function existingPersonSentence(
   key: "phone" | "email",
   who: ExistingPerson,
 ): string {
-  const what = key === "phone" ? "This number" : "This email address";
+  // ✅ ROUND 174 — IT NAMES THE DETAIL, AND GOHIGHLEVEL SAYS WHICH ONE. The
+  // refusal body carries `meta.matchingField`, so this is no longer inferred
+  // from which fields happened to be sent — which got it wrong whenever both
+  // were.
+  const what = key === "phone" ? "This phone number" : "This email";
   const name = (who.name || "").trim() || "someone already in GoHighLevel";
   // 🔴 "no role" IS A STATED ABSENCE, NOT A GUESS. 118 of 120 people with a
   // client case have no Record Type, so this is the COMMON branch and it must

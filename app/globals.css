@@ -2241,3 +2241,38 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    two answers, which is what it is, rather than as an error. */
 .pmconflict{margin:10px 0 0;padding:10px 12px;border:1px solid var(--warn-line,#e3c08a);border-radius:9px;background:var(--warn-bg,#fdf7ec);font-size:12.5px;color:var(--ink);}
 .pmconflictacts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:9px;}
+
+/* ═══ ROUND 174 · THE MOVES KPIs ══════════════════════════════════════════
+   🔴 OWN PREFIX, round 162's rule. `kpi*` appears nowhere else, so restyling
+   these tables cannot reach the `mv*` blocks above them or the master tiles. */
+.kpifilters{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;font-size:12px;}
+.kpifilters label{font-weight:600;color:var(--muted);}
+.kpifilters select,.kpifilters input{padding:5px 8px;border:1px solid var(--line);border-radius:7px;font-size:12px;background:#fff;}
+/* 🔴 THE DENOMINATOR TRAVELS WITH THE FILTERS, not in a footnote. A metric
+   owes its reader the same disclosure a filtered list does. */
+.kpiden{margin-left:auto;font-size:11.5px;color:var(--muted);}
+.kpiblock{margin:18px 0 0;padding-top:14px;border-top:1px solid var(--line);}
+.kpiblock h3{margin:0 0 4px;font-size:13px;font-weight:700;color:var(--ink);}
+.kpiblock h4{margin:12px 0 4px;font-size:12px;font-weight:700;color:var(--muted);}
+/* 🔴 CAUGHT BY loader-sweep: used in JSX and defined nowhere, which renders as
+   an unstyled element and reads like a layout bug rather than a missing class.
+   One pipeline's funnel per block, separated so two tables do not run together. */
+.kpifunnel{margin-bottom:14px;}
+.kpifunnel:last-child{margin-bottom:0;}
+.kpinote{margin:0 0 10px;font-size:11.5px;line-height:1.5;color:var(--muted);}
+.kpitable{width:100%;border-collapse:collapse;font-size:12.5px;}
+.kpitable th{text-align:left;padding:4px 8px;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);}
+.kpitable td{padding:5px 8px;border-bottom:1px solid var(--line);}
+.kpitable td:first-child{color:var(--ink);}
+/* ⚠️ THE APPROXIMATE ROW IS VISIBLY NOT ONE OF THE OTHERS. It sits in the same
+   table because it answers the same question, and it must never read as a
+   measured figure. */
+.kpiapprox td{background:var(--wash,#f7f8fa);color:var(--muted);font-style:italic;}
+.kpinum{border:0;background:transparent;padding:0;font:inherit;font-weight:700;color:var(--link,#1a56b8);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}
+.kpinum:disabled{color:var(--muted);cursor:default;text-decoration:none;font-weight:400;}
+.kpidrill{margin-top:14px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;}
+.kpidrillhead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:8px;font-size:12.5px;}
+.kpidrill ul{list-style:none;margin:0;padding:0;max-height:260px;overflow:auto;}
+.kpidrill li{border-top:1px solid var(--line);}
+.kpicase{display:block;width:100%;padding:6px 4px;border:0;background:transparent;text-align:left;font:inherit;font-size:12px;color:var(--ink);cursor:pointer;}
+.kpicase:hover{background:var(--wash,#f4f5f7);}

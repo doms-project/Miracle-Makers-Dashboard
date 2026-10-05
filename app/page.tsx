@@ -32,9 +32,15 @@ import { BUILD, BUILD_LABEL } from "@/lib/build";
 import {
   stageAge,
   stageKpi,
-  monthWindow,
+  stageFunnel,
+  timeInStage,
+  speedToFirstMove,
+  wonLost,
+  rangeWindow,
   type StageAge,
   type StageKpiResult,
+  type KpiRange,
+  type KpiRecord,
 } from "@/lib/stageKpi";
 import EmailComposer from "@/components/EmailComposer";
 import {
@@ -3854,7 +3860,6 @@ export default function Dashboard() {
   //
   // ⚠️ `data` IS ALREADY ACCESS-FILTERED, which is why the screen prints its
   // denominator. See the note beside `kpiScope` in the render.
-  const [kpiAllTime, setKpiAllTime] = useState(false);
   /**
    * Stage id -> name, across every pipeline in the payload.
    *
@@ -3875,13 +3880,96 @@ export default function Dashboard() {
     },
     [stagesByPipeline],
   );
-  const kpi: StageKpiResult = useMemo(
+  // ═══ ROUND 174 — THE FILTERS, APPLIED ONCE ════════════════════════════════
+  //
+  // 🔴 ONE FILTERED ARRAY FEEDS EVERY NUMBER. "Every number follows the
+  // filters" is then true by construction rather than by five calculations
+  // each remembering to — which is the shape that lets one tile quietly keep
+  // showing last month's figure beside four that moved.
+  const [kpiRange, setKpiRange] = useState<KpiRange>("month");
+  const [kpiFrom, setKpiFrom] = useState("");
+  const [kpiTo, setKpiTo] = useState("");
+  const [kpiPipe, setKpiPipe] = useState("");
+  const [kpiDiv, setKpiDiv] = useState("");
+  /** The cases behind a number, when one has been clicked. */
+  const [drill, setDrill] = useState<{ title: string; ids: string[] } | null>(null);
+
+  const kpiWindow = useMemo(() => {
+    if (kpiRange !== "custom") return rangeWindow(kpiRange, Date.now());
+    // ⚠️ A HALF-FILLED CUSTOM RANGE IS AN OPEN END, NOT AN EMPTY RESULT. A
+    // "from" with no "to" means "since then", which is what somebody typing
+    // one date meant.
+    return {
+      from: kpiFrom ? new Date(`${kpiFrom}T00:00:00.000Z`).toISOString() : null,
+      // Inclusive of the day typed: the window's end is exclusive, so it is
+      // the day AFTER. Off by one here loses a whole day of moves.
+      to: kpiTo
+        ? new Date(Date.parse(`${kpiTo}T00:00:00.000Z`) + 86_400_000).toISOString()
+        : null,
+    };
+  }, [kpiRange, kpiFrom, kpiTo]);
+
+  const kpiRecords = useMemo(
     () =>
-      stageKpi(data, stageHistoryFieldId, {
-        window: kpiAllTime ? undefined : monthWindow(Date.now()),
-      }),
-    [data, stageHistoryFieldId, kpiAllTime],
+      data.filter(
+        (r) =>
+          (!kpiPipe || r.pipelineId === kpiPipe) &&
+          (!kpiDiv || divisionLabel(r.pipelineName) === kpiDiv),
+      ),
+    [data, kpiPipe, kpiDiv],
   );
+  /** The pipelines and divisions actually present — never a whole picklist. */
+  const kpiPipes = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of data) if (r.pipelineId) m.set(r.pipelineId, r.pipelineName);
+    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [data]);
+  const kpiDivs = useMemo(
+    () =>
+      [...new Set(data.map((r) => divisionLabel(r.pipelineName)).filter(Boolean))].sort(),
+    [data],
+  );
+
+  const asKpi = useCallback(
+    (r: OpportunityRecord): KpiRecord => ({
+      id: r.id,
+      stageId: r.stageId,
+      pipelineId: r.pipelineId,
+      pipelineName: r.pipelineName,
+      ownerId: r.ownerId,
+      status: r.status,
+      statusChangedAt: r.statusChangedAt,
+      stageChangedAt: r.stageChangedAt,
+      createdAt: r.createdAt,
+      cf: r.cf,
+    }),
+    [],
+  );
+  const kpiRows = useMemo(() => kpiRecords.map(asKpi), [kpiRecords, asKpi]);
+
+  const kpi: StageKpiResult = useMemo(
+    () => stageKpi(kpiRecords, stageHistoryFieldId, { window: kpiWindow }),
+    [kpiRecords, stageHistoryFieldId, kpiWindow],
+  );
+  const funnels = useMemo(
+    () => stageFunnel(kpiRows, stageHistoryFieldId, stagesByPipeline, { window: kpiWindow }),
+    [kpiRows, stageHistoryFieldId, stagesByPipeline, kpiWindow],
+  );
+  const stageNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const list of Object.values(stagesByPipeline))
+      for (const st of list) m.set(st.id, st.name);
+    return m;
+  }, [stagesByPipeline]);
+  const dwell = useMemo(
+    () => timeInStage(kpiRows, stageHistoryFieldId, stageNameMap, { window: kpiWindow }),
+    [kpiRows, stageHistoryFieldId, stageNameMap, kpiWindow],
+  );
+  const firstMove = useMemo(
+    () => speedToFirstMove(kpiRows, stageHistoryFieldId, { window: kpiWindow }),
+    [kpiRows, stageHistoryFieldId, kpiWindow],
+  );
+  const closed = useMemo(() => wonLost(kpiRows, { window: kpiWindow }), [kpiRows, kpiWindow]);
 
   const masterStats = useMemo(() => {
     const rows = data;
@@ -7159,22 +7247,81 @@ export default function Dashboard() {
             <div className="mvwrap">
               <div className="mvhead">
                 <h2 className="mvtitle">Moves</h2>
+                {/* 🔴 ROUND 174 — EVERY NUMBER BELOW FOLLOWS THESE, because
+                    they filter ONE array that all of them read. */}
                 <div className="mvseg">
-                  <button
-                    type="button"
-                    className={kpiAllTime ? "" : "on"}
-                    onClick={() => setKpiAllTime(false)}
-                  >
-                    This month
-                  </button>
-                  <button
-                    type="button"
-                    className={kpiAllTime ? "on" : ""}
-                    onClick={() => setKpiAllTime(true)}
-                  >
-                    All recorded
-                  </button>
+                  {(
+                    [
+                      ["week", "This week"],
+                      ["month", "This month"],
+                      ["lastMonth", "Last month"],
+                      ["all", "All recorded"],
+                      ["custom", "Custom"],
+                    ] as [KpiRange, string][]
+                  ).map(([k, label]) => (
+                    <button
+                      key={k}
+                      type="button"
+                      className={kpiRange === k ? "on" : ""}
+                      onClick={() => { setKpiRange(k); setDrill(null); }}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
+              </div>
+
+              <div className="kpifilters">
+                {kpiRange === "custom" ? (
+                  <>
+                    <label htmlFor="kpi-from">From</label>
+                    <input
+                      id="kpi-from" type="date" value={kpiFrom}
+                      onChange={(e) => { setKpiFrom(e.target.value); setDrill(null); }}
+                    />
+                    <label htmlFor="kpi-to">To</label>
+                    <input
+                      id="kpi-to" type="date" value={kpiTo}
+                      onChange={(e) => { setKpiTo(e.target.value); setDrill(null); }}
+                    />
+                  </>
+                ) : null}
+                {/* ⚠️ THE PIPELINES AND DIVISIONS ACTUALLY PRESENT, never the
+                    whole picklist — a filter offering something that cannot
+                    match is a filter that looks broken when used. */}
+                {kpiPipes.length > 1 ? (
+                  <>
+                    <label htmlFor="kpi-pipe">Pipeline</label>
+                    <select
+                      id="kpi-pipe" value={kpiPipe}
+                      onChange={(e) => { setKpiPipe(e.target.value); setDrill(null); }}
+                    >
+                      <option value="">All pipelines</option>
+                      {kpiPipes.map(([id, name]) => (
+                        <option key={id} value={id}>{name}</option>
+                      ))}
+                    </select>
+                  </>
+                ) : null}
+                {kpiDivs.length > 1 ? (
+                  <>
+                    <label htmlFor="kpi-div">Division</label>
+                    <select
+                      id="kpi-div" value={kpiDiv}
+                      onChange={(e) => { setKpiDiv(e.target.value); setDrill(null); }}
+                    >
+                      <option value="">All divisions</option>
+                      {kpiDivs.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </>
+                ) : null}
+                <span className="kpiden">
+                  from the <b>{kpiRecords.length}</b> record
+                  {kpiRecords.length === 1 ? "" : "s"} you can see
+                  {kpiRecords.length !== data.length
+                    ? ` · ${data.length - kpiRecords.length} filtered out`
+                    : ""}
+                </span>
               </div>
 
               {/* 🔴 WHAT THIS NUMBER IS NOT. Five sentences, on the screen and
@@ -7298,6 +7445,264 @@ export default function Dashboard() {
                   ) : null}
                 </div>
               </div>
+
+              {/* ═══ ROUND 174 · THE FUNNEL ═════════════════════════════════
+                  🔴 "Reached" means a RECORDED ROW says so. A case sitting in a
+                  stage today with no row for it passed through before the
+                  recorder existed — counting it would put two different facts
+                  under one heading. */}
+              {funnels.length ? (
+                <div className="kpiblock">
+                  <h3>Stage funnel</h3>
+                  <p className="kpinote">
+                    Reached each stage since recording began on{" "}
+                    {kpi.since ? formatEasternDay(kpi.since) : "—"} — a case that
+                    passed through before then is not counted.
+                  </p>
+                  {funnels.map((fn) => (
+                    <div key={fn.pipelineId} className="kpifunnel">
+                      <h4>{fn.pipelineName}</h4>
+                      <table className="kpitable">
+                        <thead>
+                          <tr><th>Stage</th><th>Reached</th><th>Moved on</th><th>%</th></tr>
+                        </thead>
+                        <tbody>
+                          {fn.rows.map((fr) => (
+                            <tr key={fr.stageId}>
+                              <td>{fr.name}</td>
+                              <td>
+                                <button
+                                  type="button" className="kpinum"
+                                  disabled={!fr.reached}
+                                  onClick={() => setDrill({
+                                    title: `Reached ${fr.name} — ${fn.pipelineName}`,
+                                    ids: fr.caseIds,
+                                  })}
+                                >{fr.reached}</button>
+                              </td>
+                              <td>
+                                <button
+                                  type="button" className="kpinum"
+                                  disabled={!fr.movedOn}
+                                  onClick={() => setDrill({
+                                    title: `Moved on from ${fr.name} — ${fn.pipelineName}`,
+                                    ids: fr.movedOnIds,
+                                  })}
+                                >{fr.movedOn}</button>
+                              </td>
+                              {/* 🔴 "—", NOT "0%", WHEN NOTHING REACHED IT. 0%
+                                  reads as a stall; a dash reads as no data. */}
+                              <td>{fr.pct === null ? "—" : `${fr.pct}%`}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* ═══ TIME IN STAGE ══════════════════════════════════════════
+                  🔴 THE APPROXIMATE FIGURE IS ITS OWN LINE AND NEVER AN
+                  AVERAGE WITH THE REST. GoHighLevel's stage date is moved by
+                  bulk writes — fourteen records share a 2,880-minute gap from
+                  one correction while still sitting at NEW LEAD — so folding
+                  it into measured intervals would launder a known-bad number
+                  into a good one. */}
+              {dwell.recorded.length || dwell.approximate.n ? (
+                <div className="kpiblock">
+                  <h3>Time in stage</h3>
+                  <p className="kpinote">
+                    From recorded moves.{" "}
+                    {dwell.approximate.n ? (
+                      <>
+                        <b>{dwell.approximate.n}</b> older case
+                        {dwell.approximate.n === 1 ? "" : "s"} use GoHighLevel&rsquo;s
+                        stage date, shown separately and approximate.
+                      </>
+                    ) : (
+                      "Every case here has recorded moves."
+                    )}{" "}
+                    Completed stays only — a case still in a stage has no length yet.
+                  </p>
+                  <table className="kpitable">
+                    <thead>
+                      <tr><th>Stage</th><th>Median days</th><th>Average</th><th>Stays</th></tr>
+                    </thead>
+                    <tbody>
+                      {dwell.recorded.map((d) => (
+                        <tr key={d.stageId}>
+                          <td>{d.name}</td>
+                          <td><b>{d.median}</b></td>
+                          <td>{d.avg}</td>
+                          <td>
+                            <button
+                              type="button" className="kpinum"
+                              onClick={() => setDrill({
+                                title: `Stays recorded in ${d.name}`, ids: d.caseIds,
+                              })}
+                            >{d.n}</button>
+                          </td>
+                        </tr>
+                      ))}
+                      {dwell.approximate.n ? (
+                        <tr className="kpiapprox">
+                          <td>
+                            Older cases <i>(approximate)</i>
+                          </td>
+                          <td><b>{dwell.approximate.median}</b></td>
+                          <td>{dwell.approximate.avg}</td>
+                          <td>
+                            <button
+                              type="button" className="kpinum"
+                              onClick={() => setDrill({
+                                title: "Older cases — days in stage from GoHighLevel",
+                                ids: dwell.approximate.caseIds,
+                              })}
+                            >{dwell.approximate.n}</button>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
+              {/* ═══ SPEED TO FIRST MOVE ════════════════════════════════════ */}
+              {firstMove.perRep.length || firstMove.noFirstMove ? (
+                <div className="kpiblock">
+                  <h3>Speed to first move</h3>
+                  <p className="kpinote">
+                    Days from a case being created to its first real move. The
+                    creation row is not a move. Cases created before recording
+                    began have no first move here
+                    {firstMove.noFirstMove ? (
+                      <>
+                        {" "}— <b>{firstMove.noFirstMove}</b> of them, and they are
+                        in no column below.
+                      </>
+                    ) : (
+                      "."
+                    )}
+                  </p>
+                  <table className="kpitable">
+                    <thead>
+                      <tr><th>Rep</th><th>Median days</th><th>Average</th><th>Cases</th></tr>
+                    </thead>
+                    <tbody>
+                      {firstMove.perRep.map((fr) => (
+                        <tr key={fr.id || "none"}>
+                          {/* ⚠️ CREDITED TO THE ROW'S OWNER, not the record's —
+                              who moved it then, not who owns it now. */}
+                          <td>{fr.id ? userLabel(fr.id) : "No owner recorded"}</td>
+                          <td><b>{fr.median}</b></td>
+                          <td>{fr.avg}</td>
+                          <td>
+                            <button
+                              type="button" className="kpinum"
+                              onClick={() => setDrill({
+                                title: `First move — ${fr.id ? userLabel(fr.id) : "no owner recorded"}`,
+                                ids: fr.caseIds,
+                              })}
+                            >{fr.n}</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
+              {/* ═══ WON / LOST ═════════════════════════════════════════════
+                  🔴 THE CAVEAT IS NOT OPTIONAL AND IT IS NOT IN A TOOLTIP.
+                  `lastStatusChangeAt` was identical to lastStageChangeAt on
+                  every record sampled live, and a bulk edit moves it. Option 1
+                  of three in report 173, taken knowingly. */}
+              {closed.perRep.length || closed.undated ? (
+                <div className="kpiblock">
+                  <h3>Won / lost</h3>
+                  <p className="kpinote">
+                    Dated by the last status change, which a bulk edit can move.
+                    Current status only — a case reopened after winning shows as
+                    open.
+                    {closed.undated ? (
+                      <>
+                        {" "}
+                        <b>{closed.undated}</b> closed case
+                        {closed.undated === 1 ? "" : "s"} carry no status date and
+                        cannot be placed in a period, so they are counted here and
+                        nowhere else.
+                      </>
+                    ) : null}
+                  </p>
+                  <table className="kpitable">
+                    <thead>
+                      <tr><th>Rep</th><th>Won</th><th>Lost</th><th>Win rate</th></tr>
+                    </thead>
+                    <tbody>
+                      {closed.perRep.map((cr) => (
+                        <tr key={cr.id || "none"}>
+                          <td>{cr.id ? userLabel(cr.id) : "Unassigned"}</td>
+                          <td>
+                            <button
+                              type="button" className="kpinum" disabled={!cr.won}
+                              onClick={() => setDrill({
+                                title: `Won — ${cr.id ? userLabel(cr.id) : "unassigned"}`,
+                                ids: cr.wonIds,
+                              })}
+                            >{cr.won}</button>
+                          </td>
+                          <td>
+                            <button
+                              type="button" className="kpinum" disabled={!cr.lost}
+                              onClick={() => setDrill({
+                                title: `Lost — ${cr.id ? userLabel(cr.id) : "unassigned"}`,
+                                ids: cr.lostIds,
+                              })}
+                            >{cr.lost}</button>
+                          </td>
+                          <td>{cr.winRate === null ? "—" : `${cr.winRate}%`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
+              {/* ═══ THE DRILL-DOWN ═════════════════════════════════════════
+                  🔴 A KPI YOU CANNOT CLICK INTO IS A NUMBER NOBODY CAN CHECK,
+                  and the records are already in memory — so this costs nothing
+                  but the markup. */}
+              {drill ? (
+                <div className="kpidrill">
+                  <div className="kpidrillhead">
+                    <b>{drill.title}</b>
+                    <span className="kpiden">{drill.ids.length} case
+                      {drill.ids.length === 1 ? "" : "s"}</span>
+                    <button type="button" className="ighost" onClick={() => setDrill(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <ul>
+                    {drill.ids.map((id) => {
+                      const rec = kpiRecords.find((x) => x.id === id);
+                      return (
+                        <li key={id}>
+                          <button
+                            type="button"
+                            className="kpicase"
+                            onClick={() => setSelId(id)}
+                          >
+                            {rec
+                              ? `${rec.oppName || `${rec.first} ${rec.last}`.trim() || "Untitled"} · ${rec.pipelineName} · ${rec.stage}`
+                              : id}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
 
               {/* 🔴 SURFACED, NEVER FILTERED. Round 163 kept the verdict out of
                   the row precisely so this rule could change without
