@@ -241,8 +241,17 @@ reset();
 contactOwner = "";
 r = await post(WORKFLOW);
 console.log(`  -> ${r.status} "${r.body.reason}"`);
+// 🔴 ROUND 175 — THE PHRASE MOVED, THE PROPERTY DID NOT. This matched
+// `/no owner/` and the sentence now reads "neither the case nor the contact has
+// an owner", because the route reads the CASE's owner first and only falls back
+// to the contact's. What is being tested is that it DECLINES for want of an
+// owner rather than inventing one from the payload's `user` or `owner` keys —
+// and that is checked on the behaviour, not on a form of words (round 128's trap).
 ok("🔴 it does not guess an owner from `user` or `owner`",
-   r.body.acted === false && /no owner/.test(r.body.reason), r.body);
+   r.body.acted === false && /owner/i.test(r.body.reason), r.body);
+ok("🔴 …and the payload's own `user`/`owner` values never become the owner",
+   !seen.some((x) => /PUT/.test(x.method || "") && /assignedTo/.test(JSON.stringify(x.body || {}))),
+   seen.map((x) => `${x.method || "GET"} ${x.path}`));
 ok("⚠️ and no follower write was attempted",
    !seen.some((s) => /followers/.test(s.path)), seen.map((s) => s.path));
 

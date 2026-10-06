@@ -122,8 +122,22 @@ ok("it is the same classes, not a copy",
 const sw = page.slice(page.indexOf('className="rfhead rechead"'), page.indexOf('className="rfhead rechead"') + 2600);
 ok("🔴 it is a button with a listbox, like the Referrals switcher",
    /aria-haspopup="listbox"/.test(sw) && /role="listbox"/.test(sw) && /role="option"/.test(sw), "not a listbox");
-ok("and the three choices are there",
-   /"caregiver", "Caregivers"/.test(sw) && /"staff", "Staff"/.test(sw) && /"all", "All"/.test(sw), "choices missing");
+// 🔴 ROUND 175 — THE CHOICES LEFT THE JSX, ON PURPOSE. They are now
+// lib/recruitingLabels.ts, because round 167 reverted an inline `useMemo` and
+// the proof came back GREEN (rule 10) — wording a proof must check does not
+// live inside a component. So this reads the VALUES from the module that owns
+// them, which is stronger than scanning page.tsx for a tuple shape.
+const RLP = await import("../lib/recruitingLabels.ts");
+ok("the switcher reads its choices from the labels module",
+   /recruitingGroupOptions\(/.test(sw), "the options are not wired to the module");
+ok("and the three choices are there, in order",
+   RLP.recruitingGroupOptions(false).map((o) => o.key).join(",") === "caregiver,staff,all",
+   RLP.recruitingGroupOptions(false));
+ok("🔴 …labelled as applicants, and ODP as DSPs",
+   RLP.recruitingGroupOptions(false)[0].label === "Caregiver applicants" &&
+   RLP.recruitingGroupOptions(true)[0].label === "DSP applicants" &&
+   RLP.recruitingGroupOptions(false)[1].label === "Office staff applicants",
+   RLP.recruitingGroupOptions(false).map((o) => o.label));
 ok("⚠️ while the board's own group-by select is untouched",
    /<select[^>]*cgGroupKey|cgGroupKey/.test(page), "the group-by disappeared");
 // ⚠️ THE PROPERTY, NOT THE SENTENCE. This quoted "Staff hires across your
