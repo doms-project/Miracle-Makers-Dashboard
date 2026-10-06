@@ -22,6 +22,7 @@ import {
   TOUCH_TYPES,
   type Division,
   type EnrichedPartner,
+  withPending,
   type RawPartner,
   type RawReferral,
   type RawEvent,
@@ -395,6 +396,19 @@ export default function ReferralsSection({
   onBusy: (busy: boolean) => void;
 }) {
   const [data, setData] = useState<Payload | null>(cache);
+  /**
+   * 🔴 ROUND 175 · ITEM 3 — ROWS SAVED HERE THAT GOHIGHLEVEL'S SEARCH HAS NOT
+   * CAUGHT UP ON. A ref rather than state: it is read inside `load`, and as
+   * state it would make `load` a new function on every change and re-fire the
+   * effect that calls it.
+   */
+  const pending = useRef<{
+    partners: RawPartner[];
+    events: RawEvent[];
+    attendees: RawAttendee[];
+  }>({ partners: [], events: [], attendees: [] });
+  /** "Saved: {name}" — shown until the next save or a reload replaces it. */
+  const [savedNote, setSavedNote] = useState("");
   // ⚠️ NOT `true` WHEN SEEDED. A remount with a payload in hand is not loading,
   // and saying it is puts the toolbar's Refresh into a spin nothing will end.
   const [loading, setLoading] = useState(!cache);
@@ -738,7 +752,20 @@ export default function ReferralsSection({
       // A success says so explicitly. Clearing on entry is not enough when an
       // older attempt can still reject after this one resolved.
       setErr(null);
-      setData(j);
+      // 🔴 ROUND 175 · ITEM 3 — RE-MERGE WHAT WAS JUST SAVED. GoHighLevel's
+      // search lags a new contact by up to a minute (round 173), so this
+      // payload legitimately does not contain the partner, event or attendee
+      // saved ten seconds ago. Without the merge the reload would wipe it off
+      // the screen again, which reads as the save being undone.
+      const mp = withPending(j.partners, pending.current.partners);
+      const me = withPending(j.events, pending.current.events);
+      const ma = withPending(j.attendees, pending.current.attendees);
+      pending.current = {
+        partners: mp.stillPending,
+        events: me.stillPending,
+        attendees: ma.stillPending,
+      };
+      setData({ ...j, partners: mp.rows, events: me.rows, attendees: ma.rows });
     } catch (e) {
       if (!isCurrent()) return;
       // ⚠️ `data` is untouched, so a failed reload keeps the section on screen.
@@ -1544,6 +1571,24 @@ export default function ReferralsSection({
                 : "Every division."
               : `${division}, plus every partner marked "All".`}
           </p>
+          {/* 🔴 ROUND 175 · ITEM 3 — THE CONFIRMATION LIVES ON THE LIST, not
+              only in a dialog that has already closed. Jack's report was that
+              the save looked like it had failed; a banner beside the list is
+              what answers that, and it names the thing so there is no doubt
+              which save it refers to. */}
+          {savedNote ? (
+            <p className="rfsaved">
+              {savedNote}
+              <span className="rfsavedwhy">
+                {" "}
+                — on the list now. GoHighLevel&rsquo;s search takes about a
+                minute to catch up, so it may not appear in search until then.
+              </span>
+              <button type="button" className="rfsavedx" onClick={() => setSavedNote("")}>
+                ×
+              </button>
+            </p>
+          ) : null}
         </div>
 
         {/* ── tabs ──────────────────────────────────────────────────────── */}
@@ -2951,7 +2996,17 @@ export default function ReferralsSection({
           divisionsAreEventsOwn={eventDivisionsAreItsOwn}
           hostFieldPresent={!!data?.meta.eventHostField}
           onClose={() => setEventForPartner(null)}
-          onAdded={() => void load()}
+          onAdded={(saved) => {
+            if (saved) {
+              pending.current = {
+                ...pending.current,
+                events: [saved, ...pending.current.events.filter((e) => e.id !== saved.id)],
+              };
+              setSavedNote(`Saved: ${saved.name}`);
+              setData((d) => (d ? { ...d, events: withPending(d.events, [saved]).rows } : d));
+            }
+            void load();
+          }}
         />
       ) : null}
 
@@ -2974,7 +3029,19 @@ export default function ReferralsSection({
           outcomes={data?.outcomeOptions.length ? data.outcomeOptions : [...OUTCOMES]}
           linkable={!!data?.meta.attendeeEventField}
           onClose={() => setMetFor(null)}
-          onAdded={() => void load()}
+          onAdded={(saved) => {
+            if (saved) {
+              pending.current = {
+                ...pending.current,
+                attendees: [saved, ...pending.current.attendees.filter((a) => a.id !== saved.id)],
+              };
+              setSavedNote(`Saved: ${saved.name}`);
+              setData((d) =>
+                d ? { ...d, attendees: withPending(d.attendees, [saved]).rows } : d,
+              );
+            }
+            void load();
+          }}
         />
       ) : null}
 
@@ -2988,7 +3055,23 @@ export default function ReferralsSection({
           divisions={partnerDivisionsMine}
           divisionsAreLive={divisionsAreLive}
           onClose={() => setAddOpen(false)}
-          onAdded={() => void load()}
+          /* 🔴 ROUND 175 · ITEM 3 — HOLD THE ROW, THEN RELOAD. The reload is
+             still worth making (it brings the touch counts and anything else
+             that changed), and `withPending` is what stops it wiping the row
+             the save just produced. */
+          onAdded={(saved) => {
+            if (saved) {
+              pending.current = {
+                ...pending.current,
+                partners: [saved, ...pending.current.partners.filter((p) => p.id !== saved.id)],
+              };
+              setSavedNote(`Saved: ${saved.org}`);
+              setData((d) =>
+                d ? { ...d, partners: withPending(d.partners, [saved]).rows } : d,
+              );
+            }
+            void load();
+          }}
         />
       ) : null}
 
@@ -3911,7 +3994,7 @@ function AddPartnerDialog({
    */
   divisionsAreLive: boolean;
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (saved?: RawPartner) => void;
 }) {
   /**
    * 🔴 949 CONTACTS ALREADY EXIST, so "new organisation" cannot be the only
@@ -4019,12 +4102,33 @@ function AddPartnerDialog({
         },
       );
       const verb = j.promoted ? "marked as a referral partner" : "added";
+      const name = picked?.name || org.trim();
       setDone(
         j.skipped?.length
-          ? `${picked?.name || org.trim()} ${verb}. Not saved on this account: ${j.skipped.join("; ")}.`
-          : `${picked?.name || org.trim()} ${verb}.`,
+          ? `Saved: ${name} — ${verb}. Not saved on this account: ${j.skipped.join("; ")}.`
+          : `Saved: ${name}`,
       );
-      onAdded();
+      // 🔴 ROUND 175 · ITEM 3 — THE SAVED ROW GOES UP, not just a "reload now".
+      // GoHighLevel's search cannot see this contact for up to a minute, so the
+      // list has to be told what was saved rather than asked.
+      onAdded(
+        j.contactId
+          ? {
+              id: j.contactId,
+              org: name,
+              email: email.trim(),
+              phone: phone.trim(),
+              cat,
+              tier: tier || "Prospect",
+              division: div,
+              owner: "",
+              ownerId: owner || "",
+              notes: notes.trim(),
+              shared: false,
+              lastTouch: null,
+            }
+          : undefined,
+      );
       setTimeout(onClose, j.skipped?.length ? 3200 : 1200);
     } catch (e) {
       setErr(e);
@@ -5201,7 +5305,7 @@ function AddAttendeeDialog({
   /** False when no Event Attended field exists — they cannot be attributed. */
   linkable: boolean;
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (saved?: RawAttendee) => void;
 }) {
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
@@ -5265,7 +5369,7 @@ function AddAttendeeDialog({
     setDone("");
     const existingId = useId ?? (mode === "existing" ? picked?.id : "");
     try {
-      const j = await apiFetch<{ skipped?: string[]; noteSaved: boolean }>("/api/referrals", {
+      const j = await apiFetch<{ skipped?: string[]; noteSaved: boolean; contactId?: string }>("/api/referrals", {
         method: "POST",
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
@@ -5291,7 +5395,23 @@ function AddAttendeeDialog({
           ? `Added. Not saved on this account: ${j.skipped.join("; ")}.`
           : "Added.",
       );
-      onAdded();
+      // 🔴 ROUND 175 · ITEM 3 — the attendee list is a CONTACT search too, so
+      // it lags the same way. Hand the row up rather than only asking for a
+      // reload that cannot yet see it.
+      onAdded(
+        j.contactId
+          ? {
+              id: j.contactId,
+              name: existingId
+                ? picked?.name || "Recorded person"
+                : `${firstName.trim()} ${lastName.trim()}`.trim() || phone.trim(),
+              eventId: event.id,
+              outcome,
+              profile: profile.trim(),
+              version: "",
+            }
+          : undefined,
+      );
       setTimeout(onClose, j.skipped?.length ? 3200 : 1200);
     } catch (e) {
       const c = conflictOf(e);
@@ -5527,7 +5647,7 @@ function AddEventDialog({
   /** False → the event is created but nothing records who ran it. Said, not hidden. */
   hostFieldPresent: boolean;
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (saved?: RawEvent) => void;
 }) {
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
@@ -5543,7 +5663,7 @@ function AddEventDialog({
     setErr(null);
     setDone("");
     try {
-      const j = await apiFetch<{ pipelineName: string; skipped?: string[] }>(
+      const j = await apiFetch<{ pipelineName: string; skipped?: string[]; eventId?: string }>(
         "/api/referrals",
         {
           method: "POST",
@@ -5560,10 +5680,29 @@ function AddEventDialog({
         },
       );
       setDone(
-        `Added to ${j.pipelineName}, run by ${partner.org}.` +
+        `Saved: ${name.trim()} — added to ${j.pipelineName}, run by ${partner.org}.` +
           (j.skipped?.length ? ` Not saved on this account: ${j.skipped.join("; ")}.` : ""),
       );
-      onAdded();
+      // 🔴 ROUND 175 · ITEM 3 — the Events tab is an OPPORTUNITY search, which
+      // lags a brand-new opportunity the same way the contact search lags a new
+      // contact. Hand the row up.
+      onAdded(
+        j.eventId
+          ? {
+              id: j.eventId,
+              name: name.trim(),
+              // ⚠️ THE ENTRY STAGE IS NOT GUESSED HERE. The row carries "" and
+              // the reload fills it in; inventing a stage name would put a word
+              // on screen that no pipeline necessarily has.
+              stage: "",
+              date,
+              cost: Number(cost) || 0,
+              venue: venue.trim(),
+              division: div,
+              host: partner.id,
+            }
+          : undefined,
+      );
       setTimeout(onClose, j.skipped?.length ? 3200 : 1400);
     } catch (e) {
       setErr(e);

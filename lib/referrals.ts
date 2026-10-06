@@ -676,3 +676,46 @@ export function danglingReferrals(
   const live = new Set(partners.map((p) => p.id));
   return referrals.filter((o) => o.partnerId && !live.has(o.partnerId)).length;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 175 · ITEM 3 — A THING YOU JUST SAVED IS ON THE SCREEN.
+//
+// 🔴 THE REPORT, 5 OCT: Jack added a partner and thought it had not saved. It
+// had. The Referrals list comes from GoHighLevel's contact search, which round
+// 173 measured as lagging a new contact by up to a minute — so the save
+// succeeded, the reload returned a list without it, and the screen showed
+// exactly what a failure would show.
+//
+// ⚠️ AND AN OPTIMISTIC INSERT ALONE DOES NOT FIX IT. The dialog's `onAdded`
+// triggers a reload, and that reload would wipe the inserted row a moment
+// later — a flicker is worse than the original bug because it looks like the
+// save being undone. So a saved row is held as PENDING and re-merged after
+// every load, until the server's own list carries it.
+//
+// 🔴 AND IT IS DROPPED THE MOMENT THE SERVER AGREES, never on a timer. A timer
+// would either drop it while search was still cold or keep a deleted row alive;
+// "the payload now contains it" is the only test that cannot be wrong.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface WithPendingResult<T> {
+  /** What to show: pending rows the server has not caught up on, then the rest. */
+  rows: T[];
+  /** What to keep holding. Shrinks to [] as search catches up. */
+  stillPending: T[];
+}
+
+/**
+ * Merge locally-saved rows into a server list.
+ *
+ * ⚠️ PENDING ROWS GO FIRST, deliberately. Somebody who just saved something is
+ * looking for it, and a list sorted by whatever the server sorted by can put it
+ * on page three.
+ */
+export function withPending<T extends { id: string }>(
+  fromServer: readonly T[],
+  pending: readonly T[],
+): WithPendingResult<T> {
+  const known = new Set(fromServer.map((r) => r.id));
+  const stillPending = pending.filter((p) => p.id && !known.has(p.id));
+  return { rows: [...stillPending, ...fromServer], stillPending };
+}

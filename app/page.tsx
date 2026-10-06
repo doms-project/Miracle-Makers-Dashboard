@@ -30,6 +30,11 @@ import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
 import { BUILD, BUILD_LABEL } from "@/lib/build";
 import {
+  isOdpOnlyRecruiting,
+  recruitingNouns,
+  recruitingGroupOptions,
+} from "@/lib/recruitingLabels";
+import {
   stageAge,
   stageKpi,
   stageFunnel,
@@ -1845,20 +1850,23 @@ export default function Dashboard() {
    * Caregiver Applicants, ODP DSP Applicant. Under All the umbrella word is
    * the accurate one; the heading and the number carry the difference.
    */
-  const cgNoun = useMemo(() => {
-    if (cgGroup === "staff")
-      return {
-        /** The menu's own word for this choice — so the control shows what it offered. */
-        group: "Staff",
-        one: "staff applicant",
-        many: "staff applicants",
-        /** What a PIPELINE in this group is called, which is not what a RECORD is called. */
-        pipelines: "staff",
-      };
-    if (cgGroup === "all")
-      return { group: "All", one: "applicant", many: "applicants", pipelines: "recruiting" };
-    return { group: "Caregivers", one: "applicant", many: "applicants", pipelines: "applicant" };
-  }, [cgGroup]);
+  /**
+   * 🔴 ROUND 175 · ITEM 2 — ODP CALLS THEM DSPs. Labels only; the grouping,
+   * the grants and every write are untouched. The wording lives in
+   * lib/recruitingLabels.ts so a proof can drive it without a browser.
+   *
+   * ⚠️ DERIVED FROM THE PIPELINES THIS VIEWER ACTUALLY HOLDS, not from a
+   * setting. A viewer with OLTL and ODP reads "Caregivers", because "DSP" would
+   * be wrong for half their board.
+   */
+  const cgOdpOnly = useMemo(
+    () => isOdpOnlyRecruiting(cgPipelines.map((p) => p.name)),
+    [cgPipelines],
+  );
+  const cgNoun = useMemo(
+    () => recruitingNouns(cgGroup, cgOdpOnly),
+    [cgGroup, cgOdpOnly],
+  );
   /** `12 applicants` / `1 staff applicant` — the plural decided once. */
   const cgCount = useCallback(
     (n: number) => `${n} ${n === 1 ? cgNoun.one : cgNoun.many}`,
@@ -5963,13 +5971,7 @@ export default function Dashboard() {
                 </h1>
                 {cgGroupOpen ? (
                   <ul className="rfdivpop" role="listbox" aria-label="Recruiting group">
-                    {(
-                      [
-                        ["caregiver", "Caregivers", "the two applicant pipelines"],
-                        ["staff", "Staff", "the three staff pipelines"],
-                        ["all", "All", "everything in recruiting"],
-                      ] as const
-                    ).map(([k, label, hint]) => (
+                    {recruitingGroupOptions(cgOdpOnly).map(({ key: k, label, hint }) => (
                       <li key={k} role="option" aria-selected={k === cgGroup}>
                         <button
                           type="button"

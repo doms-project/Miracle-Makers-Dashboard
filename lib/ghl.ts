@@ -2838,6 +2838,13 @@ export interface ContactOpportunity {
   pipelineName: string;
   stage: string;
   status: string;
+  /**
+   * 🔴 ROUND 175 — WHEN THE CASE WAS CREATED, and it is load-bearing rather
+   * than informational: the webhook's fallback picks the contact's NEWEST case
+   * in one pipeline created in the last few minutes, and a family in two
+   * divisions holds a second live case this must never reach.
+   */
+  createdAt: string;
 }
 
 export async function listContactOpportunities(
@@ -2869,6 +2876,7 @@ export async function listContactOpportunities(
       stage:
         stageNames.get(stageKey(pid, o.pipelineStageId || o.stageId || "")) || "",
       status: o.status || "",
+      createdAt: String(o.createdAt ?? o.dateAdded ?? ""),
     };
   });
 }
@@ -5952,6 +5960,43 @@ function readOwnRecord(
  * must not make a completed save report itself as failed. Everything that goes
  * wrong comes back in `steps` and in the log, and the owner change stands.
  */
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 175 — SET A CASE'S OWN OWNER.
+//
+// 🔴 WHY THIS EXISTS NOW AND DID NOT BEFORE. GoHighLevel's "Allow different
+// owners for primary contacts and opportunities" was OFF, so contact and
+// opportunity owners were synced and a family could have exactly ONE owner
+// across every case they held. Proven live 6 Oct: a family owned by Ern (OLTL)
+// answered the ODP ad, the ODP workflow moved the CONTACT to chris b, and both
+// the new ODP case AND the family's existing OLTL case became chris b's.
+//
+// With the setting on, each case keeps its own owner — and `Assign to user`
+// then writes only the contact, so a new case starts with whatever the contact
+// had. The dashboard sets the case owner. This is that write.
+//
+// ⚠️ IT IS ITS OWN FUNCTION AND NOT PART OF moveOpportunity. Move changes a
+// case's PIPELINE and stamps transfer fields; this changes one field on one
+// case and must not drag any of that in.
+//
+// 🔴 AND IT INVALIDATES BEFORE RETURNING, so the caller's read-back is a read
+// of GoHighLevel rather than of the 3-second burst cache. Without that the
+// verification would confirm the value we just sent, which proves nothing —
+// rule 11: a write's own response is evidence about that write; a later read is
+// evidence about the world.
+// ═══════════════════════════════════════════════════════════════════════════
+export async function setOpportunityOwner(
+  oppId: string,
+  userId: string,
+): Promise<void> {
+  if (!oppId) throw new GhlError("No opportunity id to set an owner on.", 400);
+  await ghlSend("PUT", `/opportunities/${encodeURIComponent(oppId)}`, {
+    // ⚠️ `null` CLEARS, a string sets. Same shape the panel and Move use, so
+    // the three paths cannot disagree about what "no owner" looks like.
+    assignedTo: userId || null,
+  });
+  invalidateOpportunity(oppId);
+}
+
 export async function applyCaseManagers(
   oppId: string,
   ownerId: string,
