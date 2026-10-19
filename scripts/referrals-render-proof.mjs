@@ -198,7 +198,10 @@ const railNames = await page.$$eval(".railsec span", (e) => e.map((x) => x.textC
 console.log(`  rail entries: ${JSON.stringify(railNames)}`);
 // Click until the view actually changes — proof the handler is live.
 for (let i = 0; i < 10; i++) {
-  await page.getByRole("button", { name: "Referrals" }).click();
+  // ⚠️ ROUND 176 · G4 — EXACT. Without it this is a substring match, and the
+  // Clients sidebar now lists one button per client pipeline, named by the
+  // account: a pipeline called "Referrals Intake" would be clicked instead.
+  await page.getByRole("button", { name: "Referrals", exact: true }).click();
   await page.waitForTimeout(600);
   const h = (await page.textContent(".main h1"))?.trim();
   if (h === "Referrals") break;

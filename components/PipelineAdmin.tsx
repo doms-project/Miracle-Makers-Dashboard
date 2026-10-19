@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import ConfirmDialog from "./ConfirmDialog";
 import { apiError } from "@/lib/apiFetch";
+import { BUILD } from "@/lib/build";
 import { checkFieldName, suggestPrefix, composeFieldName, type KnownField } from "@/lib/fieldNaming";
 import { divisionLabel } from "@/lib/division";
 import type {
@@ -11,6 +12,7 @@ import type {
   StoredPipelineEntry,
   PipelineScope,
 } from "@/lib/pipelineConfig";
+import { withExclusion } from "@/lib/pipelineConfig";
 
 /**
  * 🔴 ITEM K — SCOPE IS "WHICH PICKER LISTS THIS PIPELINE", AND THE SCREEN NOW
@@ -162,6 +164,8 @@ export default function PipelineAdmin({
   onConfigSaved?: (
     folders: Record<string, string[]>,
     exclusions: Record<string, string[]>,
+    /** ROUND 176 — the pipelines with no Clients-sidebar tab, built like the payload's map. */
+    sidebarHidden: Record<string, true>,
   ) => void;
   /**
    * 🔴 ITEM T — how many records in this pipeline hold a value in these fields.
@@ -310,7 +314,14 @@ export default function PipelineAdmin({
       const res = await fetch("/api/admin/pipelines", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...ssoHeader() },
-        body: JSON.stringify({ ssoKey: ssoBlob ?? undefined, ...payload }),
+        // 🔴 ROUND 176 — save-config is a whole-map replace, and the server
+        // refuses one sent by a page from another build (a stale tab would
+        // write every entry back without the keys it never knew).
+        body: JSON.stringify({
+          ssoKey: ssoBlob ?? undefined,
+          ...payload,
+          ...(payload.action === "save-config" ? { build: BUILD.round } : {}),
+        }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw apiError(res, j);
@@ -409,6 +420,11 @@ export default function PipelineAdmin({
             .filter(([, e]) => e.exclude?.length)
             .map(([id, e]) => [id, e.exclude as string[]]),
         ),
+        Object.fromEntries(
+          Object.entries(cfg.pipelines)
+            .filter(([, e]) => e.sidebar === false)
+            .map(([id]) => [id, true as const]),
+        ),
       );
     },
     [onConfigSaved],
@@ -468,23 +484,6 @@ export default function PipelineAdmin({
   const isExcluded = (entry: StoredPipelineEntry | undefined, fieldId: string) =>
     !!entry?.exclude?.includes(fieldId);
 
-  /** The entry with one field's exclusion flipped. */
-  const withExclusion = (
-    entry: StoredPipelineEntry,
-    fieldId: string,
-    exclude: boolean,
-  ): StoredPipelineEntry => {
-    const cur = entry.exclude ?? [];
-    const next = exclude
-      ? [...new Set([...cur, fieldId])]
-      : cur.filter((x) => x !== fieldId);
-    // ⚠️ THE KEY IS DROPPED WHEN IT EMPTIES. `exclude: []` on every pipeline is
-    // bytes in a custom value with a size limit, and it makes "this pipeline
-    // hides nothing" read as a configured state rather than the default.
-    return next.length
-      ? { ...entry, exclude: next }
-      : { scope: entry.scope, folders: entry.folders };
-  };
 
   const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
     if (!data) return;
@@ -1524,6 +1523,35 @@ export default function PipelineAdmin({
                       whichever had it. Unset, the Events tab falls back to
                       matching the name &ldquo;Events&rdquo;, which a rename
                       breaks.
+                    </span>
+                  </div>
+                ) : null}
+                {/* 🔴 ROUND 176 — THE CLIENTS-SIDEBAR TAB. Client pipelines
+                    only: the sidebar lists client pipelines and nothing else.
+                    ⚠️ THE SAVE TOUCHES THIS ONE KEY. Scope, folders, exclusions,
+                    group and role go back exactly as they were. */}
+                {entry?.scope === "client" ? (
+                  <div className="pfgroupedit">
+                    <input
+                      id={`pfside-${p.id}`}
+                      type="checkbox"
+                      className="pffbox"
+                      checked={entry.sidebar !== false}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const { sidebar: _was, ...rest } = entry;
+                        void saveEntry(
+                          p.id,
+                          e.target.checked ? rest : { ...rest, sidebar: false },
+                        );
+                      }}
+                    />
+                    <label htmlFor={`pfside-${p.id}`}>Show in the Clients sidebar</label>
+                    <span className="ihint">
+                      Unticked, this pipeline has no tab under Clients in the
+                      sidebar. Its records stay in All clients, Master and
+                      Moves, and it stays in the Pipeline dropdown. This is not
+                      a permission — Admin → Access decides who sees what.
                     </span>
                   </div>
                 ) : null}

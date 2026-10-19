@@ -23,17 +23,25 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 ::-webkit-scrollbar-thumb{background:#d9cfe8;border-radius:10px;border:2px solid var(--canvas);}
 ::-webkit-scrollbar-thumb:hover{background:#c6b8dd;}
 
-.app{display:grid;grid-template-columns:64px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
+.app{display:grid;grid-template-columns:184px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
+/* ROUND 176 — the sidebar is 184px with names, or 64px collapsed (a choice
+   remembered per browser, and forced at ≤640px). The record panel and every
+   dialog are position:fixed, so this track is the only width it costs. */
+.app.railcollapsed{grid-template-columns:64px minmax(0,1fr);}
 
 /* rail */
-.rail{background:linear-gradient(180deg,var(--plum-deep),var(--plum));display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:5px;}
-.rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,var(--gold),#f6c079);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--plum-deep);font-size:16px;margin-bottom:14px;flex:none;box-shadow:0 3px 10px rgba(0,0,0,.3);}
+/* 🔴 ROUND 176 · M5 — THE RAIL SCROLLS. It had no overflow and `.app` is
+   overflow:hidden, so once the Clients entries were added the GHL note and the
+   build stamp were CLIPPED off a short iframe, not scrolled to. min-height:0
+   is what lets a grid child shrink below its content and scroll. */
+.rail{background:linear-gradient(180deg,var(--plum-deep),var(--plum));display:flex;flex-direction:column;align-items:stretch;padding:16px 10px;gap:3px;overflow-y:auto;overflow-x:hidden;min-height:0;}
+.rail .logo{align-self:center;width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,var(--gold),#f6c079);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--plum-deep);font-size:16px;margin-bottom:14px;flex:none;box-shadow:0 3px 10px rgba(0,0,0,.3);}
 .rail button{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.6);position:relative;transition:background .14s,color .14s;}
 .rail button svg{width:19px;height:19px;}
 .rail button:hover{color:#fff;background:rgba(255,255,255,.08);}
 .rail button.active{background:rgba(255,255,255,.16);color:#fff;}
-.rail button.active::before{content:"";position:absolute;left:-13px;width:3px;height:24px;background:var(--gold);border-radius:0 3px 3px 0;}
-.rail .railnote{margin-top:auto;font-size:9px;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.45);border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:4px 6px;}
+.rail button.active::before{content:"";position:absolute;left:-10px;top:50%;margin-top:-12px;width:3px;height:24px;background:var(--gold);border-radius:0 3px 3px 0;}
+.rail .railnote{margin-top:auto;align-self:center;flex:none;font-size:9px;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:4px 6px;}
 .openghl{display:inline-flex;align-items:center;gap:7px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:600;transition:background .12s;}
 .openghl:hover{background:var(--plum-mid);}
 .openghl svg{width:14px;height:14px;}
@@ -79,8 +87,11 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 .statbtn.on{border-color:var(--plum);background:var(--plum-soft);box-shadow:0 0 0 2px var(--plum-soft);}
 
 /* The build stamp — deliberately quiet, deliberately always there. */
-.railbuild{margin-top:4px;font-size:9px;letter-spacing:.06em;text-align:center;
-  color:var(--ink-3);opacity:.75;user-select:all;cursor:default;}
+/* ⚠️ ROUND 176 · M6 — WHITE AT .72, NOT --ink-3. --ink-3 is a text colour for
+   a LIGHT surface; on the dark rail it measured 3.04:1. Every rail row now
+   uses the same white-on-plum, ≥4.8:1 at its worst (hover over --plum). */
+.railbuild{margin-top:4px;flex:none;font-size:9px;letter-spacing:.06em;text-align:center;
+  color:rgba(255,255,255,.72);user-select:all;cursor:default;}
 /* The excluded-count, beside the number it is excluded from. */
 .vsub{font-size:12px;font-weight:600;color:var(--ink-3);}
 /* The master view's tile row scrolls with the page rather than pinning. */
@@ -1121,11 +1132,14 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 /* ── ITEM 13: the rail is a SECTION switch (Clients / Caregivers) ─────────
    Caregiver recruitment is different work from client enrolment, so the split
    is top-level rather than another tab beside List/Board. */
-.rail .railsec{display:flex;flex-direction:column;align-items:center;gap:5px;width:100%;height:auto;flex:none;padding:11px 4px;background:transparent;border:0;border-radius:10px;color:var(--ink-3);cursor:pointer;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:.02em;transition:background .12s,color .12s;}
+.rail .railsec{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;width:100%;height:auto;flex:none;padding:8px 10px;background:transparent;border:0;border-radius:10px;color:rgba(255,255,255,.72);cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;letter-spacing:.01em;transition:background .12s,color .12s;}
+/* Collapsed: icon over a short label, which is the rail as it was before 176. */
+.rail.collapsed .railsec{flex-direction:column;justify-content:center;gap:5px;padding:11px 2px;font-size:9.5px;font-weight:700;}
 .rail .railsec svg{width:19px;height:19px;}
-.rail .railsec:hover{color:var(--plum);background:var(--plum-soft);}
-.rail .railsec.active{color:#fff;background:var(--plum);}
-.rail .railsec.active:hover{background:var(--plum-mid);}
+/* ⚠️ A DARK HOVER. The old one was a light --plum-soft pill on a dark column. */
+.rail .railsec:hover{color:#fff;background:rgba(255,255,255,.08);}
+.rail .railsec.active{color:#fff;background:rgba(255,255,255,.16);}
+.rail .railsec.active:hover{background:rgba(255,255,255,.2);}
 
 /* ── ITEM 15: admin ACTIONS sit below the sections (Import / Access) ──────
    A hairline and a caption rather than a third section heading: these are
@@ -1135,8 +1149,43 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    never set a height, so every rail icon was laid out at 19x1px and had been
    invisible since the sections landed. Adding Import and Access here would
    have shipped two more invisible icons. */
-.rail .raildiv{width:26px;height:1px;background:rgba(255,255,255,.18);margin:9px 0 4px;flex:none;}
-.rail .raillabel{font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);flex:none;}
+.rail .raildiv{width:26px;height:1px;background:rgba(255,255,255,.18);margin:9px 0 4px;flex:none;align-self:center;}
+.rail .raillabel{font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.72);flex:none;align-self:center;}
+
+/* ═══ ROUND 176 — THE CLIENTS HEADING AND ITS ENTRIES ═══════════════════════
+   🔴 THE HEADING IS AN <h2>, NOT A BUTTON. It is styled like .raillabel and
+   has no cursor, no hover and no active state, because it does nothing. The
+   entries are `.railpipe`, deliberately NOT `.railsec`: the proofs address the
+   sections through `.railsec`, and an entry is not a section. */
+.rail .railclients{display:flex;flex-direction:column;gap:2px;flex:none;}
+.rail .railhead{margin:2px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;color:rgba(255,255,255,.72);cursor:default;}
+.rail .railpipe{display:flex;align-items:center;gap:8px;width:100%;height:32px;flex:none;
+  padding:0 8px 0 12px;background:transparent;border:0;border-radius:9px;
+  color:rgba(255,255,255,.72);cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;
+  text-align:left;transition:background .12s,color .12s;}
+.rail .railpipe:hover{color:#fff;background:rgba(255,255,255,.08);}
+.rail .railpipe.active{color:#fff;background:rgba(255,255,255,.16);}
+/* F3 — a long name is cut with an ellipsis; the full name is in its title. */
+.rail .railpipename{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rail .railpipecount{flex:none;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;}
+.rail .railpipeini{display:none;}
+/* D4 — "didn't load", in gold so it reads as a warning and not as a zero. */
+.rail .railpipe.failed .railpipecount{color:var(--gold);}
+.rail .railpipenote{margin:0 8px 4px 12px;font-size:10.5px;line-height:1.4;color:rgba(255,255,255,.72);}
+/* C4 — the entries' own height, so the list does not jump when they arrive. */
+.rail .railskel{height:32px;flex:none;margin:0 4px;border-radius:9px;background:rgba(255,255,255,.06);}
+.rail .railcollapse{width:100%;height:24px;flex:none;margin-top:6px;font-size:13px;font-weight:700;
+  color:rgba(255,255,255,.72);border-radius:7px;}
+.rail .railcollapse:disabled{cursor:not-allowed;opacity:.5;}
+/* Collapsed: the heading stays for screen readers but leaves the eye; each
+   entry shows its initials, and the full name stays in title and aria-label. */
+.rail.collapsed .railhead,
+.rail.collapsed .railpipenote{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;margin:0;}
+.rail.collapsed .railpipe{justify-content:center;padding:0 2px;height:34px;}
+.rail.collapsed .railpipename,
+.rail.collapsed .railpipecount{display:none;}
+.rail.collapsed .railpipeini{display:block;font-size:10px;font-weight:800;letter-spacing:.02em;white-space:nowrap;}
 
 /* ITEM B — the "organisation, not security" line beside the upload control.
    Deliberately not an alert box: it is a standing fact about GoHighLevel media

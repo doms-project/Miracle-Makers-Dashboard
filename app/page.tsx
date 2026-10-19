@@ -79,6 +79,14 @@ import ReferredBy from "@/components/ReferredBy";
 import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
 import { isUserIdListField } from "@/lib/editable";
 import { divisionLabel } from "@/lib/division";
+import {
+  selectableFor,
+  sidebarModel,
+  pickClientPipeline,
+  selectionAfterHide,
+  restoreRemembered,
+  REMEMBERED_ENTRY_KEY,
+} from "@/lib/clientSidebar";
 
 const LOCATION_ID =
   process.env.NEXT_PUBLIC_GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X";
@@ -208,12 +216,6 @@ const COLUMNS: { key: SortKey; label: string }[] = [
 ];
 
 // ---- small inline icons (ported from the design) ----
-const IconGrid = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <path d="M3 9h18M9 4v16" />
-  </svg>
-);
 const IconList = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M4 6h16M4 12h16M4 18h16" />
@@ -1709,6 +1711,16 @@ export default function Dashboard() {
   const [homePipelineIds, setHomePipelineIds] = useState<string[]>([]);
   const [scope, setScope] = useState<string>("all"); // "all" | "shared" | <division>
   const [adminPipeline, setAdminPipeline] = useState<string>("all");
+  // 🔴 ROUND 176 — pipelines whose Clients-sidebar tab an admin turned off.
+  // UNDEFINED until a payload says otherwise, and undefined means SHOW THEM
+  // ALL: a config that could not be read must never empty the sidebar. Only
+  // the tab — records, Master, Moves and the toolbar dropdown are unaffected.
+  const [pipelineSidebarHidden, setPipelineSidebarHidden] = useState<
+    Record<string, true> | undefined
+  >(undefined);
+  // The sidebar's collapse, remembered per browser. Forced on at ≤640px.
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [railNarrow, setRailNarrow] = useState(false);
   // Multi-pipeline metadata (v2) — drives the Move dialog.
   const [pipelines, setPipelines] = useState<{ id: string; name: string }[]>([]);
   const [stagesByPipeline, setStagesByPipeline] = useState<
@@ -2070,6 +2082,9 @@ export default function Dashboard() {
         setHomePipelineIds(body.viewer.homePipelineIds);
       setCanSeeMaster(!!body.viewer?.canSeeMaster);
       setFailedPipelines(body.failedPipelines || []);
+      // ⚠️ SET UNCONDITIONALLY. Absent means the config read failed, and the
+      // sidebar then shows every pipeline rather than keeping a stale answer.
+      setPipelineSidebarHidden(body.pipelineSidebarHidden);
     } catch (e) {
       if (!isCurrent()) return;
       setError({
@@ -2620,11 +2635,10 @@ export default function Dashboard() {
   // and these options are built from the viewer's OWN home pipelines. An admin
   // gets the full selected set (they legitimately see everything); a rep gets
   // only theirs, so the control can never name a pipeline they hold nothing in.
-  const selectablePipelines = useMemo(() => {
-    if (isAdminViewer) return pipelines;
-    const home = new Set(homePipelineIds);
-    return pipelines.filter((p) => home.has(p.id));
-  }, [isAdminViewer, pipelines, homePipelineIds]);
+  const selectablePipelines = useMemo(
+    () => selectableFor(isAdminViewer, pipelines, homePipelineIds),
+    [isAdminViewer, pipelines, homePipelineIds],
+  );
 
   // Counts come from `data` — the full payload for this viewer — so each option
   // reads "ODP Transfer (83)" and the totals add up to the "All" figure
@@ -5704,6 +5718,122 @@ export default function Dashboard() {
    * DATA. The button already reads "Refreshing…", which is where that belongs.
    */
   const showSpinner = loading && data.length === 0;
+
+  // ═══ ROUND 176 — THE CLIENTS SIDEBAR ═════════════════════════════════════
+  // A heading, "All clients", and one entry per client pipeline the viewer can
+  // pick. Every entry writes the SAME `adminPipeline` the toolbar dropdown
+  // writes — there is no second filter. The rules live in lib/clientSidebar.ts
+  // so round176-proof can drive them without a browser.
+  const sidebar = useMemo(
+    () =>
+      sidebarModel({
+        selectable: selectablePipelines,
+        records: data,
+        hidden: pipelineSidebarHidden,
+        failed: failedPipelines,
+        isExcluded: isReassignRec,
+      }),
+    [selectablePipelines, data, pipelineSidebarHidden, failedPipelines],
+  );
+  /** Before the first payload there is nothing to list: hold the space instead. */
+  const sidebarLoading = loading && pipelines.length === 0;
+
+  // 🔴 E5 — THE ADMIN HID THE PIPELINE YOU ARE STANDING ON. Back to "all", so
+  // the highlight lands on "All clients" instead of on a tab that is gone.
+  // Only a pipeline that was JUST hidden: one picked from the dropdown while
+  // already hidden stays picked — the dropdown offers it on purpose.
+  const hiddenBefore = useRef(pipelineSidebarHidden);
+  useEffect(() => {
+    const before = hiddenBefore.current;
+    hiddenBefore.current = pipelineSidebarHidden;
+    setAdminPipeline((cur) => selectionAfterHide(cur, before, pipelineSidebarHidden));
+  }, [pipelineSidebarHidden]);
+
+  // E4 — THE LAST ENTRY, REMEMBERED PER BROWSER. Same pattern as
+  // mm.openSections: try/catch, because a third-party iframe can have storage
+  // blocked, and then this is simply "all" every time. Restored ONCE, after
+  // the first payload, and validated: an id that is no longer selectable, or
+  // that has since been hidden, falls back to "all".
+  const restoredEntry = useRef(false);
+  useEffect(() => {
+    if (restoredEntry.current || pipelines.length === 0) return;
+    restoredEntry.current = true;
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(REMEMBERED_ENTRY_KEY);
+    } catch {
+      /* storage blocked — "all" */
+    }
+    const id = restoreRemembered(stored, selectablePipelines, pipelineSidebarHidden);
+    if (id !== "all") setAdminPipeline(id);
+  }, [pipelines.length, selectablePipelines, pipelineSidebarHidden]);
+  useEffect(() => {
+    if (!restoredEntry.current) return;
+    try {
+      window.localStorage.setItem(REMEMBERED_ENTRY_KEY, adminPipeline);
+    } catch {
+      /* not fatal — the choice still holds for this session */
+    }
+  }, [adminPipeline]);
+
+  // Collapse: a choice remembered per browser, and forced at ≤640px where a
+  // 184px sidebar would leave the board no room.
+  useEffect(() => {
+    try {
+      setRailCollapsed(window.localStorage.getItem("mm.railCollapsed") === "1");
+    } catch {
+      /* storage blocked — expanded */
+    }
+    const mq = window.matchMedia("(max-width: 640px)");
+    const sync = () => setRailNarrow(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((c) => {
+      const next = !c;
+      try {
+        window.localStorage.setItem("mm.railCollapsed", next ? "1" : "0");
+      } catch {
+        /* not fatal */
+      }
+      return next;
+    });
+  }, []);
+  const railIsCollapsed = railCollapsed || railNarrow;
+
+  /** One sidebar click: every reset in one batch, decided by the lib. */
+  const pickEntry = useCallback(
+    (id: string) => {
+      const n = pickClientPipeline(
+        {
+          view,
+          adminPipeline,
+          scope,
+          stage,
+          srcF,
+          office,
+          clientFocus,
+          q,
+          selPipelineId: selected ? selected.pipelineId : null,
+          selIsClient: !!selected && data.some((r) => r.id === selected.id),
+        },
+        id,
+      );
+      setView(n.view as typeof view);
+      setAdminPipeline(n.adminPipeline);
+      setScope(n.scope);
+      setStage(n.stage);
+      setSrcF(n.srcF);
+      setOffice(n.office);
+      setClientFocus(n.clientFocus);
+      if (n.closeRecord) setSelId(null);
+    },
+    [view, adminPipeline, scope, stage, srcF, office, clientFocus, q, selected, data],
+  );
+  /** Exactly one lit entry, and only while the client section is on screen. */
+  const entryActive = (id: string) => railWhere === "clients" && adminPipeline === id;
   /**
    * pipelineId → records held in this tab, across BOTH families.
    *
@@ -5779,8 +5909,8 @@ export default function Dashboard() {
   const cgStaleError = cgErr && cgData.length > 0 ? cgErr : null;
 
   return (
-    <div className="app">
-      <nav className="rail">
+    <div className={railIsCollapsed ? "app railcollapsed" : "app"}>
+      <nav className={railIsCollapsed ? "rail collapsed" : "rail"}>
         <div className="logo">M</div>
         {/* ITEM 13 — the rail is now a SECTION switch, not a single badge.
             Caregiver recruitment is different work from client enrolment: a
@@ -5788,15 +5918,68 @@ export default function Dashboard() {
             that should ever mix. Making that the top-level split is what makes
             the separation obvious to the person using it, not just true in the
             data. */}
-        <button
-          className={railWhere === "clients" ? "railsec active" : "railsec"}
-          title="Client enrolments"
-          type="button"
-          onClick={() => setView("board")}
-        >
-          <IconGrid />
-          <span>Clients</span>
-        </button>
+        {/* 🔴 ROUND 176 — CLIENTS IS A HEADING NOW, NOT A BUTTON. The client
+            pipelines are listed under it, each one a shortcut that writes the
+            same `adminPipeline` the toolbar dropdown writes. The heading is an
+            <h2> inside a labelled group: read by a screen reader, never
+            clickable, never a tab stop. "All clients" comes first because the
+            heading is no longer the way back to the combined view. */}
+        <div className="railclients" role="group" aria-labelledby="railhead-clients">
+          <h2 id="railhead-clients" className="railhead">
+            Clients
+          </h2>
+          <button
+            type="button"
+            className={entryActive("all") ? "railpipe active" : "railpipe"}
+            aria-current={entryActive("all") ? "page" : undefined}
+            title="All clients"
+            aria-label={`All clients (${sidebar.all.count})`}
+            onClick={() => pickEntry("all")}
+          >
+            <span className="railpipeini" aria-hidden="true">
+              All
+            </span>
+            <span className="railpipename">All clients</span>
+            <span className="railpipecount">{sidebarLoading ? "" : sidebar.all.count}</span>
+          </button>
+          {/* D3 — "All clients" can be more than the entries add up to. Say
+              how much of that is records shared with you from elsewhere. */}
+          {sidebar.all.shared > 0 ? (
+            <div className="railpipenote">includes {sidebar.all.shared} shared</div>
+          ) : null}
+          {sidebarLoading
+            ? [0, 1, 2].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
+            : sidebar.entries.map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  className={
+                    (entryActive(e.id) ? "railpipe active" : "railpipe") +
+                    (e.failed ? " failed" : "")
+                  }
+                  aria-current={entryActive(e.id) ? "page" : undefined}
+                  title={e.failed ? `${e.name} — didn't load` : e.name}
+                  aria-label={
+                    e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
+                  }
+                  onClick={() => pickEntry(e.id)}
+                >
+                  <span className="railpipeini" aria-hidden="true">
+                    {e.initials}
+                  </span>
+                  <span className="railpipename">{e.name}</span>
+                  {/* D4 — a failed pipeline is not an empty one. */}
+                  <span className="railpipecount">{e.failed ? "—" : e.count}</span>
+                </button>
+              ))}
+          {sidebar.allHidden ? (
+            <div className="railpipenote">
+              No client pipelines are shown in the sidebar. An admin can change
+              this on Pipelines.
+            </div>
+          ) : null}
+        </div>
+        <div className="raildiv" aria-hidden="true" />
         <button
           className={railWhere === "caregivers" ? "railsec active" : "railsec"}
           title="Caregiver, DSP and staff applicants"
@@ -5927,6 +6110,23 @@ export default function Dashboard() {
         <div className="railbuild" title={`Round ${BUILD.round} — ${BUILD.summary}`}>
           {BUILD_LABEL}
         </div>
+        <button
+          type="button"
+          className="railcollapse"
+          aria-pressed={railIsCollapsed}
+          aria-label={railIsCollapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+          title={
+            railNarrow
+              ? "The sidebar stays collapsed on a narrow screen"
+              : railIsCollapsed
+                ? "Expand the sidebar"
+                : "Collapse the sidebar"
+          }
+          disabled={railNarrow}
+          onClick={toggleRail}
+        >
+          {railIsCollapsed ? "»" : "«"}
+        </button>
       </nav>
 
       <div className="main">
@@ -6489,9 +6689,14 @@ export default function Dashboard() {
               were independent ANDs — so "Show: ODP" + "Pipeline: OLTL Transfer"
               was selectable and could satisfy nothing. Two controls that can
               contradict each other are worse than one, and Pipeline is strictly
-              more precise. Reps keep it because they have no pipeline selector,
-              and their "Shared with me" option expresses something no pipeline
-              filter can. */}
+              more precise. Reps keep it because their "Shared with me" option
+              expresses something no pipeline filter can.
+              ⚠️ ROUND 176 · M7 — THIS USED TO SAY "reps have no pipeline
+              selector", AND THAT WAS FALSE. A rep holding more than one home
+              pipeline gets the Pipeline select below too, so "Show: ODP" with
+              "Pipeline: OLTL" can satisfy nothing for a rep as well. The
+              sidebar entries reset this to "all" when clicked; the two
+              dropdowns can still be combined by hand, as before. */}
           {!isAdminViewer &&
           (scopeOptions.divisions.length > 1 || scopeOptions.anyShared) ? (
             <div className="officefilter">
@@ -7210,9 +7415,11 @@ export default function Dashboard() {
                 // the admin screen now reaches it without a reload.
                 // ITEM S, now carrying item Q's exclusions too — a tick and an
                 // untick both have to reach the record panel without a reload.
-                onConfigSaved={(folders, exclusions) => {
+                onConfigSaved={(folders, exclusions, sidebarHidden) => {
                   setPipelineFolders(folders);
                   setPipelineExclusions(exclusions);
+                  // ROUND 176 — an untick removes the tab now, not on reload.
+                  setPipelineSidebarHidden(sidebarHidden);
                 }}
               />
             </div>

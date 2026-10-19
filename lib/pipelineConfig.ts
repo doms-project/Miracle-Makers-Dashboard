@@ -146,6 +146,24 @@ export interface StoredPipelineEntry {
    * of this config could resolve.
    */
   role?: "events";
+  /**
+   * 🔴 SHOWN IN THE CLIENTS SIDEBAR? — round 176.
+   *
+   * `false` takes this pipeline's tab out of the Clients sidebar, and does
+   * nothing else: its records stay in "All clients", Master and Moves, and it
+   * stays in the toolbar Pipeline dropdown. It is navigation, not access — the
+   * server sends exactly what it sent before.
+   *
+   * ⚠️ AN EXCLUSION, NOT AN INCLUSION, like `exclude`. Absent means shown, so a
+   * pipeline created tomorrow gets a tab without anybody remembering to tick
+   * one, and the default costs no bytes in a value with a length limit. The
+   * parser keeps ONLY `false`; `true` is the default and is never stored.
+   *
+   * 🔴 WHY STORED, AND NOT A NAME MATCH OR A DEPLOYMENT FLAG. This repo runs
+   * as two dashboards on two sub-accounts. Each account carries its own
+   * answer here, set by its own admin, and a rename changes nothing.
+   */
+  sidebar?: false;
 }
 
 export interface StoredPipelineConfig {
@@ -278,6 +296,11 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
     if (exclude.length) base.exclude = exclude;
     if (group) base.group = group;
     if (role) base.role = role;
+    // 🔴 ROUND 176 — THE PARSER IS THE ALLOW-LIST, SO IT MUST LEARN THIS. Every
+    // read, every save and the read-back's comparison go through here; a key
+    // it drops is a key `sameConfig` cannot see go missing, and a hidden
+    // pipeline would quietly come back. Only `false` is kept — see the field.
+    if (e.sidebar === false) base.sidebar = false;
     pipelines[id] = base;
   }
   const folderNames: Record<string, string> = {};
@@ -288,6 +311,31 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
       if (id && n) folderNames[id] = n;
     }
   return { seeded: rec.seeded === true, pipelines, folderNames };
+}
+
+/**
+ * The entry with one field's exclusion flipped.
+ *
+ * 🔴 ROUND 176 · M3 — DROP `exclude` AND NOTHING ELSE. In PipelineAdmin.tsx this
+ * rebuilt the entry as `{ scope, folders }` when the list emptied, which threw
+ * away the pipeline's Recruiting group and Events role — and would have thrown
+ * away its Clients-sidebar setting, so un-hiding the last field un-hid the tab.
+ * Moved here, pure, so a proof can hold it to that.
+ */
+export function withExclusion(
+  entry: StoredPipelineEntry,
+  fieldId: string,
+  exclude: boolean,
+): StoredPipelineEntry {
+  const cur = entry.exclude ?? [];
+  const next = exclude ? [...new Set([...cur, fieldId])] : cur.filter((x) => x !== fieldId);
+  // ⚠️ THE KEY IS DROPPED WHEN IT EMPTIES. `exclude: []` on every pipeline is
+  // bytes in a custom value with a size limit, and it makes "this pipeline
+  // hides nothing" read as a configured state rather than the default.
+  if (next.length) return { ...entry, exclude: next };
+  const { exclude: _gone, ...rest } = entry;
+  void _gone;
+  return rest;
 }
 
 export function serialisePipelineConfig(c: StoredPipelineConfig): string {

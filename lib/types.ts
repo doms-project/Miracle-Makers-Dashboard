@@ -196,6 +196,12 @@ export interface OpportunitiesResponse {
   /** ITEM 1 — pipelines explicitly marked "staff". Absent = caregiver. */
   pipelineGroups?: Record<string, "caregiver" | "staff">;
   /**
+   * ROUND 176 — pipelines whose Clients-sidebar tab an admin turned off.
+   * Only hidden ones. ABSENT means the config could not be read: show them all.
+   * Navigation only — it never narrows `records` or `pipelines`.
+   */
+  pipelineSidebarHidden?: Record<string, true>;
+  /**
    * 🔴 ROUND 155 — HOW MANY PIPELINES ARE NOT IN `pipelines`.
    *
    * `pipelines` is now scoped to what this viewer holds a grant for, plus the
