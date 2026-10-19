@@ -34,6 +34,7 @@ import {
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
+import { BUILD, BUILD_LABEL } from "@/lib/build";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -363,6 +364,8 @@ interface Body {
   folders?: string[];
   // save-config
   config?: unknown;
+  /** ROUND 176 — the page's BUILD.round; save-config refuses a mismatch. */
+  build?: string;
   // delete-pipeline
   pipelineId?: string;
   // create-section / create-field
@@ -555,6 +558,31 @@ export async function POST(request: Request) {
 
 
       case "save-config": {
+        // 🔴 ROUND 176 — A PAGE FROM ANOTHER BUILD MAY NOT SAVE THE WHOLE MAP.
+        //
+        // This save REPLACES the stored map, and a page only sends the keys
+        // its own build knows. A tab left open from before a field existed
+        // (round 176's `sidebar` is the case that forced this) would write
+        // every entry back without it — every hidden pipeline would quietly
+        // reappear, and the read-back would agree, because that page's config
+        // never had the field to compare. So the page names its build and a
+        // mismatch is refused before anything is read or written.
+        //
+        // ⚠️ A REFUSAL, NOT AN ERROR: nothing was changed, and the fix is a
+        // reload. An absent build is a mismatch — it is exactly the old tab.
+        if (String(body.build ?? "") !== BUILD.round)
+          return NextResponse.json(
+            {
+              error:
+                `This page is from an older version of the dashboard ` +
+                `(${body.build ? `v${String(body.build).slice(0, 12)}` : "unknown"}; ` +
+                `the server is ${BUILD_LABEL}). Nothing was saved. Reload the page, ` +
+                `then make the change again.`,
+              status: 409,
+              refusal: true,
+            } as ApiError,
+            { status: 409 },
+          );
         const next = parsePipelineConfig(
           typeof body.config === "string" ? body.config : JSON.stringify(body.config ?? ""),
         );

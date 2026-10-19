@@ -556,7 +556,12 @@ ok("🔴 logging a touch makes the open drawer re-read its notes",
 console.log("\n13 · ⚠️ EVERY VISIT WAS A FULL LOAD AND UP TO 60 NOTE READS");
 const fullLoads = () => appCalls.filter((c) => /\/api\/referrals\?touch=auto/.test(c.url)).length;
 const before13 = fullLoads();
-await rail("Clients");
+// ⚠️ ROUND 176 — THERE IS NO "Clients" RAIL BUTTON ANY MORE. It became a
+// non-clickable heading with the client pipelines under it, "All clients"
+// first, and `rail()` only clicks `.railsec` sections — so this step now
+// leaves Referrals the way a user does: through the "All clients" entry. The
+// step's job is unchanged: go somewhere else and come back.
+await frame.click('.railpipe[title="All clients"]');
 await page.waitForTimeout(600);
 await rail("Referrals");
 await frame.waitForSelector('tr[aria-label^="Open "]', { timeout: 30000 });

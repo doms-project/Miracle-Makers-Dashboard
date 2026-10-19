@@ -71,6 +71,13 @@ async function buildResponse(
   let pipelineExclusions: Record<string, string[]> | undefined;
   // 🔴 ITEM 1 — the recruiting group, so the switcher filters at SOURCE.
   let pipelineGroups: Record<string, "caregiver" | "staff"> | undefined;
+  // 🔴 ROUND 176 — WHICH PIPELINES HAVE NO CLIENTS-SIDEBAR TAB. The browser
+  // learns the stored config only through maps like these, so the setting
+  // travels the same way. ⚠️ UNDEFINED WHEN THE CONFIG CANNOT BE READ, and the
+  // sidebar reads undefined as "show every pipeline" — an outage must never
+  // empty the sidebar. ⚠️ AND IT FILTERS NOTHING HERE: `records` and
+  // `pipelines` are exactly what they were before the setting existed.
+  let pipelineSidebarHidden: Record<string, true> | undefined;
   try {
     const cfg = await getPipelineConfig();
     pipelineFolders = Object.fromEntries(
@@ -92,11 +99,18 @@ async function buildResponse(
         .filter(([, e]) => e.exclude?.length)
         .map(([id, e]) => [id, e.exclude as string[]]),
     );
+    // ⚠️ ONLY THE HIDDEN ONES, like `pipelineGroups`. Absent means shown.
+    pipelineSidebarHidden = Object.fromEntries(
+      Object.entries(cfg.pipelines)
+        .filter(([, e]) => e.sidebar === false)
+        .map(([id]) => [id, true as const]),
+    );
   } catch {
     pipelineFolders = undefined;
     folderNames = undefined;
     pipelineExclusions = undefined;
     pipelineGroups = undefined;
+    pipelineSidebarHidden = undefined;
   }
 
   const meta = {
@@ -106,6 +120,7 @@ async function buildResponse(
     pipelineFolders,
     pipelineExclusions,
     pipelineGroups,
+    pipelineSidebarHidden,
     folderNames,
     pipelines,
     stagesByPipeline,

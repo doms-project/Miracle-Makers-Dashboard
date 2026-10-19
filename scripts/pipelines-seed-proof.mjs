@@ -15,6 +15,9 @@
 // ---------------------------------------------------------------------------
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+// The build the page would send — read from lib/build.ts, not restated here.
+const BUILD = { round: /round: "([^"]+)"/.exec(readFileSync("lib/build.ts", "utf8"))[1] };
 
 const LOC = "loc_test";
 const WIF = "1JFUFsjPXNFzMW18dYSe"; // Website Intent Form
@@ -214,6 +217,10 @@ const r = await fetch(`http://127.0.0.1:${PORT}/api/admin/pipelines`, {
   headers: { "Content-Type": "application/json" },
   // The screen sends what it RENDERS — and it no longer renders SYS at all.
   body: JSON.stringify({
+    // ⚠️ ROUND 176 — save-config refuses a save from another build (a stale
+    // tab would write the map back without keys it never knew), so the
+    // harness names this build exactly as the Pipelines screen does.
+    build: BUILD.round,
     action: "save-config",
     config: {
       seeded: true,
