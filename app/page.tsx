@@ -1086,6 +1086,14 @@ function CardBody({
           {r.pipelineName}
         </div>
       ) : null}
+      {/* ROUND 178 · ITEM 4 — WHEN THE RECORD WAS CREATED, in Eastern with the
+          zone that applied on that date (EDT or EST), the same as GoHighLevel.
+          `formatEastern` returns "" for a missing or unreadable `createdAt`,
+          and then there is NO line: never today's date, never "Invalid Date".
+          One insertion: this body serves both boards and both drag overlays. */}
+      {formatEastern(r.createdAt) ? (
+        <div className="ccreated">Created {formatEastern(r.createdAt)}</div>
+      ) : null}
       <div className="cf">
         <BlockPill b={r.block} />
         {r.src ? <span className="pill src">{r.src}</span> : null}
@@ -2302,10 +2310,14 @@ export default function Dashboard() {
       (clientSettled || view === "caregivers") &&
       !cgLoaded &&
       !cgTried.current &&
+      // 🔴 ROUND 178 · M1 — NOT WHILE ONE IS RUNNING. A Refresh leg clears
+      // `cgTried` and starts a load; if the first load had failed and the view
+      // changed during that leg, this fired a second ?scope=caregiver beside it.
+      !cgLoading &&
       ssoResolved(sso)
     )
       loadCaregivers();
-  }, [view, clientSettled, cgLoaded, sso.status, sso.blob, loadCaregivers]);
+  }, [view, clientSettled, cgLoaded, cgLoading, sso.status, sso.blob, loadCaregivers]);
 
   // Escape closes the record panel.
   //
@@ -5792,6 +5804,19 @@ export default function Dashboard() {
    * so their sidebar flashed three placeholder rows each time they pressed it.
    */
   const sidebarLoading = !clientSettled;
+  /**
+   * 🔴 ROUND 178 · ITEM 1 — EITHER BOARD LOADING. Refresh runs a two-board
+   * sequence (177 · Q4) on every screen but Recruiting's own order and
+   * Referrals, and its button used to watch only the section on screen — so
+   * on Clients it came back to life the moment the client leg ended, while the
+   * caregiver leg was still running, and a second press started a load in
+   * parallel. The button, its label and every "Try again" read this instead.
+   *
+   * ⚠️ IT ALSO COVERS THE START-UP CAREGIVER LOAD (D8), so for a moment after
+   * the board appears Refresh reads "Refreshing…" with nobody having pressed
+   * it. Accepted: something IS loading, and the button says so.
+   */
+  const refreshing = loading || cgLoading;
 
   // 🔴 E5 — THE ADMIN HID THE PIPELINE YOU ARE STANDING ON. Back to "all", so
   // the highlight lands on "All clients" instead of on a tab that is gone.
@@ -6587,13 +6612,8 @@ export default function Dashboard() {
                       await loadCaregivers();
                     })()
             }
-            disabled={
-              railWhere === "caregivers"
-                ? cgLoading
-                : railWhere === "referrals"
-                  ? refBusy
-                  : loading
-            }
+            // ROUND 178 · ITEM 1 — both legs, not the screen's own section.
+            disabled={railWhere === "referrals" ? refBusy : refreshing}
             title={
               railWhere === "caregivers"
                 ? `Re-read the ${cgNoun.many} from GoHighLevel`
@@ -6603,13 +6623,7 @@ export default function Dashboard() {
             }
           >
             <IconRefresh />
-            {(
-              railWhere === "caregivers"
-                ? cgLoading
-                : railWhere === "referrals"
-                  ? refBusy
-                  : loading
-            )
+            {(railWhere === "referrals" ? refBusy : refreshing)
               ? "Refreshing…"
               : "Refresh"}
           </button>
@@ -6703,7 +6717,9 @@ export default function Dashboard() {
             {staleError.detail ? `${staleError.detail} ` : ""}
             The {data.length} records on screen are from the last load that
             worked — they are still real, just not newer than this failure.{" "}
-            <button type="button" className="linkbtn" onClick={() => load()}>
+            {/* ROUND 178 — not while a load runs: that is the parallel request
+                the Refresh fix closes, by another door. */}
+            <button type="button" className="linkbtn" onClick={() => load()} disabled={refreshing}>
               Try again
             </button>
           </div>
@@ -6736,7 +6752,9 @@ export default function Dashboard() {
             Records from{" "}
             {failedPipelines.length === 1 ? "it are" : "them are"} missing from
             everything on this screen — this is not an empty division.{" "}
-            <button type="button" className="linkbtn" onClick={() => load()}>
+            {/* ROUND 178 — not while a load runs: that is the parallel request
+                the Refresh fix closes, by another door. */}
+            <button type="button" className="linkbtn" onClick={() => load()} disabled={refreshing}>
               Try again
             </button>
           </div>
@@ -7172,7 +7190,7 @@ export default function Dashboard() {
                 {cgLoadFailed.detail ? (
                   <div className="detail">{cgLoadFailed.detail}</div>
                 ) : null}
-                <button className="retry" onClick={loadCaregivers} type="button">
+                <button className="retry" onClick={loadCaregivers} type="button" disabled={refreshing}>
                   Try again
                 </button>
               </div>
@@ -7200,6 +7218,7 @@ export default function Dashboard() {
                     type="button"
                     className="linkbtn"
                     onClick={() => loadCaregivers()}
+                    disabled={refreshing}
                   >
                     Try again
                   </button>
@@ -7227,6 +7246,8 @@ export default function Dashboard() {
                       cgTried.current = false;
                       void loadCaregivers();
                     }}
+                    // ROUND 178 — not while a load runs (see `refreshing`).
+                    disabled={refreshing}
                   >
                     Try again
                   </button>
@@ -8306,7 +8327,7 @@ export default function Dashboard() {
                 {loadFailed.detail ? (
                   <div className="detail">{loadFailed.detail}</div>
                 ) : null}
-                <button className="retry" onClick={load} type="button">
+                <button className="retry" onClick={load} type="button" disabled={refreshing}>
                   Try again
                 </button>
               </div>
@@ -8635,7 +8656,7 @@ export default function Dashboard() {
               {loadFailed.detail ? (
                 <div className="detail">{loadFailed.detail}</div>
               ) : null}
-              <button className="retry" onClick={load} type="button">
+              <button className="retry" onClick={load} type="button" disabled={refreshing}>
                 Try again
               </button>
             </div>
