@@ -302,7 +302,11 @@ const rail = async (name) => {
 
 // ═══ 1 · THE RECRUITING LABEL FOLLOWS THE CHOICE ══════════════════════════
 console.log("\n1 · 🔴 THE HEADING WAS THE STALE HALF — AND SO WAS EVERYTHING COUNTING");
-await rail("Recruiting");
+// ⚠️ ROUND 177 — Recruiting is a heading with entries now; `rail()` clicks
+// `.railsec` sections only, so this opens it through its first entry.
+await frame.waitForSelector('[aria-labelledby="railhead-recruiting"] .railpipe', { timeout: 60000 });
+await frame.click('[aria-labelledby="railhead-recruiting"] .railpipe');
+await page.waitForTimeout(700);
 await frame.waitForSelector(".rechead-h", { timeout: 60000 });
 await frame.waitForFunction(
   () => /\d/.test(document.querySelector(".count")?.textContent || ""), { timeout: 60000 });

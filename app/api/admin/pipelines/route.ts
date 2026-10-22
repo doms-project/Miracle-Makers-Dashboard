@@ -574,9 +574,13 @@ export async function POST(request: Request) {
           return NextResponse.json(
             {
               error:
-                `This page is from an older version of the dashboard ` +
-                `(${body.build ? `v${String(body.build).slice(0, 12)}` : "unknown"}; ` +
-                `the server is ${BUILD_LABEL}). Nothing was saved. Reload the page, ` +
+                // ⚠️ ROUND 177 · R5 — "A DIFFERENT VERSION", not "older". The
+                // check compares builds, so it also fires on a page NEWER than
+                // the server (a tab opened mid-deploy); saying "older" was a
+                // guess about which side moved.
+                `This page is from a different version of the dashboard ` +
+                `(page ${body.build ? `v${String(body.build).slice(0, 12)}` : "unknown"}, ` +
+                `server ${BUILD_LABEL}). Nothing was saved. Reload the page, ` +
                 `then make the change again.`,
               status: 409,
               refusal: true,

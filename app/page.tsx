@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ErrorMessage from "@/components/ErrorMessage";
 import InlineName from "@/components/InlineName";
 import { apiFetch, apiError } from "@/lib/apiFetch";
@@ -80,12 +80,24 @@ import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
 import { isUserIdListField } from "@/lib/editable";
 import { divisionLabel } from "@/lib/division";
 import {
+  recruitingVisible,
+  inGroup,
+  recruitingModel,
+  activeRecruitingPipeline,
+  pickRecruitingPipeline,
+  restoreRememberedCg,
+  recruitingEmptyCause,
+  RECRUITING_EMPTY_LINE,
+  REMEMBERED_CG_KEY,
+} from "@/lib/recruitingSidebar";
+import {
   selectableFor,
   sidebarModel,
   pickClientPipeline,
   selectionAfterHide,
   restoreRemembered,
   REMEMBERED_ENTRY_KEY,
+  RAIL_KEY,
 } from "@/lib/clientSidebar";
 
 const LOCATION_ID =
@@ -1718,9 +1730,15 @@ export default function Dashboard() {
   const [pipelineSidebarHidden, setPipelineSidebarHidden] = useState<
     Record<string, true> | undefined
   >(undefined);
-  // The sidebar's collapse, remembered per browser. Forced on at ≤640px.
-  const [railCollapsed, setRailCollapsed] = useState(false);
+  // 🔴 ROUND 177 · D10 — THE SIDEBAR STARTS COLLAPSED. The width itself is
+  // CSS keyed on `html[data-rail]`, which the inline script in app/layout.tsx
+  // sets before first paint from `mm.rail` (absent = collapsed). This state
+  // only drives the « » button, and starts at the SERVER default so hydration
+  // matches; the layout effect below reads the real choice before paint.
+  const [railPref, setRailPref] = useState<"collapsed" | "expanded">("collapsed");
   const [railNarrow, setRailNarrow] = useState(false);
+  /** ROUND 177 · R3 — the first client load has finished (either way). */
+  const [clientSettled, setClientSettled] = useState(false);
   // Multi-pipeline metadata (v2) — drives the Move dialog.
   const [pipelines, setPipelines] = useState<{ id: string; name: string }[]>([]);
   const [stagesByPipeline, setStagesByPipeline] = useState<
@@ -1899,6 +1917,18 @@ export default function Dashboard() {
   // one place a retry is a person's decision rather than a loop.
   const cgTried = useRef(false);
   const [cgPipeline, setCgPipeline] = useState<string>("all");
+  // 🔴 ROUND 177 · G — THE CAREGIVER RESPONSE'S OWN HIDDEN MAP. Each section
+  // reads the map that arrived with the records it draws, so a config read
+  // that failed in one response cannot overwrite the other's answer.
+  // Undefined = that config read failed = show every recruiting pipeline.
+  const [cgSidebarHidden, setCgSidebarHidden] = useState<Record<string, true> | undefined>(
+    undefined,
+  );
+  // 🔴 ROUND 177 · H — a caregiver pipeline whose search failed. It read as
+  // an empty pipeline before; the loader never kept this.
+  const [cgFailedPipelines, setCgFailedPipelines] = useState<
+    { id: string; name: string; error: string }[]
+  >([]);
   const [cgQuery, setCgQuery] = useState("");
   // ITEM A2/A3 — the caregiver section gets the same controls the client
   // section has, minus the ones that are client concepts (office, county).
@@ -2093,7 +2123,10 @@ export default function Dashboard() {
       });
       // ⚠️ The records stay. See above.
     } finally {
-      if (isCurrent()) setLoading(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setClientSettled(true);
+      }
     }
     // ⚠️ `ssoRef`, not `sso`, so this callback's IDENTITY never changes.
     //
@@ -2221,6 +2254,10 @@ export default function Dashboard() {
       setCgHomeIds(b.viewer?.homePipelineIds || []);
       setCgPipelinesWithheld(b.pipelinesWithheld || 0);
       if (b.pipelineGroups) setPipelineGroups(b.pipelineGroups);
+      // ⚠️ BOTH SET UNCONDITIONALLY, like the client ones: absent means "the
+      // config read failed" / "nothing failed", never "keep the old answer".
+      setCgSidebarHidden(b.pipelineSidebarHidden);
+      setCgFailedPipelines(b.failedPipelines || []);
       setCgLoaded(true);
     } catch (e) {
       if (!isCurrent()) return;
@@ -2246,10 +2283,29 @@ export default function Dashboard() {
     // that is a second full ?scope=caregiver payload for nothing.
   }, []);
 
+  // 🔴 ROUND 177 · D8 — RECRUITING LOADS AT START-UP, AFTER THE CLIENT BOARD.
+  // Both sections' entries and counts are in the sidebar from the first
+  // screen, so the applicants cannot wait until somebody opens Recruiting.
+  //
+  // ⚠️ AFTER, NOT ALONGSIDE: it waits for the first client load to SETTLE
+  // (applied or failed), so it can never delay the board's first paint, and
+  // the two requests never compete for GoHighLevel's 100-per-10s budget at
+  // the slowest moment. `cgTried` keeps it to ONCE per page load — Refresh is
+  // the only thing that clears it.
+  //
+  // ⚠️ SENT FOR EVERYONE, including a viewer with no grant: a recruiter who
+  // OWNS applicants has records without a grant (B5), so nothing on the
+  // client side can know the answer before it arrives. An empty answer is
+  // small and carries a withheld COUNT, never names (round 155).
   useEffect(() => {
-    if (view === "caregivers" && !cgLoaded && !cgTried.current && ssoResolved(sso))
+    if (
+      (clientSettled || view === "caregivers") &&
+      !cgLoaded &&
+      !cgTried.current &&
+      ssoResolved(sso)
+    )
       loadCaregivers();
-  }, [view, cgLoaded, sso.status, sso.blob, loadCaregivers]);
+  }, [view, clientSettled, cgLoaded, sso.status, sso.blob, loadCaregivers]);
 
   // Escape closes the record panel.
   //
@@ -2640,14 +2696,10 @@ export default function Dashboard() {
     [isAdminViewer, pipelines, homePipelineIds],
   );
 
-  // Counts come from `data` — the full payload for this viewer — so each option
-  // reads "ODP Transfer (83)" and the totals add up to the "All" figure
-  // regardless of the other filters.
-  const pipelineCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of data) m.set(r.pipelineId, (m.get(r.pipelineId) || 0) + 1);
-    return m;
-  }, [data]);
+  // ⚠️ ROUND 177 · R1 — `pipelineCounts` IS GONE. It counted every record in
+  // `data`, REASSIGN included, and gave a failed pipeline 0; the dropdown now
+  // reads `sidebar.counts` (lib/clientSidebar.ts), the same numbers the sidebar
+  // shows, for every selectable pipeline, hidden ones included.
 
   const scopeOptions = useMemo(() => {
     const divisions = new Set<string>();
@@ -4074,10 +4126,11 @@ export default function Dashboard() {
     // which the server filtered for this viewer — it names a pipeline they are
     // already looking at records in. Same shape as `shared` on the partner
     // rows: admitted because you hold the RECORD, not the division.
-    const inData = new Set(cgData.map((r) => r.pipelineId));
-    const mine = isAdminViewer
-      ? cgPipelines
-      : cgPipelines.filter((p) => home.has(p.id) || inData.has(p.id));
+    // ⚠️ ROUND 177 — THE RULE NOW LIVES IN lib/recruitingSidebar.ts
+    // (`recruitingVisible`), so the sidebar and this board read ONE rule and
+    // the proof drives it. `home` above is kept for the comment's sake only.
+    void home;
+    const mine = recruitingVisible(isAdminViewer, cgPipelines, cgHomeIds, cgData);
     // 🔴 ROUND 120 · ITEM 1 — THE SWITCHER FILTERS HERE AND NOWHERE ELSE.
     //
     // ⚠️ THIS IS THE SOURCE. `cgActivePipeline` derives from this list, and
@@ -4088,11 +4141,8 @@ export default function Dashboard() {
     // 🔴 THE ALTERNATIVE IS WHAT BROKE 113 AND 114: a predicate every consumer
     // has to remember. The caregiver tile forgot it once and the client board
     // forgot it again. A list that is already filtered cannot be forgotten.
-    if (cgGroup === "all") return mine;
-    return mine.filter(
-      (p) => (pipelineGroups[p.id] === "staff" ? "staff" : "caregiver") === cgGroup,
-    );
-  }, [cgPipelines, cgHomeIds, isAdminViewer, cgGroup, pipelineGroups]);
+    return inGroup(mine, cgGroup, pipelineGroups);
+  }, [cgPipelines, cgHomeIds, cgData, isAdminViewer, cgGroup, pipelineGroups]);
 
   /**
    * 🔴 WHY THE RECRUITING SECTION IS EMPTY — round 121b, item 3.
@@ -4183,12 +4233,11 @@ export default function Dashboard() {
     );
   }, [cgGroup, cgNoun, cgPipelines, pipelineGroups, noRecruitingAccess, cgPipelinesWithheld]);
 
+  // 🔴 ROUND 177 · B7 + F — a pick outside the current group's list is never
+  // drawn (it falls to the default), and the default skips hidden pipelines.
   const cgActivePipeline = useMemo(
-    () =>
-      cgPipeline !== "all"
-        ? cgPipeline
-        : cgVisiblePipelines[0]?.id || "",
-    [cgPipeline, cgVisiblePipelines],
+    () => activeRecruitingPipeline(cgPipeline, cgVisiblePipelines, cgSidebarHidden),
+    [cgPipeline, cgVisiblePipelines, cgSidebarHidden],
   );
 
   const cgStages = useMemo(
@@ -5735,8 +5784,14 @@ export default function Dashboard() {
       }),
     [selectablePipelines, data, pipelineSidebarHidden, failedPipelines],
   );
-  /** Before the first payload there is nothing to list: hold the space instead. */
-  const sidebarLoading = loading && pipelines.length === 0;
+  /**
+   * Before the FIRST payload there is nothing to list: hold the space instead.
+   *
+   * ⚠️ ROUND 177 · R3 — THE FIRST, NOT EVERY ONE. `loading && pipelines.length
+   * === 0` was also true on every Refresh for a viewer who holds no pipeline,
+   * so their sidebar flashed three placeholder rows each time they pressed it.
+   */
+  const sidebarLoading = !clientSettled;
 
   // 🔴 E5 — THE ADMIN HID THE PIPELINE YOU ARE STANDING ON. Back to "all", so
   // the highlight lands on "All clients" instead of on a tab that is gone.
@@ -5776,32 +5831,154 @@ export default function Dashboard() {
     }
   }, [adminPipeline]);
 
-  // Collapse: a choice remembered per browser, and forced at ≤640px where a
-  // 184px sidebar would leave the board no room.
-  useEffect(() => {
+  // ═══ ROUND 177 · D10 — COLLAPSED BY DEFAULT, WITH NO FLASH EITHER WAY ═══
+  // The Next 16 guide's pattern for persisted UI state
+  // (node_modules/next/dist/docs/01-app/02-guides/preventing-flash-before-hydration.md):
+  // app/layout.tsx's inline script sets `html[data-rail]` while the HTML is
+  // still being parsed, and the CSS sizes the rail from that attribute — so a
+  // first paint is already the right width, for the default AND for anyone
+  // who chose expanded. React only follows it.
+  //
+  // ⚠️ THE ATTRIBUTE EFFECT IS DECLARED FIRST ON PURPOSE. On the first commit
+  // it runs before the reader below has loaded the real choice, sees
+  // `railReady` false and does nothing — so the server-default state can never
+  // stamp "collapsed" over an expanded user's attribute, even for a frame.
+  const railReady = useRef(false);
+  const railIsCollapsed = railNarrow || railPref === "collapsed";
+  useLayoutEffect(() => {
+    if (!railReady.current) return;
+    document.documentElement.setAttribute(
+      "data-rail",
+      railIsCollapsed ? "collapsed" : "expanded",
+    );
+  }, [railIsCollapsed]);
+  useLayoutEffect(() => {
+    let pref: "collapsed" | "expanded" = "collapsed";
     try {
-      setRailCollapsed(window.localStorage.getItem("mm.railCollapsed") === "1");
+      if (window.localStorage.getItem(RAIL_KEY) === "expanded") pref = "expanded";
     } catch {
-      /* storage blocked — expanded */
+      /* storage blocked — the default, collapsed */
     }
     const mq = window.matchMedia("(max-width: 640px)");
+    setRailPref(pref);
+    setRailNarrow(mq.matches);
+    railReady.current = true;
+    // ⚠️ RE-APPLIED HERE as well as by the inline script: in development,
+    // Strict Mode's remount resets <html> to the attributes React manages and
+    // drops the one the script set (the guide's "Re-applying attributes").
+    document.documentElement.setAttribute(
+      "data-rail",
+      mq.matches || pref === "collapsed" ? "collapsed" : "expanded",
+    );
     const sync = () => setRailNarrow(mq.matches);
-    sync();
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
   const toggleRail = useCallback(() => {
-    setRailCollapsed((c) => {
-      const next = !c;
+    setRailPref((c) => {
+      const next = c === "collapsed" ? "expanded" : "collapsed";
       try {
-        window.localStorage.setItem("mm.railCollapsed", next ? "1" : "0");
+        window.localStorage.setItem(RAIL_KEY, next);
       } catch {
         /* not fatal */
       }
       return next;
     });
   }, []);
-  const railIsCollapsed = railCollapsed || railNarrow;
+
+  // ═══ ROUND 177 — THE RECRUITING SIDEBAR ══════════════════════════════════
+  // Built from the B5 list (home ∪ pipelines you already hold records in),
+  // split by group, minus hidden — rules in lib/recruitingSidebar.ts.
+  const cgOpenable = useMemo(
+    () => recruitingVisible(isAdminViewer, cgPipelines, cgHomeIds, cgData),
+    [isAdminViewer, cgPipelines, cgHomeIds, cgData],
+  );
+  const cgSidebar = useMemo(
+    () =>
+      recruitingModel({
+        visible: cgOpenable,
+        records: cgData,
+        hidden: cgSidebarHidden,
+        failed: cgFailedPipelines,
+        groups: pipelineGroups,
+      }),
+    [cgOpenable, cgData, cgSidebarHidden, cgFailedPipelines, pipelineGroups],
+  );
+  /** Nothing has come back yet — hold the space (C4's twin). */
+  const cgSidebarLoading = !cgLoaded && !cgErr;
+  const cgEmptyCause = cgSidebarLoading
+    ? null
+    : recruitingEmptyCause({
+        loadFailed: !!cgErr && !cgLoaded,
+        noRecruitingAccess,
+        visibleCount: cgOpenable.length,
+        withheld: cgPipelinesWithheld,
+        allHidden: cgSidebar.allHidden,
+      });
+
+  // 🔴 B7, THE RELOAD HALF — a pick that is no longer in this group's list
+  // (access removed on Refresh, a group change from anywhere) goes back to
+  // the default, so #cgPipeSel's value is always one of its options.
+  useEffect(() => {
+    if (!cgLoaded || cgPipeline === "all") return;
+    if (!cgVisiblePipelines.some((p) => p.id === cgPipeline)) setCgPipeline("all");
+  }, [cgLoaded, cgPipeline, cgVisiblePipelines]);
+  // E5's twin — hiding the pipeline you are on puts you on the default.
+  const cgHiddenBefore = useRef(cgSidebarHidden);
+  useEffect(() => {
+    const before = cgHiddenBefore.current;
+    cgHiddenBefore.current = cgSidebarHidden;
+    setCgPipeline((cur) => selectionAfterHide(cur, before, cgSidebarHidden));
+  }, [cgSidebarHidden]);
+  // E4's twin — `mm.cgPipeline`, restored once after the first caregiver load.
+  const restoredCg = useRef(false);
+  useEffect(() => {
+    if (restoredCg.current || !cgLoaded) return;
+    restoredCg.current = true;
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(REMEMBERED_CG_KEY);
+    } catch {
+      /* storage blocked — the default */
+    }
+    const id = restoreRememberedCg(stored, cgOpenable, cgSidebarHidden);
+    if (id !== "all") {
+      const g = pipelineGroups[id] === "staff" ? "staff" : "caregiver";
+      if (cgGroup !== "all" && cgGroup !== g) setCgGroup(g);
+      setCgPipeline(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cgLoaded]);
+  useEffect(() => {
+    if (!restoredCg.current) return;
+    try {
+      window.localStorage.setItem(REMEMBERED_CG_KEY, cgPipeline);
+    } catch {
+      /* not fatal */
+    }
+  }, [cgPipeline]);
+
+  /** One Recruiting sidebar click — every reset in one batch, from the lib. */
+  const pickCgEntry = useCallback(
+    (id: string) => {
+      const n = pickRecruitingPipeline(
+        { cgGroup, cgView, cgQuery, selPipelineId: selected ? selected.pipelineId : null },
+        id,
+        pipelineGroups,
+      );
+      setView(n.view);
+      setCgPipeline(n.cgPipeline);
+      setCgGroup(n.cgGroup);
+      setCgView(n.cgView);
+      setCgStage(n.cgStage);
+      setCgFocus(n.cgFocus);
+      if (n.closeRecord) setSelId(null);
+    },
+    [cgGroup, cgView, cgQuery, selected, pipelineGroups],
+  );
+  /** Lit only while Recruiting is on screen — `railWhere` has one value, so
+   *  a Clients entry and a Recruiting entry can never both be lit. */
+  const cgEntryActive = (id: string) => railWhere === "caregivers" && cgActivePipeline === id;
 
   /** One sidebar click: every reset in one batch, decided by the lib. */
   const pickEntry = useCallback(
@@ -5909,8 +6086,11 @@ export default function Dashboard() {
   const cgStaleError = cgErr && cgData.length > 0 ? cgErr : null;
 
   return (
-    <div className={railIsCollapsed ? "app railcollapsed" : "app"}>
-      <nav className={railIsCollapsed ? "rail collapsed" : "rail"}>
+    <div className="app">
+      {/* ROUND 177 · D10 — the width is CSS on `html[data-rail]` (see
+          app/layout.tsx), not a class here: a class would only exist after
+          hydration, which is the 184 → 64 frame this round removes. */}
+      <nav className="rail">
         <div className="logo">M</div>
         {/* ITEM 13 — the rail is now a SECTION switch, not a single badge.
             Caregiver recruitment is different work from client enrolment: a
@@ -5931,9 +6111,35 @@ export default function Dashboard() {
           <button
             type="button"
             className={entryActive("all") ? "railpipe active" : "railpipe"}
+            // ROUND 177 — a stable hook by id: titles carry counts now.
+            data-pipeline="all"
             aria-current={entryActive("all") ? "page" : undefined}
-            title="All clients"
-            aria-label={`All clients (${sidebar.all.count})`}
+            // 🔴 ROUND 177 · ADDITION 1 — COLLAPSED (now the default) hides the
+            // count and the notes, so the title carries them: hover still
+            // answers "how many, and why is All bigger than the tabs".
+            // R3 — and no "(0)" while nothing has loaded.
+            title={
+              sidebarLoading
+                ? "All clients"
+                : [
+                    `All clients — ${sidebar.all.count}`,
+                    sidebar.all.inHidden > 0
+                      ? `includes ${sidebar.all.inHidden} in pipelines hidden from the sidebar`
+                      : "",
+                    sidebar.all.shared > 0 ? `includes ${sidebar.all.shared} shared` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+            }
+            aria-label={
+              sidebarLoading
+                ? "All clients"
+                : `All clients (${sidebar.all.count}${
+                    sidebar.all.inHidden > 0
+                      ? `, ${sidebar.all.inHidden} in hidden pipelines`
+                      : ""
+                  }${sidebar.all.shared > 0 ? `, ${sidebar.all.shared} shared` : ""})`
+            }
             onClick={() => pickEntry("all")}
           >
             <span className="railpipeini" aria-hidden="true">
@@ -5947,6 +6153,13 @@ export default function Dashboard() {
           {sidebar.all.shared > 0 ? (
             <div className="railpipenote">includes {sidebar.all.shared} shared</div>
           ) : null}
+          {/* 🔴 ROUND 177 · R2 — an admin has no shared records, so on main the
+              gap left by the hidden ODP pipelines had no explanation at all. */}
+          {sidebar.all.inHidden > 0 ? (
+            <div className="railpipenote">
+              includes {sidebar.all.inHidden} in pipelines hidden from the sidebar
+            </div>
+          ) : null}
           {sidebarLoading
             ? [0, 1, 2].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
             : sidebar.entries.map((e) => (
@@ -5957,8 +6170,9 @@ export default function Dashboard() {
                     (entryActive(e.id) ? "railpipe active" : "railpipe") +
                     (e.failed ? " failed" : "")
                   }
+                  data-pipeline={e.id}
                   aria-current={entryActive(e.id) ? "page" : undefined}
-                  title={e.failed ? `${e.name} — didn't load` : e.name}
+                  title={e.failed ? `${e.name} — didn't load` : `${e.name} — ${e.count}`}
                   aria-label={
                     e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
                   }
@@ -5980,16 +6194,78 @@ export default function Dashboard() {
           ) : null}
         </div>
         <div className="raildiv" aria-hidden="true" />
-        <button
-          className={railWhere === "caregivers" ? "railsec active" : "railsec"}
-          title="Caregiver, DSP and staff applicants"
-          type="button"
-          onClick={() => setView("caregivers")}
-        >
-          <IconPeople />
-          {/* ROUND 120 · ITEM 1 — the section covers both families now. */}
-          <span>Recruiting</span>
-        </button>
+        {/* 🔴 ROUND 177 — RECRUITING IS A HEADING TOO, THE SAME PATTERN AS
+            CLIENTS: an <h2> in a labelled group, never clickable, never a tab
+            stop. Under it, two sub-labels — Caregivers (DSPs on an ODP-only
+            board) and Office staff — each listing only its own pipelines.
+            ⚠️ NO "All" ENTRY (decided). "All applicants" stays where it was,
+            in the board's heading switcher. */}
+        <div className="railclients" role="group" aria-labelledby="railhead-recruiting">
+          <h2 id="railhead-recruiting" className="railhead">
+            Recruiting
+          </h2>
+          {cgSidebarLoading
+            ? [0, 1].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
+            : (["caregiver", "staff"] as const).map((g, gi) => {
+                const list = cgSidebar[g];
+                if (!list.length) return null;
+                return (
+                  <Fragment key={g}>
+                    {/* Collapsed, the sub-labels leave the eye; a hairline
+                        between the two groups is what keeps them apart. */}
+                    {gi === 1 && cgSidebar.caregiver.length ? (
+                      <div className="raildiv railsubdiv" aria-hidden="true" />
+                    ) : null}
+                    <div className="railsub">{recruitingNouns(g, cgOdpOnly).group}</div>
+                    {list.map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        className={
+                          (cgEntryActive(e.id) ? "railpipe active" : "railpipe") +
+                          (e.failed ? " failed" : "")
+                        }
+                        data-pipeline={e.id}
+                        aria-current={cgEntryActive(e.id) ? "page" : undefined}
+                        title={e.failed ? `${e.name} — didn't load` : `${e.name} — ${e.count}`}
+                        aria-label={
+                          e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
+                        }
+                        onClick={() => pickCgEntry(e.id)}
+                      >
+                        <span className="railpipeini" aria-hidden="true">
+                          {e.initials}
+                        </span>
+                        <span className="railpipename">{e.name}</span>
+                        <span className="railpipecount">{e.failed ? "—" : e.count}</span>
+                      </button>
+                    ))}
+                  </Fragment>
+                );
+              })}
+          {/* 🔴 D9 + M1 + M3 — NEVER A HEADING WITH NOTHING UNDER IT. The line
+              says which of the board's causes applies (a failed load first),
+              and "Open Recruiting" is the way in for somebody with no entry:
+              it opens the board's own, longer explanation.
+              ⚠️ ADDITION 1 — the button stays visible COLLAPSED, as an icon
+              with the line in its title, because collapsed is the default. */}
+          {cgEmptyCause ? (
+            <>
+              <div className="railpipenote">{RECRUITING_EMPTY_LINE[cgEmptyCause]}</div>
+              <button
+                type="button"
+                className={railWhere === "caregivers" ? "railopen active" : "railopen"}
+                title={`${RECRUITING_EMPTY_LINE[cgEmptyCause]} Open Recruiting.`}
+                aria-label="Open Recruiting"
+                onClick={() => setView("caregivers")}
+              >
+                <IconPeople />
+                <span className="railopenlabel">Open Recruiting</span>
+              </button>
+            </>
+          ) : null}
+        </div>
+        <div className="raildiv" aria-hidden="true" />
         {/* 🔴 A RAIL SECTION, NOT A TAB INSIDE CLIENTS. A referral partner is
             not an enrolment and not an applicant: it is a third kind of record,
             with its own cadence, its own arithmetic and its own division
@@ -6115,14 +6391,9 @@ export default function Dashboard() {
           className="railcollapse"
           aria-pressed={railIsCollapsed}
           aria-label={railIsCollapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-          title={
-            railNarrow
-              ? "The sidebar stays collapsed on a narrow screen"
-              : railIsCollapsed
-                ? "Expand the sidebar"
-                : "Collapse the sidebar"
-          }
-          disabled={railNarrow}
+          title={railIsCollapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+          // ⚠️ ROUND 177 · I — HIDDEN at ≤640px by CSS, not disabled: a
+          // disabled button never shows its title, so the reason was invisible.
           onClick={toggleRail}
         >
           {railIsCollapsed ? "»" : "«"}
@@ -6178,6 +6449,9 @@ export default function Dashboard() {
                           className={k === cgGroup ? "on" : ""}
                           onClick={() => {
                             setCgGroup(k);
+                            // 🔴 ROUND 177 · B7 — a new group starts on its
+                            // own default pipeline, never the old group's.
+                            setCgPipeline("all");
                             setCgGroupOpen(false);
                           }}
                         >
@@ -6287,8 +6561,18 @@ export default function Dashboard() {
             type="button"
             className="refreshbtn"
             onClick={() =>
+              // 🔴 ROUND 177 · Q4 — BOTH BOARDS, IN SEQUENCE. Since the
+              // sidebar shows Clients AND Recruiting counts on every screen, a
+              // Refresh that re-read one section left the other's numbers
+              // stale. The section on screen goes first; the other starts only
+              // once the first has been APPLIED — never in parallel, which is
+              // what tripped the rate limit when refresh ran on focus.
               railWhere === "caregivers"
-                ? ((cgTried.current = false), loadCaregivers())
+                ? void (async () => {
+                    cgTried.current = false;
+                    await loadCaregivers();
+                    await load();
+                  })()
                 : // 🔴 SECTION-AWARE, AND REFERRALS IS THE THIRD SECTION TO
                   // NEED IT. Falling through to load() here would have re-read
                   // the CLIENT opportunities and left the partner list, the
@@ -6297,7 +6581,11 @@ export default function Dashboard() {
                   // to prevent, one section over.
                   railWhere === "referrals"
                   ? setRefReload((n) => n + 1)
-                  : load()
+                  : void (async () => {
+                      await load();
+                      cgTried.current = false;
+                      await loadCaregivers();
+                    })()
             }
             disabled={
               railWhere === "caregivers"
@@ -6731,10 +7019,17 @@ export default function Dashboard() {
                 value={adminPipeline}
                 onChange={(e) => setAdminPipeline(e.target.value)}
               >
-                <option value="all">All ({data.length})</option>
+                {/* 🔴 ROUND 177 · R1 + ADDITION 2 — THE SIDEBAR'S NUMBERS. This
+                    counted REASSIGN, read "(0)" for a pipeline that failed to
+                    load, and its All was the raw payload length — three ways to
+                    disagree with the sidebar beside it. `sidebar.counts` holds a
+                    count for EVERY selectable pipeline, hidden ones included,
+                    because this dropdown still lists the hidden ones. */}
+                <option value="all">All ({sidebar.all.count})</option>
                 {selectablePipelines.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({pipelineCounts.get(p.id) || 0})
+                    {p.name} (
+                    {sidebar.counts[p.id] == null ? "didn't load" : sidebar.counts[p.id]})
                   </option>
                 ))}
               </select>
@@ -6910,6 +7205,33 @@ export default function Dashboard() {
                   </button>
                 </div>
               ) : null}
+              {/* 🔴 ROUND 177 · H — THE CLIENT BANNER'S TWIN. A caregiver
+                  pipeline whose search failed read as an empty one: no banner,
+                  and "0" beside it in the dropdown. */}
+              {cgFailedPipelines.length ? (
+                <div className="loadwarn">
+                  <b>
+                    {cgFailedPipelines.length === 1
+                      ? `${cgFailedPipelines[0].name} didn't load.`
+                      : `${cgFailedPipelines.length} pipelines didn't load.`}
+                  </b>{" "}
+                  {cgFailedPipelines.length > 1
+                    ? cgFailedPipelines.map((f) => f.name).join(", ") + ". "
+                    : ""}
+                  Its {cgNoun.many} are missing from this list — it is not an
+                  empty pipeline.{" "}
+                  <button
+                    type="button"
+                    className="linkbtn"
+                    onClick={() => {
+                      cgTried.current = false;
+                      void loadCaregivers();
+                    }}
+                  >
+                    Try again
+                  </button>
+                </div>
+              ) : null}
               {/* ITEM 1 — same markup and same classes as the client stats, so
                   the two sections read as one app rather than two. */}
               <div className="stats">
@@ -7077,10 +7399,12 @@ export default function Dashboard() {
                       value={cgActivePipeline}
                       onChange={(e) => setCgPipeline(e.target.value)}
                     >
+                      {/* ROUND 177 · C + H — the sidebar's counts, so the two
+                          agree by construction and a failed pipeline is never 0. */}
                       {cgVisiblePipelines.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} (
-                          {cgData.filter((r) => r.pipelineId === p.id).length})
+                          {cgSidebar.counts[p.id] == null ? "didn't load" : cgSidebar.counts[p.id]})
                         </option>
                       ))}
                     </select>
@@ -7419,7 +7743,10 @@ export default function Dashboard() {
                   setPipelineFolders(folders);
                   setPipelineExclusions(exclusions);
                   // ROUND 176 — an untick removes the tab now, not on reload.
+                  // ROUND 177 — both sections: D7 put caregiver pipelines on
+                  // the same setting, and each section keeps its own map.
                   setPipelineSidebarHidden(sidebarHidden);
+                  setCgSidebarHidden(sidebarHidden);
                 }}
               />
             </div>
@@ -8894,6 +9221,9 @@ export default function Dashboard() {
             if (landedIn) {
               const g = pipelineGroups[landedIn] === "staff" ? "staff" : "caregiver";
               if (cgGroup !== "all" && cgGroup !== g) setCgGroup(g);
+              // ROUND 177 · M9 — and the board, and the highlight, follow the
+              // new applicant to the pipeline it actually landed in.
+              setCgPipeline(landedIn);
             }
             void loadCaregivers();
           }}

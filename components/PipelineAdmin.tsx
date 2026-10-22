@@ -1530,7 +1530,10 @@ export default function PipelineAdmin({
                     only: the sidebar lists client pipelines and nothing else.
                     ⚠️ THE SAVE TOUCHES THIS ONE KEY. Scope, folders, exclusions,
                     group and role go back exactly as they were. */}
-                {entry?.scope === "client" ? (
+                {/* 🔴 ROUND 177 · D7 — CAREGIVER PIPELINES TOO: Recruiting has
+                    sidebar entries now, on the same stored `sidebar: false`.
+                    Never on "none", which is on no board and has no entry. */}
+                {entry?.scope === "client" || entry?.scope === "caregiver" ? (
                   <div className="pfgroupedit">
                     <input
                       id={`pfside-${p.id}`}
@@ -1546,12 +1549,13 @@ export default function PipelineAdmin({
                         );
                       }}
                     />
-                    <label htmlFor={`pfside-${p.id}`}>Show in the Clients sidebar</label>
+                    <label htmlFor={`pfside-${p.id}`}>Show in the sidebar</label>
                     <span className="ihint">
-                      Unticked, this pipeline has no tab under Clients in the
-                      sidebar. Its records stay in All clients, Master and
-                      Moves, and it stays in the Pipeline dropdown. This is not
-                      a permission — Admin → Access decides who sees what.
+                      {entry.scope === "caregiver"
+                        ? "Unticked, this pipeline has no entry under Recruiting in the sidebar. Its applicants stay loaded and it stays in the Recruiting Pipeline dropdown."
+                        : "Unticked, this pipeline has no entry under Clients in the sidebar. Its records stay in All clients, Master and Moves, and it stays in the Pipeline dropdown."}{" "}
+                      This is not a permission — Admin → Access decides who
+                      sees what.
                     </span>
                   </div>
                 ) : null}
@@ -1693,7 +1697,15 @@ export default function PipelineAdmin({
             setScopeAsk(null);
             // ⚠️ `...entry` — the exclusions travel with it. Rebuilt as
             // `{ scope, folders }` they would be silently dropped by a move.
-            void saveEntry(p.id, { ...entry, scope: next });
+            // 🔴 ROUND 177 · R4 — "none" is on no board, so a hidden-tab
+            // setting there means nothing and would quietly come back if the
+            // pipeline were ever returned to a board. It is dropped; a move
+            // between client and caregiver KEEPS it (the same tab, other half).
+            if (next === "none") {
+              const { sidebar: _drop, ...rest } = entry;
+              void _drop;
+              void saveEntry(p.id, { ...rest, scope: next });
+            } else void saveEntry(p.id, { ...entry, scope: next });
           }}
           body={
             <>

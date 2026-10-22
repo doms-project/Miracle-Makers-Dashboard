@@ -224,11 +224,20 @@ const CG_PAYLOAD = {
   viewer: { authenticated: true, isAdmin: true, role: "admin", userName: "Chris Tester",
             homePipelineIds: ["pipe_cg"], canSeeMaster: true, total: CG_RECORDS.length },
 };
-await page.route("**/api/opportunities*", (route) =>
-  route.fulfill({ status: 200, contentType: "application/json",
-    body: JSON.stringify(
-      /scope=caregiver/.test(route.request().url()) ? CG_PAYLOAD : CLIENT_PAYLOAD,
-    ) }));
+// ⚠️ ROUND 177 · D8 — THE APPLICANT PAYLOAD IS HELD BACK UNTIL ITEM T HAS
+// BEEN CHECKED. Recruiting now loads at start-up, right after the client
+// board, so the "not loaded yet" state item T exists for would be over before
+// this proof reached it — and its refusal-to-guess assertion would test
+// nothing. A real slow response is that state; this reproduces it, then
+// `releaseCg()` lets it land before the half that needs the count.
+let releaseCg;
+const cgGate = new Promise((r) => (releaseCg = r));
+await page.route("**/api/opportunities*", async (route) => {
+  const cg = /scope=caregiver/.test(route.request().url());
+  if (cg) await cgGate;
+  return route.fulfill({ status: 200, contentType: "application/json",
+    body: JSON.stringify(cg ? CG_PAYLOAD : CLIENT_PAYLOAD) });
+});
 await page.route(`${base}/__parent`, (route) => route.fulfill({
   status: 200, contentType: "text/html",
   body: `<!doctype html><meta charset="utf-8">
@@ -379,14 +388,15 @@ await page.waitForTimeout(300);
 // ⚠️ WAIT ON THE RESPONSE, NOT A ROW COUNT. A selector guess is how five
 // rounds of harness bugs started; the payload landing is the actual condition
 // `countsComplete` turns on.
-const cgLanded = page.waitForResponse(
-  (r) => /scope=caregiver/.test(r.url()), { timeout: 60000 },
-);
-// ⚠️ ROUND 120 RENAMED THIS RAIL ENTRY to Recruiting, and its title with it.
-// Matched on the visible LABEL rather than the tooltip: the label is what the
-// brief specified and what a person reads, so it is the more stable anchor.
-await frame.click('.railsec:has-text("Recruiting")');
-await cgLanded;
+// ⚠️ ROUND 177 — RECRUITING IS A HEADING WITH ENTRIES NOW, AND IT LOADS AT
+// START-UP. The `.railsec` "Recruiting" button is gone, and waiting for the
+// ?scope=caregiver response would miss it: it now arrives before this line
+// runs. The fixture's caregiver pipeline having an ENTRY is the same
+// condition — that entry is drawn from the caregiver payload — so wait for it
+// and click it.
+releaseCg();
+await frame.waitForSelector('[aria-labelledby="railhead-recruiting"] .railpipe[data-pipeline="pipe_cg"]', { timeout: 60000 });
+await frame.click('[aria-labelledby="railhead-recruiting"] .railpipe[data-pipeline="pipe_cg"]');
 await page.waitForTimeout(900);
 await openPipelines();
 await frame.click(`${cgRow} > summary`);
