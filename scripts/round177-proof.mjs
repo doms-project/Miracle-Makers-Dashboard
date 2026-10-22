@@ -90,6 +90,27 @@ const OPPS = [
   ...many(2, P.g3, { assignedTo: OWNER }), ...many(3, P.g3),
   ...many(6, P.s1), ...many(1, P.s2), ...many(1, P.none),
 ];
+// ═══ ROUND 178 · ITEM 4 — CREATED DATES THAT CAN ONLY BE READ ONE WAY ═══════
+// A summer date (EDT), a winter date (EST), the UTC/Eastern day boundary
+// (2026-10-01T03:34Z is Sep 30, 11:34pm EDT — the 1st only in UTC), a record
+// with NO createdAt, and an applicant on the Recruiting board.
+const CREATED = {
+  summer: "2026-07-15T18:05:00.000Z",
+  winter: "2026-01-20T17:30:00.000Z",
+  boundary: "2026-10-01T03:34:00.000Z",
+  applicant: "2026-08-02T13:00:00.000Z",
+};
+{
+  const oe = OPPS.filter((o) => o.pipelineId === P.oe && o.pipelineStageId !== "sR");
+  oe[0].createdAt = CREATED.summer;
+  oe[1].createdAt = CREATED.winter;
+  oe[2].createdAt = CREATED.boundary;
+  OPPS.find((o) => o.pipelineId === P.pp).createdAt = "";
+  OPPS.find((o) => o.pipelineId === P.g1).createdAt = CREATED.applicant;
+}
+/** contactId → createdAt, so a card (which carries data-cid) maps to its record. */
+const CREATED_BY_CID = Object.fromEntries(OPPS.map((o) => [o.contact.id, o.createdAt]));
+
 const countIn = (pid) => OPPS.filter((o) => o.pipelineId === pid && o.pipelineStageId !== "sR").length;
 
 const cfgFor = () => ({
@@ -161,6 +182,7 @@ delete process.env.PIPELINE_ACCESS_MAP;
 const CS = await import("../lib/clientSidebar.ts");
 const RS = await import("../lib/recruitingSidebar.ts");
 const RL = await import("../lib/recruitingLabels.ts");
+const { formatEastern } = await import("../lib/dates.ts");
 const OPP_ROUTE = await import("../app/api/opportunities/route.ts");
 
 const load = async (userId, role, scope) => {
@@ -359,7 +381,11 @@ const browser = await chromium.launch({
 });
 const W = 1280, H = 700;
 /** A fresh browser profile signed in as one user, inside the GHL-style parent. */
-const openAs = async (userId, role, { width = W, height = H, failCg = false } = {}) => {
+const openAs = async (userId, role, { width = W, height = H, failCg = false, hold = {} } = {}) => {
+  // ROUND 178 — `ctl.hold.cg` / `ctl.hold.client` keep the next request of
+  // that kind waiting this many ms, so a leg lasts long enough to press during
+  // it; `ctl.mid` records the Refresh button's state half-way through a hold.
+  const ctl = { hold: { ...hold }, mid: [] };
   const ctx = await browser.newContext({ viewport: { width, height } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log(`  [page error] ${e.message}`));
@@ -384,8 +410,23 @@ const openAs = async (userId, role, { width = W, height = H, failCg = false } = 
         .catch(() => null);
     }
     log.push(entry);
-    if (cg && failCg) return route.fulfill({ status: 500, contentType: "application/json",
-      body: JSON.stringify({ error: "fake: the recruiting load failed" }) });
+    const holdMs = ctl.hold[cg ? "cg" : "client"] || 0;
+    if (holdMs) {
+      await new Promise((r) => setTimeout(r, holdMs / 2));
+      const f = page.frames().find((x) => x !== page.mainFrame());
+      ctl.mid.push({ cg, ...(await f?.evaluate(() => {
+        const b = document.querySelector(".refreshbtn");
+        const retries = [...document.querySelectorAll(".loadwarn .linkbtn")];
+        return { disabled: !!b?.disabled, label: b?.textContent || "",
+          retries: retries.length, retriesDisabled: retries.every((x) => x.disabled) };
+      }).catch(() => ({}))) });
+      await new Promise((r) => setTimeout(r, holdMs / 2));
+    }
+    if (cg && failCg) {
+      entry.end = Date.now();
+      return route.fulfill({ status: 500, contentType: "application/json",
+        body: JSON.stringify({ error: "fake: the recruiting load failed" }) });
+    }
     const resp = await route.fetch();
     entry.end = Date.now();
     return route.fulfill({ response: resp });
@@ -401,20 +442,34 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
   }));
   await page.goto(`${base}/__parent`, { waitUntil: "domcontentloaded" });
   const frame = await (await page.waitForSelector("iframe")).contentFrame();
-  return { ctx, page, frame, log };
+  return { ctx, page, frame, log, ctl };
 };
 const RG = '[aria-labelledby="railhead-recruiting"]';
 const CG = '[aria-labelledby="railhead-clients"]';
 const lit = (frame) => frame.evaluate(() =>
   [...document.querySelectorAll(".rail .railpipe.active")].map((b) => b.dataset.pipeline));
 
-const A = await openAs(ADMIN, "admin");
+// ROUND 178 — the start-up caregiver load is held 1.6s, so the button can be
+// read while it is in flight (the accepted "Refreshing…" with nobody pressing).
+const A = await openAs(ADMIN, "admin", { hold: { cg: 1600 } });
 const { page, frame } = A;
 // ⚠️ SOFT: a revert that stops Recruiting loading must fail ASSERTIONS below,
 // not crash here — a crash is not a passing revert.
 await frame.waitForSelector(`${CG} .railpipe[data-pipeline="${P.oe}"]`, { timeout: 150000 });
 await frame.waitForSelector(`${RG} .railpipe[data-pipeline="${P.g1}"]`, { timeout: 20000 }).catch(() => {});
 await page.waitForTimeout(2500);
+
+A.ctl.hold = {};
+console.log("\n5a0 · ROUND 178 — THE START-UP CAREGIVER LOAD COUNTS AS LOADING (ACCEPTED)");
+const startMid = A.ctl.mid.find((m) => m.cg);
+ok("ROUND 178 · while the start-up ?scope=caregiver is in flight, Refresh is disabled and says Refreshing…",
+  startMid?.disabled === true && /Refreshing/.test(startMid?.label || ""), startMid);
+const btnNow = await frame.evaluate(() => {
+  const b = document.querySelector(".refreshbtn");
+  return { disabled: b.disabled, label: b.textContent };
+});
+ok("ROUND 178 · …and enabled, reading Refresh, once it has ended",
+  btnNow.disabled === false && /Refresh$/.test(btnNow.label.trim()), btnNow);
 
 console.log("\n5a · 🔴 D10 — A FRESH BROWSER STARTS COLLAPSED, WITH NO WIDE FRAME");
 const w0 = await frame.evaluate(() => window.__railW);
@@ -473,6 +528,47 @@ ok("🔴 …and the failed one reads \"didn't load\", never 0", clientOpts.inclu
 ok("🔴 on Clients, exactly one entry is lit across the whole rail — All clients",
   JSON.stringify(await lit(frame)) === '["all"]', await lit(frame));
 
+console.log("\n5d2 · ROUND 178 · ITEM 4 — THE CREATED LINE ON CLIENT CARDS");
+/** Every card on the board: its contact id, its created line (or null), whether it shows. */
+const readCards = () => frame.evaluate(() =>
+  [...document.querySelectorAll(".board .colbody .card")].map((c) => {
+    const line = c.querySelector(".ccreated");
+    const r = line?.getBoundingClientRect();
+    return { cid: c.getAttribute("data-cid"), text: line ? line.textContent : null,
+      shown: !!line && r.width > 0 && r.height > 0 && getComputedStyle(line).display !== "none" };
+  }));
+const checkCards = (cards, where) => {
+  const wrong = cards.filter((c) => {
+    const want = formatEastern(CREATED_BY_CID[c.cid]);
+    return want ? !(c.text === `Created ${want}` && c.shown) : c.text !== null;
+  });
+  ok(`ROUND 178 · on the ${where} board every card's line is "Created " + formatEastern(createdAt), and shows`,
+    cards.length > 0 && wrong.length === 0, wrong.slice(0, 3));
+};
+const cc = await readCards();
+checkCards(cc, "Clients");
+const byCreated = (iso) => cc.find((c) => CREATED_BY_CID[c.cid] === iso);
+ok("ROUND 178 · a summer date reads EDT", /\(EDT\)$/.test(byCreated(CREATED.summer)?.text || ""), byCreated(CREATED.summer));
+ok("ROUND 178 · a winter date reads EST", /\(EST\)$/.test(byCreated(CREATED.winter)?.text || ""), byCreated(CREATED.winter));
+ok("ROUND 178 · 2026-10-01T03:34Z reads Sep 30, 11:34pm (EDT) — not Oct 1",
+  byCreated(CREATED.boundary)?.text === "Created Sep 30 2026, 11:34pm (EDT)", byCreated(CREATED.boundary));
+const noDate = cc.find((c) => CREATED_BY_CID[c.cid] === "");
+ok("ROUND 178 · the record with no createdAt has NO created line", !!noDate && noDate.text === null, noDate);
+ok("ROUND 178 · \"Invalid Date\" appears nowhere",
+  !/Invalid Date/.test(await frame.evaluate(() => document.body.textContent || "")), null);
+const cardH = await frame.evaluate(() => {
+  const card = document.querySelector(".board .colbody .card:has(.ccreated)");
+  const line = card.querySelector(".ccreated");
+  const after = card.getBoundingClientRect().height;
+  line.style.display = "none";
+  const before = card.getBoundingClientRect().height;
+  line.style.display = "";
+  return { before: Math.round(before), after: Math.round(after) };
+});
+console.log(`  card height: ${cardH.before}px without the line → ${cardH.after}px with it`);
+ok("ROUND 178 · the line adds one small row to the card (≤ 20px)",
+  cardH.after > cardH.before && cardH.after - cardH.before <= 20, cardH);
+
 console.log("\n5e · CLICKING RECRUITING ENTRIES");
 const cgState = () => frame.evaluate(() => ({
   h1: document.querySelector(".main h1")?.textContent?.replace(/\s+/g, " ").trim() || "",
@@ -517,6 +613,10 @@ ok("🔴 switching to Caregivers leaves no staff pipeline on the board",
   c1.sel !== P.s2 && c1.opts.includes(c1.sel) && c1.cards !== 1, c1);
 ok("🔴 …it lands on the first SHOWN caregiver pipeline (PP, 4), not the hidden one ahead of it",
   c1.sel === P.g1 && c1.cards === 4, c1);
+const rc = await readCards();
+checkCards(rc, "Recruiting");
+ok("ROUND 178 · the applicant's line reads its Eastern created time",
+  rc.some((c) => c.text === `Created ${formatEastern(CREATED.applicant)}`), rc.map((c) => c.text));
 
 console.log("\n5g · 🔴 M9 — A NEW APPLICANT: THE BOARD FOLLOWS IT");
 const beforeAdd = (await cgState()).sel;
@@ -534,19 +634,69 @@ ok("…and that entry is the lit one", JSON.stringify(await lit(frame)) === `["$
 ok("…control: it was on PP Caregiver before the add", beforeAdd === P.g1, beforeAdd);
 
 console.log("\n5h · 🔴 Q4 — REFRESH RELOADS BOTH, IN SEQUENCE");
+// ═══ ROUND 178 · ITEM 1 — THE BUTTON STAYS DISABLED FOR BOTH LEGS ════════════
+// Every animation frame from the press until both requests have ended is
+// sampled — the hand-over between legs included, which is where a one-frame
+// "enabled" would be — and the SECOND leg is held 2.5s so a second press can
+// land during it.
+const sampleButton = () => frame.evaluate(() => {
+  window.__btn = [];
+  window.__sampling = true;
+  const tick = () => {
+    const b = document.querySelector(".refreshbtn");
+    window.__btn.push({ t: Date.now(), disabled: !!b?.disabled, busy: /Refreshing/.test(b?.textContent || "") });
+    if (window.__sampling) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+const stopSampling = () => frame.evaluate(() => { window.__sampling = false; return window.__btn; });
+const pressAndCheck = async (where, secondLeg) => {
+  const mark0 = A.log.length;
+  A.ctl.mid = [];
+  A.ctl.hold = { [secondLeg]: 2500 };
+  await sampleButton();
+  const t0 = Date.now();
+  await frame.click(".refreshbtn");
+  // wait for leg 2 to START, then press again while it is held
+  for (let i = 0; i < 60 && A.log.length < mark0 + 2; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(300);
+  await frame.$eval(".refreshbtn", (b) => b.click());
+  for (let i = 0; i < 80 && !(A.log[mark0 + 1]?.end); i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(600);
+  const frames = await stopSampling();
+  A.ctl.hold = {};
+  const legs = A.log.slice(mark0);
+  const lastEnd = Math.max(...legs.map((e) => e.end || 0));
+  // ⚠️ FROM THE FIRST REQUEST, NOT FROM t0. t0 is taken before Playwright's
+  // click, which takes ~100ms to land: the first run went red on a frame at
+  // +59ms when the press's first request only started at +149ms — a frame
+  // from BEFORE the press. The hand-over between legs is inside this window.
+  const firstStart = legs[0]?.start || t0;
+  const during = frames.filter((f) => f.t >= firstStart && f.t <= lastEnd - 50);
+  ok(`ROUND 178 · ${where}: the button is disabled on EVERY frame until both requests end (${during.length} frames)`,
+    during.length > 10 && during.every((f) => f.disabled),
+    { off: during.filter((f) => !f.disabled).slice(0, 3).map((f) => f.t - t0), legs: legs.map((e) => [e.cg, e.start - t0, (e.end || 0) - t0]) });
+  ok(`ROUND 178 · ${where}: …and reads "Refreshing…" on every one of them`,
+    during.length > 10 && during.every((f) => f.busy), during.filter((f) => !f.busy).slice(0, 3));
+  ok(`ROUND 178 · ${where}: a second press during leg 2 sent NO request`, legs.length === 2, legs.map((e) => e.cg));
+  const after = await frame.evaluate(() => ({ d: document.querySelector(".refreshbtn").disabled,
+    l: document.querySelector(".refreshbtn").textContent.trim() }));
+  ok(`ROUND 178 · ${where}: control — enabled again, reading Refresh, once both have ended`,
+    after.d === false && /Refresh$/.test(after.l), after);
+  return legs;
+};
 let mark = A.log.length;
-await frame.click(".refreshbtn");
-await page.waitForTimeout(4000);
-let pressed = A.log.slice(mark);
+let pressed = await pressAndCheck("on Recruiting", "client");
+const midR = A.ctl.mid.find((m) => !m.cg);
+ok("ROUND 178 · during a Refresh the H banner's Try again is disabled too",
+  (midR?.retries || 0) > 0 && midR.retriesDisabled === true, midR);
 ok("🔴 on Recruiting: exactly 2 requests — recruiting first, then clients",
   pressed.length === 2 && pressed[0].cg && !pressed[1].cg, pressed.map((e) => e.cg));
 ok("🔴 …the second started after the first was in", pressed[1]?.start >= (pressed[0]?.end || Infinity), pressed);
 await frame.click(`${CG} .railpipe[data-pipeline="all"]`);
 await page.waitForTimeout(800);
 mark = A.log.length;
-await frame.click(".refreshbtn");
-await page.waitForTimeout(4000);
-pressed = A.log.slice(mark);
+pressed = await pressAndCheck("on Clients", "cg");
 ok("🔴 on Clients: exactly 2 — clients first, then recruiting",
   pressed.length === 2 && !pressed[0].cg && pressed[1].cg, pressed.map((e) => e.cg));
 ok("🔴 …in sequence", pressed[1]?.start >= (pressed[0]?.end || Infinity), pressed);
@@ -654,6 +804,24 @@ await F.frame.waitForSelector(".railopen", { state: "attached", timeout: 150000 
 const ft = await F.frame.evaluate(() => document.querySelector(".railopen").title);
 ok("🔴 the line says Recruiting didn't load", /Recruiting didn't load/.test(ft), ft);
 ok("…not the no-access line", !/assigned/.test(ft), ft);
+// ═══ ROUND 178 · M1 — NO SECOND CAREGIVER LOAD BESIDE A REFRESH LEG ══════════
+// The first caregiver load failed (cgLoaded false). A Refresh on Clients runs
+// its caregiver leg (held 2.5s); switching to Recruiting during it used to
+// re-arm the start-up effect and fire a second ?scope=caregiver alongside.
+await F.page.waitForTimeout(800);
+const fMark = F.log.filter((e) => e.cg).length;
+F.ctl.hold = { cg: 2500 };
+await F.frame.click(".refreshbtn");
+for (let i = 0; i < 60 && F.log.filter((e) => e.cg).length === fMark; i++) await F.page.waitForTimeout(100);
+await F.page.waitForTimeout(200);
+// ⚠️ ANY VIEW CHANGE re-arms the start-up effect (`view` is a dependency), and
+// during the leg the Recruiting section shows its loading placeholder, so
+// "Open Recruiting" is not there to click — Master is the view change.
+await F.frame.click('.railsec:has-text("Master")');
+await F.page.waitForTimeout(3500);
+F.ctl.hold = {};
+ok("ROUND 178 · M1 — changing the view mid-leg sends no second ?scope=caregiver",
+  F.log.filter((e) => e.cg).length - fMark === 1, F.log.map((e) => e.cg));
 await F.ctx.close();
 
 console.log("\n5m · D7 + R4 — THE PIPELINES SCREEN");

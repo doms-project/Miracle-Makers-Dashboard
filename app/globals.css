@@ -857,6 +857,9 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .provenance{font-size:10.5px;color:var(--ink-3);font-style:italic;margin-top:2px;}
 .phead .provenance{margin-top:5px;font-style:normal;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:6px;padding:3px 8px;display:inline-block;}
 .card .cdiv{margin-top:5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);}
+/* ROUND 178 · ITEM 4 — the created line. --ink-2, not --ink-3: --ink-3 on the
+   card's light background is ~3.3:1, below AA for text this small. */
+.card .ccreated{margin-top:3px;font-size:10.5px;color:var(--ink-2);}
 
 /* ── Task 8: masked sensitive fields (SSN) ────────────────────── */
 .v.ro.masked{justify-content:space-between;gap:10px;}

@@ -187,5 +187,39 @@ MODE=lib section "R5 · the refusal says older again" app/api/admin/pipelines/ro
 '`This page is from a different version of the dashboard `' \
 '`This page is from an older version of the dashboard `'
 
+# ═══ ROUND 178 ═══════════════════════════════════════════════════════════
+MODE=full section "R178-a · the button watches only its own section again" app/page.tsx \
+'            disabled={railWhere === "referrals" ? refBusy : refreshing}' \
+'            disabled={railWhere === "caregivers" ? cgLoading : railWhere === "referrals" ? refBusy : loading}'
+
+MODE=full section "R178-b · the H banner Try again is not disabled during a Refresh" app/page.tsx \
+'                    // ROUND 178 — not while a load runs (see `refreshing`).
+                    disabled={refreshing}
+' \
+''
+
+MODE=full section "R178-c · the start-up effect loses !cgLoading (M1)" app/page.tsx \
+'      !cgLoading &&
+      ssoResolved(sso)' \
+'      ssoResolved(sso)'
+
+MODE=full section "R178-d · the created line in UTC instead of Eastern" app/page.tsx \
+'<div className="ccreated">Created {formatEastern(r.createdAt)}</div>' \
+'<div className="ccreated">Created {new Date(r.createdAt).toUTCString()}</div>'
+
+MODE=full section "R178-e · a missing createdAt shows today's date" app/page.tsx \
+'      {formatEastern(r.createdAt) ? (
+        <div className="ccreated">Created {formatEastern(r.createdAt)}</div>' \
+'      {true ? (
+        <div className="ccreated">Created {formatEastern(r.createdAt || new Date())}</div>'
+
+MODE=full section "R178-f · the line missing from the Recruiting board" app/page.tsx \
+'      {formatEastern(r.createdAt) ? (' \
+'      {formatEastern(r.createdAt) && !/Applicant/.test(r.pipelineName) ? ('
+
+MODE=full section "R178-g · refreshing ignores the caregiver load (start-up decision)" app/page.tsx \
+'  const refreshing = loading || cgLoading;' \
+'  const refreshing = loading;'
+
 echo
 echo "All files restored."
