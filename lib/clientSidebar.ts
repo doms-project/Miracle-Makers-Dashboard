@@ -51,8 +51,19 @@ export interface SidebarEntry {
 }
 
 export interface SidebarModel {
-  /** "All clients" — every record the board would show with no filters. */
-  all: { count: number; shared: number };
+  /**
+   * "All clients" — every record the board would show with no filters.
+   * `inHidden` is how many of them sit in pipelines hidden from the sidebar
+   * (round 177 · R2): the gap between All and the sum of the entries.
+   */
+  all: { count: number; shared: number; inHidden: number };
+  /**
+   * 🔴 ROUND 177 · ADDITION 2 — A COUNT FOR EVERY SELECTABLE PIPELINE, hidden
+   * ones included. The toolbar dropdown lists hidden pipelines too, so its
+   * numbers must come from here and not from `entries`, or a hidden pipeline
+   * would read 0. Same rule as the entries: no REASSIGN, failed → null.
+   */
+  counts: Record<string, number | null>;
   entries: SidebarEntry[];
   /** True when there are client pipelines to list and every one is hidden. */
   allHidden: boolean;
@@ -85,10 +96,12 @@ export function sidebarModel<R extends SidebarRecord>(args: {
   const perPipeline = new Map<string, number>();
   let all = 0;
   let shared = 0;
+  let inHidden = 0;
   for (const r of records) {
     if (isExcluded(r)) continue;
     all += 1;
     if (r.shared) shared += 1;
+    if (isHiddenFromSidebar(hidden, r.pipelineId)) inHidden += 1;
     perPipeline.set(r.pipelineId, (perPipeline.get(r.pipelineId) || 0) + 1);
   }
   const shown = selectable.filter((p) => !isHiddenFromSidebar(hidden, p.id));
@@ -105,8 +118,12 @@ export function sidebarModel<R extends SidebarRecord>(args: {
       initials: initials[i],
     };
   });
+  const counts: Record<string, number | null> = {};
+  for (const p of selectable)
+    counts[p.id] = failedIds.has(p.id) ? null : perPipeline.get(p.id) || 0;
   return {
-    all: { count: all, shared },
+    all: { count: all, shared, inHidden },
+    counts,
     entries,
     allHidden: selectable.length > 0 && shown.length === 0,
   };
@@ -204,6 +221,15 @@ export function selectionAfterHide(
 }
 
 export const REMEMBERED_ENTRY_KEY = "mm.clientPipeline";
+
+/**
+ * ROUND 177 · D10 — the sidebar's collapse choice: "expanded" | "collapsed",
+ * ABSENT = collapsed. A NEW key on purpose: v176's `mm.railCollapsed` was only
+ * written by people who toggled, so reusing it would have kept everyone who
+ * tried » expanded and never shown them the new default. app/layout.tsx's
+ * inline script reads this same string — keep the two in step.
+ */
+export const RAIL_KEY = "mm.rail";
 
 /**
  * The remembered entry, validated. Anything no longer selectable, or since

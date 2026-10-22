@@ -243,13 +243,22 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
     () => !/Checking session/.test(document.querySelector(".viewas")?.textContent || ""),
     { timeout: 90000 },
   );
-  for (let i = 0; i < 12; i++) {
+  // ⚠️ ROUND 177 — THERE IS NO "Recruiting" BUTTON. Recruiting is a heading
+  // with one entry per pipeline, and a viewer with no entry gets "Open
+  // Recruiting" (the way in this proof's new seat now has). The old text
+  // search would have found nothing and then stopped on the CLIENT board's
+  // no-access card, testing the wrong screen — so this waits for the
+  // Recruiting screen's own heading as well.
+  for (let i = 0; i < 24; i++) {
     await f.evaluate(() => {
-      [...document.querySelectorAll("button")]
-        .find((x) => /^(Recruiting|Caregivers)$/i.test((x.textContent || "").trim()))?.click();
+      (document.querySelector('[aria-labelledby="railhead-recruiting"] .railpipe') ||
+        document.querySelector(".railopen"))?.click();
     });
     await page.waitForTimeout(500);
-    if (await f.$(".empty.noaccess, [data-cid], .cgboard, table")) break;
+    const onRecruiting = /Recruiting/.test(
+      (await f.textContent(".main h1").catch(() => "")) || "",
+    );
+    if (onRecruiting && (await f.$(".empty.noaccess, [data-cid], .cgboard, table"))) break;
   }
   await page.waitForTimeout(600);
   return f;

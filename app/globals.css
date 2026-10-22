@@ -23,11 +23,13 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 ::-webkit-scrollbar-thumb{background:#d9cfe8;border-radius:10px;border:2px solid var(--canvas);}
 ::-webkit-scrollbar-thumb:hover{background:#c6b8dd;}
 
-.app{display:grid;grid-template-columns:184px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
-/* ROUND 176 — the sidebar is 184px with names, or 64px collapsed (a choice
-   remembered per browser, and forced at ≤640px). The record panel and every
+/* 🔴 ROUND 177 · D10 — THE DEFAULT TRACK IS 64px: the sidebar starts
+   collapsed. 184px only when <html data-rail="expanded">, which the inline
+   script in app/layout.tsx sets before first paint for somebody who chose it —
+   so nobody sees one width and then the other. The record panel and every
    dialog are position:fixed, so this track is the only width it costs. */
-.app.railcollapsed{grid-template-columns:64px minmax(0,1fr);}
+.app{display:grid;grid-template-columns:64px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
+html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 
 /* rail */
 /* 🔴 ROUND 176 · M5 — THE RAIL SCROLLS. It had no overflow and `.app` is
@@ -40,7 +42,7 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 .rail button svg{width:19px;height:19px;}
 .rail button:hover{color:#fff;background:rgba(255,255,255,.08);}
 .rail button.active{background:rgba(255,255,255,.16);color:#fff;}
-.rail button.active::before{content:"";position:absolute;left:-10px;top:50%;margin-top:-12px;width:3px;height:24px;background:var(--gold);border-radius:0 3px 3px 0;}
+.rail button.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:24px;background:var(--gold);border-radius:0 3px 3px 0;}
 .rail .railnote{margin-top:auto;align-self:center;flex:none;font-size:9px;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:4px 6px;}
 .openghl{display:inline-flex;align-items:center;gap:7px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:600;transition:background .12s;}
 .openghl:hover{background:var(--plum-mid);}
@@ -1134,7 +1136,10 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
    is top-level rather than another tab beside List/Board. */
 .rail .railsec{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;width:100%;height:auto;flex:none;padding:8px 10px;background:transparent;border:0;border-radius:10px;color:rgba(255,255,255,.72);cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;letter-spacing:.01em;transition:background .12s,color .12s;}
 /* Collapsed: icon over a short label, which is the rail as it was before 176. */
-.rail.collapsed .railsec{flex-direction:column;justify-content:center;gap:5px;padding:11px 2px;font-size:9.5px;font-weight:700;}
+/* ⚠️ ROUND 177 · Q6 — TIGHTER, AND STILL LABELLED. Collapsed is everyone's
+   default now, so the section names stay visible; only the padding and gap
+   shrink (60px rows in v176). */
+html:not([data-rail="expanded"]) .rail .railsec{flex-direction:column;justify-content:center;gap:3px;padding:6px 2px;font-size:9.5px;font-weight:700;}
 .rail .railsec svg{width:19px;height:19px;}
 /* ⚠️ A DARK HOVER. The old one was a light --plum-soft pill on a dark column. */
 .rail .railsec:hover{color:#fff;background:rgba(255,255,255,.08);}
@@ -1177,15 +1182,40 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .rail .railskel{height:32px;flex:none;margin:0 4px;border-radius:9px;background:rgba(255,255,255,.06);}
 .rail .railcollapse{width:100%;height:24px;flex:none;margin-top:6px;font-size:13px;font-weight:700;
   color:rgba(255,255,255,.72);border-radius:7px;}
-.rail .railcollapse:disabled{cursor:not-allowed;opacity:.5;}
+/* ⚠️ ROUND 177 · I — HIDDEN on a narrow screen, where the sidebar is always
+   collapsed. v176 disabled it instead, and a disabled button shows no title,
+   so its reason was never seen. */
+@media (max-width:640px){.rail .railcollapse{display:none;}}
+/* Recruiting's sub-labels — Caregivers (DSPs) and Office staff. */
+.rail .railsub{margin:6px 12px 2px;font-size:9.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:rgba(255,255,255,.72);}
+/* Only drawn collapsed, where the sub-labels leave the eye (Q5: dividers only). */
+.rail .railsubdiv{display:none;}
+/* 🔴 D9 + M1 — "Open Recruiting", the way in for somebody with no entry. */
+.rail .railopen{display:flex;align-items:center;gap:8px;width:100%;height:32px;flex:none;
+  padding:0 8px 0 12px;border-radius:9px;color:#fff;background:rgba(255,255,255,.08);
+  font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;}
+.rail .railopen svg{width:16px;height:16px;flex:none;}
+.rail .railopen:hover,.rail .railopen.active{background:rgba(255,255,255,.16);}
 /* Collapsed: the heading stays for screen readers but leaves the eye; each
    entry shows its initials, and the full name stays in title and aria-label. */
-.rail.collapsed .railhead,
-.rail.collapsed .railpipenote{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;margin:0;}
-.rail.collapsed .railpipe{justify-content:center;padding:0 2px;height:34px;}
-.rail.collapsed .railpipename,
-.rail.collapsed .railpipecount{display:none;}
-.rail.collapsed .railpipeini{display:block;font-size:10px;font-weight:800;letter-spacing:.02em;white-space:nowrap;}
+html:not([data-rail="expanded"]) .rail .railhead,
+html:not([data-rail="expanded"]) .rail .railpipenote{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;margin:0;}
+html:not([data-rail="expanded"]) .rail .railpipe{justify-content:center;padding:0 2px;height:34px;}
+html:not([data-rail="expanded"]) .rail .railpipename,
+html:not([data-rail="expanded"]) .rail .railpipecount{display:none;}
+html:not([data-rail="expanded"]) .rail .railpipeini{display:block;font-size:10px;font-weight:800;letter-spacing:.02em;white-space:nowrap;}
+/* 🔴 ROUND 177 · ADDITION 1 — COLLAPSED MUST NOT HIDE WHAT MATTERS. Collapsed
+   is the default, so a pipeline that failed to load is marked here too — gold
+   initials and a dot — not left reading like any other. Its title says
+   "didn't load"; the count of every entry is in its title. */
+html:not([data-rail="expanded"]) .rail .railpipe.failed .railpipeini{color:var(--gold);}
+html:not([data-rail="expanded"]) .rail .railpipe.failed::after{content:"";position:absolute;top:5px;right:5px;
+  width:6px;height:6px;border-radius:50%;background:var(--gold);}
+html:not([data-rail="expanded"]) .rail .railsub{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;margin:0;}
+html:not([data-rail="expanded"]) .rail .railsubdiv{display:block;}
+html:not([data-rail="expanded"]) .rail .railopen{justify-content:center;padding:0;height:34px;}
+html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 
 /* ITEM B — the "organisation, not security" line beside the upload control.
    Deliberately not an alert box: it is a standing fact about GoHighLevel media

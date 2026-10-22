@@ -157,7 +157,11 @@ ok("⚠️ and it no longer calls a staff APPLICANT a hire",
    !cgSubs.some((x) => /hire/i.test(x)), cgSubs.filter((x) => /hire/i.test(x)));
 ok("🔴 and the TITLE moves with it too — round 123, the half that did not",
    /title: `Recruiting · \$\{cgNoun\.group\}`/.test(cgCase), "the title is still a constant");
-ok("the rail says Recruiting", /<span>Recruiting<\/span>/.test(page), "rail not renamed");
+// ⚠️ ROUND 177 — Recruiting is a HEADING now (an <h2> in a labelled group,
+// like Clients), not a `.railsec` button with a <span> label.
+ok("the rail says Recruiting",
+   /<h2 id="railhead-recruiting" className="railhead">\s*Recruiting\s*<\/h2>/.test(page),
+   "rail not renamed");
 const admin = readFileSync("components/PipelineAdmin.tsx", "utf8");
 ok("⚠️ and the group is only offered on a CAREGIVER pipeline",
    /entry\?\.scope === "caregiver" \? \(/.test(admin), "offered on every scope");

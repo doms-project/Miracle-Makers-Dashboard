@@ -512,12 +512,19 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
 }));
 await page.goto(`${base}/__parent`, { waitUntil: "domcontentloaded" });
 const frame = await (await page.waitForSelector("iframe")).contentFrame();
-await frame.waitForSelector(".railpipe[title='OLTL Enrollment']", { timeout: 120000 });
+await frame.waitForSelector(`.railpipe[data-pipeline="${P.oe}"]`, { timeout: 120000 });
 await frame.waitForSelector(".board .col", { timeout: 60000 });
 
+// ⚠️ ROUND 177 — NAMES FROM THE NAME SPAN, AND THE CLIENTS GROUP ONLY.
+// Titles now carry the count ("OLTL Transfer — 2", round 177 · Addition 1), and
+// the rail has a Recruiting group with entries of its own (this fixture's
+// caregiver pipeline is listed there now), so both selectors are narrowed to
+// what this proof is about. Entries are addressed by `data-pipeline` id.
 const railState = () => frame.evaluate(() => ({
-  entries: [...document.querySelectorAll(".rail .railpipe")].map((b) => b.getAttribute("title")),
-  active: [...document.querySelectorAll(".rail .railpipe.active")].map((b) => b.getAttribute("title")),
+  entries: [...document.querySelectorAll('[aria-labelledby="railhead-clients"] .railpipe')]
+    .map((b) => b.querySelector(".railpipename")?.textContent),
+  active: [...document.querySelectorAll('[aria-labelledby="railhead-clients"] .railpipe.active')]
+    .map((b) => b.querySelector(".railpipename")?.textContent),
   h1: document.querySelector(".main h1")?.textContent?.trim() || "",
   cards: document.querySelectorAll(".board .colbody .card").length,
   cols: [...document.querySelectorAll(".board .col")].length,
@@ -551,17 +558,26 @@ for (let i = 0; i < 40; i++) {
 ok("🔴 forty Tab presses never focus the heading", !headingFocused, null);
 ok("…control: the same presses DO reach the entries", focusedEntries > 0, focusedEntries);
 const r0 = await railState();
-await frame.click("#railhead-clients");
+// ⚠️ ROUND 177 — DISPATCHED ON THE HEADING ITSELF. Collapsed (the default
+// now) the heading is visually hidden and an entry sits where it is drawn, so
+// a pointer click lands on the entry. What is being tested is that the
+// heading has no behaviour of its own.
+await frame.$eval("#railhead-clients", (el) => el.click());
 await page.waitForTimeout(400);
 const r1 = await railState();
 ok("🔴 clicking the heading changes nothing",
   JSON.stringify(r0) === JSON.stringify(r1), { r0, r1 });
 
 console.log("\n6b · THE ENTRIES");
+// ⚠️ ROUND 177 · D10 — THE SIDEBAR STARTS COLLAPSED now, and the long-name
+// ellipsis below needs names on screen, so expand first (») — the step the
+// owner takes to read names. 6e then collapses with « exactly as before.
+await frame.click(".railcollapse");
+await page.waitForTimeout(400);
 console.log(`  ${r0.entries.join(" · ")}`);
 ok("All clients first, then the five shown pipelines — no ODP",
   JSON.stringify(r0.entries) === JSON.stringify(["All clients", "OLTL Enrollment", "OLTL Transfer",
-    "Private Pay", NAMES[P.long], "Lost Pipeline — didn't load"]), r0.entries);
+    "Private Pay", NAMES[P.long], "Lost Pipeline"]), r0.entries);
 ok("exactly one entry is active, and it is All clients",
   JSON.stringify(r0.active) === '["All clients"]', r0.active);
 const failedRow = await frame.evaluate(() => {
@@ -571,10 +587,10 @@ const failedRow = await frame.evaluate(() => {
 ok("🔴 the failed pipeline reads — and \"didn't load\", never 0",
   failedRow.count === "—" && /didn't load/.test(failedRow.label || ""), failedRow);
 const longRow = await frame.evaluate((full) => {
-  const b = [...document.querySelectorAll(".rail .railpipe")].find((x) => x.title === full);
+  const b = document.querySelector(`.railpipe[data-pipeline="${full}"]`);
   const nm = b?.querySelector(".railpipename");
   return { cut: nm ? nm.scrollWidth > nm.clientWidth : null, ell: nm ? getComputedStyle(nm).textOverflow : "" };
-}, NAMES[P.long]);
+}, P.long);
 ok("a long name is cut with an ellipsis and carries its full name in title",
   longRow.cut === true && longRow.ell === "ellipsis", longRow);
 const pipeOpts = await frame.evaluate(() =>
@@ -585,7 +601,7 @@ ok("🔴 …and the board shows ODP records under All clients",
   r0.cards === allExpected, r0.cards);
 
 console.log("\n6c · CLICKING AN ENTRY");
-await frame.click(".railpipe[title='OLTL Transfer']");
+await frame.click(`.railpipe[data-pipeline="${P.ot}"]`);
 await page.waitForTimeout(600);
 const r2 = await railState();
 ok("the header names the pipeline", r2.h1 === "OLTL Transfer", r2.h1);
@@ -598,7 +614,7 @@ await frame.click('.railsec:has-text("Master")');
 await page.waitForTimeout(600);
 const r3 = await railState();
 ok("🔴 on Master, no entry is active", r3.active.length === 0, r3.active);
-await frame.click(".railpipe[title='OLTL Enrollment']");
+await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);
 await page.waitForTimeout(800);
 const r4 = await railState();
 ok("from Master, an entry opens the board on that pipeline",
@@ -655,8 +671,8 @@ await page.waitForTimeout(400);
 console.log("\n6e · COLLAPSED");
 await frame.click(".railcollapse");
 await page.waitForTimeout(400);
-const col = await frame.evaluate(() => {
-  const b = document.querySelector(".railpipe[title='OLTL Enrollment']");
+const col = await frame.evaluate((oe) => {
+  const b = document.querySelector(`.railpipe[data-pipeline="${oe}"]`);
   return {
     railW: document.querySelector(".rail").getBoundingClientRect().width,
     ini: b?.querySelector(".railpipeini")?.textContent,
@@ -664,7 +680,7 @@ const col = await frame.evaluate(() => {
     nameShown: b ? getComputedStyle(b.querySelector(".railpipename")).display !== "none" : true,
     label: b?.getAttribute("aria-label"),
   };
-});
+}, P.oe);
 ok("collapsed, the rail is 64px", Math.round(col.railW) === 64, col.railW);
 ok("…each entry shows its initials, not its name",
   col.ini === "OLTL·E" && col.iniShown && !col.nameShown, col);
@@ -673,7 +689,7 @@ await frame.click(".railcollapse");
 await page.waitForTimeout(300);
 
 console.log("\n6f · THE PIPELINES SCREEN — UNTICK A TAB");
-await frame.click(".railpipe[title='OLTL Transfer']");
+await frame.click(`.railpipe[data-pipeline="${P.ot}"]`);
 await page.waitForTimeout(400);
 await frame.click('.railsec:has-text("Pipelines")');
 await frame.waitForSelector(`#pfside-${P.ot}`, { timeout: 60000 }).catch(() => {});
@@ -685,7 +701,10 @@ const boxes = await frame.evaluate((p) => ({
 }), P);
 ok("the checkbox is ticked for a shown pipeline and unticked for a hidden one",
   boxes.ot === true && boxes.de === false, boxes);
-ok("…and offered on client pipelines only", boxes.cg === false && boxes.none === false, boxes);
+// ⚠️ ROUND 177 · D7 — CAREGIVER PIPELINES GET IT TOO now that Recruiting has
+// sidebar entries on the same `sidebar: false`. Never on "none".
+ok("…and offered on client and caregiver pipelines, never on \"none\"",
+  boxes.cg === true && boxes.none === false, boxes);
 const otBefore = PC.parsePipelineConfig(storedConfig).pipelines[P.ot];
 const rememberedBefore = await frame.evaluate(() => localStorage.getItem("mm.clientPipeline"));
 // Each pipeline is a <details> row; its controls are inside the closed body.
@@ -708,9 +727,9 @@ ok("🔴 E5 — the selection that stood on it went back to all",
   remembered === "all", remembered);
 ok("…control: it WAS on OLTL Transfer just before the untick",
   rememberedBefore === P.ot, rememberedBefore);
-await frame.click(".railpipe[title='OLTL Enrollment']");
+await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);
 await page.waitForTimeout(500);
-await frame.click(".railpipe[title='All clients']");
+await frame.click('.railpipe[data-pipeline="all"]');
 await page.waitForTimeout(500);
 const r6 = await railState();
 ok("…and back on the board, All clients is the one lit entry",
