@@ -5927,10 +5927,38 @@ export async function appendStageHistory(oppId: string): Promise<StageRecordResu
 // The rule and the value format live in lib/newLead.ts (no imports, so the
 // browser can use them). This is the one place that WRITES the field.
 
-/** Does this account have the "First Opened" field? No field = no tracking. */
+/**
+ * Does this account have the "First Opened" field? No field = no tracking.
+ *
+ * 🔴 ROUND 182 — A FIELD CREATED AFTER THE SERVER STARTED MUST BE SEEN.
+ * Field definitions are cached for the life of a warm server instance, which on
+ * Vercel can be hours. The field is created in GoHighLevel (by hand, or by
+ * live-check-181.mjs) while instances are already warm, so a plain cache read
+ * kept saying "no field" — no label anywhere — for as long as that instance
+ * lived. When the cached list LACKS the field, it is re-read from GoHighLevel,
+ * at most once a minute per instance (FIRST_OPENED_RECHECK_MS) so a missing
+ * field does not cost a GoHighLevel call on every board load.
+ *
+ * ⚠️ ONLY THE MISS IS RE-READ. Once found, the id is cached like everything
+ * else: an id does not change, and deleting the field is not a case to optimise.
+ */
+export const FIRST_OPENED_RECHECK_MS = 60_000;
+let firstOpenedLastRecheck = 0;
 export async function firstOpenedFieldId(): Promise<string | null> {
-  const def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
+  let def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
+  if (!def && Date.now() - firstOpenedLastRecheck >= FIRST_OPENED_RECHECK_MS) {
+    firstOpenedLastRecheck = Date.now();
+    // ⚠️ fieldDefs only. The id→name map (cache.fieldMap) stays as it was —
+    // the board reads First Opened BY ID (app/api/opportunities/route.ts) for
+    // exactly that reason, so nothing here depends on the map being current.
+    cache.fieldDefs = undefined;
+    def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
+  }
   return def?.id ? String(def.id) : null;
+}
+/** Proofs only: forget the last re-check, so a test can create the field and look again. */
+export function resetFirstOpenedRecheck(): void {
+  firstOpenedLastRecheck = 0;
 }
 
 export interface FirstOpenedResult {
