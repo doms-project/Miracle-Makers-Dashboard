@@ -85,6 +85,17 @@ export interface OpportunityRecord {
   // read a version would break the app over a missing field, whereas the old
   // behaviour (last write wins) is what we already had.
   version?: string;
+  /**
+   * ROUND 181 — the "First Opened" field, raw: `<iso>|<userId>`, or "" when
+   * nobody has opened the case in the dashboard. Read by lib/newLead.ts.
+   */
+  firstOpened?: string;
+  /**
+   * ROUND 181 — set by the server on client AND Recruiting records: true while the case
+   * is a "new lead" (open, created on/after the cutoff, never opened). Absent
+   * when tracking is off — no field on the account — so no label can be stuck.
+   */
+  newLead?: boolean;
 }
 
 // Custom-field definition sent to the client to drive the dynamic editors.
@@ -176,6 +187,11 @@ export interface Viewer {
 
 export interface OpportunitiesResponse {
   records: OpportunityRecord[];
+  /**
+   * ROUND 181 — whether opens can be recorded (the "First Opened" field
+   * exists) and the creation cutoff. Both scopes.
+   */
+  newLeads?: { tracking: boolean; since: string };
   // A pipeline whose fetch failed. Its records are ABSENT from `records`, and
   // that is indistinguishable from "this pipeline is empty" unless we say so.
   failedPipelines?: { id: string; name: string; error: string }[];

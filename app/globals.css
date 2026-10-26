@@ -23,10 +23,11 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 ::-webkit-scrollbar-thumb{background:#d9cfe8;border-radius:10px;border:2px solid var(--canvas);}
 ::-webkit-scrollbar-thumb:hover{background:#c6b8dd;}
 
-/* 🔴 ROUND 177 · D10 — THE DEFAULT TRACK IS 64px: the sidebar starts
-   collapsed. 184px only when <html data-rail="expanded">, which the inline
-   script in app/layout.tsx sets before first paint for somebody who chose it —
-   so nobody sees one width and then the other. The record panel and every
+/* 🔴 ROUND 177 · D10 — 64px unless <html data-rail="expanded">.
+   ROUND 181: the server now SENDS "expanded", so the sidebar starts at 184px;
+   the inline script in app/layout.tsx switches to "collapsed" before first
+   paint for somebody who pressed « or on a screen 640px or narrower — so
+   nobody sees one width and then the other. The record panel and every
    dialog are position:fixed, so this track is the only width it costs. */
 .app{display:grid;grid-template-columns:64px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
 html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
@@ -321,6 +322,9 @@ tbody tr:last-child td{border-bottom:0;}
 .savemsg{font-size:10.5px;color:var(--ink-3);margin-top:4px;}
 .savemsg.err{color:var(--blk);font-weight:600;}
 .editbanner{font-size:11px;color:var(--gold-ink);background:var(--gold-soft);border:1px solid #f3e2c4;border-radius:8px;padding:8px 11px;margin-bottom:4px;}
+/* ROUND 181 — "New lead" until somebody opens it. Gold, beside "Following"'s
+   plum: --gold-ink on --gold-soft is 5.7:1 (computed), above AA 4.5:1. */
+.newlead-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--gold-ink);background:var(--gold-soft);border:1px solid var(--gold);border-radius:20px;padding:1px 7px;vertical-align:middle;white-space:nowrap;}
 .follow-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;vertical-align:middle;}
 
 .note{border:1px solid var(--line);border-radius:9px;padding:12px 13px;margin-bottom:10px;background:var(--canvas);}

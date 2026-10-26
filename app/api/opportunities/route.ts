@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import {
   getOltlOpportunities,
   getPipelineConfig,
+  firstOpenedFieldId,
   GhlError,
   type PipelineScope,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
+import { isNewLead, newLeadSince } from "@/lib/newLead";
 import {
   applyAccess,
   userDivisions,
@@ -41,6 +43,24 @@ async function buildResponse(
 ): Promise<Response> {
   const { records, pipeline, pipelines, stages, stagesByPipeline, users, fieldDefs, failedPipelines } =
     await getOltlOpportunities(scope);
+  // 🔴 ROUND 181 — "NEW LEAD" UNTIL SOMEBODY OPENS IT (lib/newLead.ts).
+  // BOTH boards — client cases and Recruiting applicants (asked for both,
+  // 26 Oct 2026). Decided HERE,
+  // before the visibility filter copies the records, so every viewer gets the
+  // same answer. ⚠️ NO FIELD, NO LABEL — and a failed definitions read counts
+  // as no field: a label nobody can clear is worse than no label.
+  let newLeads: { tracking: boolean; since: string } | undefined;
+  {
+    const since = newLeadSince();
+    let tracking = false;
+    try {
+      tracking = !!(await firstOpenedFieldId());
+    } catch {
+      tracking = false;
+    }
+    for (const r of records) r.newLead = tracking && isNewLead(r, since);
+    newLeads = { tracking, since };
+  }
   // Label every user with their division(s) for the owner/follower pickers.
   const pipelineNameById = new Map(pipelines.map((p) => [p.id, p.name]));
   const labelledUsers = users.map((u) => ({
@@ -114,6 +134,7 @@ async function buildResponse(
   }
 
   const meta = {
+    newLeads,
     stages,
     users: labelledUsers,
     fieldDefs,

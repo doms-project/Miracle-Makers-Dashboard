@@ -74,6 +74,12 @@ export const READ_ONLY_FIELDS: string[] = [
   // caller sends — so blocklisted here as well as hidden in fieldFolders.ts,
   // for the same two reasons "Reassign Followers" is in both lists.
   "Stage History",
+  // 🔴 ROUND 181 — "First Opened": written once by /api/opportunities/[id]/opened
+  // when somebody first opens a case. A hand edit would either clear it (the
+  // "New lead" label comes back for everyone) or fill it (a lead nobody has
+  // seen loses its label). Blocklisted here AND hidden in fieldFolders.ts, for
+  // the same two reasons as Stage History.
+  "First Opened",
 ];
 
 // ═══ ROUND 151 — FIELDS WHOSE STORED VALUE IS A LIST OF USER IDS ═══════════

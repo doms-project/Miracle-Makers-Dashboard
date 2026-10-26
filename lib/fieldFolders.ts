@@ -146,6 +146,9 @@ export const LOST_REASON_OVERRIDES: Record<string, string[]> = {
 // growing on every move. Read by the KPI, not by people.
 const HIDDEN_NAMES = [
   "Transfer Reason", "Reassign Followers", "Case Manager Followers", "Stage History",
+  // ROUND 181 — `<iso>|<userId>`, machine-written once; the "New lead" label is
+  // how people see it.
+  "First Opened",
 ];
 const HIDDEN_SET = new Set(HIDDEN_NAMES.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")));
 

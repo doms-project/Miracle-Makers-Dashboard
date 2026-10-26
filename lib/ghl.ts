@@ -1610,6 +1610,10 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   // cannot be silently left unmapped.
   statusChangedAt: [],
   version: [], // native GHL updatedAt, not a custom field
+  // 🔴 ROUND 181 — "First Opened", read by name like every field above. The
+  // value is machine-written (`<iso>|<userId>`) and hidden from the panel.
+  firstOpened: ["firstopened"],
+  newLead: [], // computed by the route, never a field
 };
 
 // Reverse lookup: normalized alias -> target key.
@@ -1717,6 +1721,8 @@ function normalizeOpportunity(
     // one screen that reads it prints the caveat beside the number.
     statusChangedAt: String(opp.lastStatusChangeAt ?? ""),
     createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
+    // ROUND 181 — filled from the "First Opened" field by the alias loop below.
+    firstOpened: "",
   };
   // Resolve follower ids -> names via the same users lookup used for the owner.
   // Never leak a raw user id to the UI — an unresolvable id reads "Former user"
@@ -5863,6 +5869,7 @@ import {
   parseStageHistory,
   encodeStageRow,
 } from "@/lib/stageHistory";
+import { FIRST_OPENED_FIELD, encodeFirstOpened, parseFirstOpened } from "@/lib/newLead";
 
 export interface StageRecordResult {
   recorded: boolean;
@@ -5914,6 +5921,51 @@ export async function appendStageHistory(oppId: string): Promise<StageRecordResu
 
   await putOpportunityVerified(oppId, { customFields: [{ id: def.id, value: next }] }, "stage-history");
   return { recorded: true, why: `${rows.length ? "appended" : "first row"} for ${oppId}`, row, rows: rows.length + 1 };
+}
+
+// ═══ ROUND 181 — "NEW LEAD" UNTIL SOMEBODY OPENS IT ════════════════════════
+// The rule and the value format live in lib/newLead.ts (no imports, so the
+// browser can use them). This is the one place that WRITES the field.
+
+/** Does this account have the "First Opened" field? No field = no tracking. */
+export async function firstOpenedFieldId(): Promise<string | null> {
+  const def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
+  return def?.id ? String(def.id) : null;
+}
+
+export interface FirstOpenedResult {
+  recorded: boolean;
+  /** What the field holds now — ours, or the earlier opener's. */
+  value: string | null;
+  why: string;
+}
+
+/**
+ * Record the FIRST open of `oppId` by `userId`. Writes at most once per case.
+ *
+ * 🔴 READ FIRST, FROM GOHIGHLEVEL, UNCACHED. Two people opening the same new
+ * lead a second apart both reach this; the second must find the first one's
+ * value and leave it alone, so the record — not the browser's copy — decides.
+ * The window between this read and the write is the one race left, and losing
+ * it costs only WHICH of two openers is named, never a lost open.
+ *
+ * ⚠️ NEVER THROWS FOR "NOTHING TO DO". No field and already-opened are normal
+ * answers with `recorded: false`; only a failed GoHighLevel call throws.
+ */
+export async function markFirstOpened(oppId: string, userId: string): Promise<FirstOpenedResult> {
+  const fieldId = await firstOpenedFieldId();
+  if (!fieldId)
+    return { recorded: false, value: null, why: `no "${FIRST_OPENED_FIELD}" opportunity field on this account` };
+  invalidateOpportunity(oppId);
+  const rec = await getOpportunityByIdUncached(oppId);
+  if (!rec) return { recorded: false, value: null, why: "the record could not be read" };
+  const existing = parseFirstOpened(rec.cf[fieldId]);
+  if (existing)
+    return { recorded: false, value: encodeFirstOpened(existing.at, existing.userId), why: "already opened" };
+  const value = encodeFirstOpened(new Date().toISOString(), userId);
+  await putOpportunityVerified(oppId, { customFields: [{ id: fieldId, value }] }, "first-opened");
+  invalidateOpportunity(oppId);
+  return { recorded: true, value, why: "first open recorded" };
 }
 
 export interface CaseManagerResult {

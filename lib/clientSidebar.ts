@@ -223,8 +223,11 @@ export function selectionAfterHide(
 export const REMEMBERED_ENTRY_KEY = "mm.clientPipeline";
 
 /**
- * ROUND 177 · D10 — the sidebar's collapse choice: "expanded" | "collapsed",
- * ABSENT = collapsed. A NEW key on purpose: v176's `mm.railCollapsed` was only
+ * ROUND 177 · D10 — the sidebar's collapse choice: "expanded" | "collapsed".
+ * 🔴 ROUND 181: ABSENT = EXPANDED (it was collapsed). Anyone who pressed » under
+ * 177 has "expanded" stored and stays expanded; anyone who pressed « has
+ * "collapsed" and stays collapsed; everybody else now starts expanded.
+ * A NEW key on purpose (in 177): v176's `mm.railCollapsed` was only
  * written by people who toggled, so reusing it would have kept everyone who
  * tried » expanded and never shown them the new default. app/layout.tsx's
  * inline script reads this same string — keep the two in step.
