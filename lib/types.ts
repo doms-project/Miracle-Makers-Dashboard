@@ -161,7 +161,7 @@ export interface ContactMatch {
 
 export interface Viewer {
   authenticated: boolean; // false when SSO isn't configured (open/setup mode)
-  isAdmin: boolean; // role === "admin" || type === "agency"
+  isAdmin: boolean; // isAdminRole(role): "admin" or "owner" (lib/adminRole.ts) — never `type`
   userName: string | null;
   role: string | null;
   type?: string | null; // GHL session `type` (agency/location) — diagnostic

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import ErrorMessage from "@/components/ErrorMessage";
 import InlineName from "@/components/InlineName";
 import { apiFetch, apiError } from "@/lib/apiFetch";
+import { isAdminRole } from "@/lib/adminRole";
 import type { ReactNode } from "react";
 import {
   DndContext,
@@ -2673,10 +2674,11 @@ export default function Dashboard() {
 
   // Admin (or the open no-SSO setup view) sees everything; a restricted signed-in
   // user sees only their assigned records. ROLE-ONLY, mirroring the server rule
-  // (GHL `type` is account context, not permission).
+  // (GHL `type` is account context, not permission). ROUND 180: the SAME
+  // function the server uses — "owner" (the Agency Owner) is an admin.
   const isAdminViewer =
     sso.status === "none" ||
-    (sso.status === "ready" && sso.session.role === "admin");
+    (sso.status === "ready" && isAdminRole(sso.session.role));
 
   // Current viewer's user id (when signed in) — used to show why a record is
   // visible: "Following" when the viewer is a follower but not the owner.
