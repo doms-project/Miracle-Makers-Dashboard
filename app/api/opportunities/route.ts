@@ -52,13 +52,26 @@ async function buildResponse(
   let newLeads: { tracking: boolean; since: string } | undefined;
   {
     const since = newLeadSince();
-    let tracking = false;
+    let fieldId: string | null = null;
     try {
-      tracking = !!(await firstOpenedFieldId());
+      fieldId = await firstOpenedFieldId();
     } catch {
-      tracking = false;
+      fieldId = null;
     }
-    for (const r of records) r.newLead = tracking && isNewLead(r, since);
+    const tracking = !!fieldId;
+    // 🔴 ROUND 182 — READ BY ID, NOT THROUGH THE NAME MAP. `r.firstOpened` is
+    // filled by name via a field-id→name map cached when the instance started;
+    // an instance that started before the field existed has no entry for it,
+    // so an opened lead would read as never opened and keep its label there.
+    // The id just looked up is current, and `r.cf` holds every raw value.
+    for (const r of records) {
+      if (fieldId) {
+        const raw = r.cf[fieldId];
+        const v = Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
+        if (v.trim()) r.firstOpened = v;
+      }
+      r.newLead = tracking && isNewLead(r, since);
+    }
     newLeads = { tracking, since };
   }
   // Label every user with their division(s) for the owner/follower pickers.
