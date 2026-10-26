@@ -5,6 +5,7 @@ import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 import { divisionLabel } from "@/lib/division";
 import { caseManagerColumns, caseManagerPreview } from "@/lib/caseManagerLabels";
+import { isAdminRole } from "@/lib/adminRole";
 
 type User = { id: string; name: string; email: string; role: string };
 type Pipeline = {
@@ -134,7 +135,8 @@ export default function PipelineAccessTab({
     load();
   }, [load]);
 
-  const isAdmin = (u: User) => u.role === "admin";
+  // ROUND 180 — the shared rule: the Agency Owner ("owner") is labelled admin too.
+  const isAdmin = (u: User) => isAdminRole(u.role);
 
   // One toggle for both grids — pipelines and folders are the same shape
   // (userId -> id[]) and differ only in which map they live in.

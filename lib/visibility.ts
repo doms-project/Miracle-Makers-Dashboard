@@ -1,20 +1,25 @@
 import type { OpportunityRecord } from "./types";
 import type { GhlSession } from "./sso";
 import { getUserHomePipelines } from "./pipelineAccess";
+import { isAdminRole } from "./adminRole";
 
 // Phase 3 permission model — ASSIGNMENT ONLY (shared by the list + save routes).
 // Admins see & edit all; everyone else is limited to records they own or follow.
 // Office is NOT a permission gate.
 //
-// Admin is decided by ROLE ONLY (`role === "admin"`). We deliberately do NOT use
+// ROUND 180 — "owner" is an admin too: GoHighLevel sends the Agency Owner as
+// role "owner", and they were being treated as a rep. The rule lives in
+// lib/adminRole.ts so the browser uses the same one.
+//
+// Admin is decided by ROLE ONLY (`isAdminRole`). We deliberately do NOT use
 // `type === "agency"`: GHL's SSO `type` reflects the account *context*
 // (agency vs location), not permission — an agency-context user with
 // `role: "user"` is still a restricted rep. Using `|| type === "agency"` wrongly
 // let those reps bypass the filter and see every record. GHL admins carry
-// `role: "admin"`, so they keep full access.
+// `role: "admin"` (or "owner"), so they keep full access.
 export function isAdminSession(role?: string, type?: string): boolean {
   void type; // intentionally unused — see note above
-  return role === "admin";
+  return isAdminRole(role);
 }
 
 /**
