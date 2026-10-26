@@ -1056,6 +1056,14 @@ function CardBody({
     <>
       <div className="cn">
         {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
+        {/* 🔴 ROUND 181 — until anybody opens it (lib/newLead.ts). Set by the
+            server on client AND Recruiting records, only while opens can be
+            recorded, so it can never be stuck on. */}
+        {r.newLead ? (
+          <span className="newlead-tag" title="Nobody has opened this lead yet — it clears for everyone once someone does">
+            New lead
+          </span>
+        ) : null}
         {following ? (
           <span
             className="follow-tag"
@@ -1489,6 +1497,12 @@ function MasterCard({
     >
       <div className="cn">
         {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
+        {/* ROUND 181 — the same label on the Master view's cards. */}
+        {r.newLead ? (
+          <span className="newlead-tag" title="Nobody has opened this lead yet — it clears for everyone once someone does">
+            New lead
+          </span>
+        ) : null}
         {following ? (
           <span
             className="follow-tag"
@@ -1739,12 +1753,13 @@ export default function Dashboard() {
   const [pipelineSidebarHidden, setPipelineSidebarHidden] = useState<
     Record<string, true> | undefined
   >(undefined);
-  // 🔴 ROUND 177 · D10 — THE SIDEBAR STARTS COLLAPSED. The width itself is
-  // CSS keyed on `html[data-rail]`, which the inline script in app/layout.tsx
-  // sets before first paint from `mm.rail` (absent = collapsed). This state
-  // only drives the « » button, and starts at the SERVER default so hydration
-  // matches; the layout effect below reads the real choice before paint.
-  const [railPref, setRailPref] = useState<"collapsed" | "expanded">("collapsed");
+  // 🔴 ROUND 181 — THE SIDEBAR STARTS EXPANDED (round 177 had it collapsed).
+  // The width itself is CSS keyed on `html[data-rail]`, which the inline script
+  // in app/layout.tsx sets before first paint from `mm.rail` (absent =
+  // expanded; "collapsed" = somebody pressed «). This state only drives the
+  // « » button, and starts at the SERVER default so hydration matches; the
+  // layout effect below reads the real choice before paint.
+  const [railPref, setRailPref] = useState<"collapsed" | "expanded">("expanded");
   const [railNarrow, setRailNarrow] = useState(false);
   /** ROUND 177 · R3 — the first client load has finished (either way). */
   const [clientSettled, setClientSettled] = useState(false);
@@ -2672,6 +2687,62 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selId, sso.status, sso.blob]);
 
+  // 🔴 ROUND 181 — OPENING A "NEW LEAD" ENDS ITS LABEL, FOR EVERYBODY.
+  //
+  // The label goes at once (the person who opened it has seen it), then the
+  // server records the first open on the case (/api/opportunities/[id]/opened
+  // → the "First Opened" field), which is what clears it for everyone else on
+  // their next load.
+  //
+  // ⚠️ A FAILED SAVE PUTS THE LABEL BACK. Hiding it locally while the server
+  // never recorded the open would tell this person the lead is handled when,
+  // for everybody else, it is still new. The id leaves `markedOpen` too, so the
+  // next open tries again.
+  //
+  // ⚠️ ONCE PER CASE PER PAGE (`markedOpen`): the effect re-runs whenever the
+  // board data changes, and must not post again for a case already sent.
+  const markedOpen = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // ⚠️ A BOARD LOAD THAT LANDS WHILE THE SAVE IS IN FLIGHT can carry the
+    // label again (the server had not written it yet). Anything this page has
+    // sent, and not had refused, stays unlabelled. Only sets state when there
+    // is something to change, so this cannot loop.
+    // ⚠️ BOTH BOARDS: a client case lives in `data`, a Recruiting applicant in
+    // `cgData`, and the same panel (one `selId`) opens either.
+    const stale = (list: OpportunityRecord[]) => list.some((x) => x.newLead && markedOpen.current.has(x.id));
+    const unstale = (prev: OpportunityRecord[]) =>
+      prev.map((x) => (x.newLead && markedOpen.current.has(x.id) ? { ...x, newLead: false } : x));
+    if (stale(data) || stale(cgData)) {
+      if (stale(data)) setData(unstale);
+      if (stale(cgData)) setCgData(unstale);
+      return;
+    }
+    if (!selId || !ssoResolved(sso)) return;
+    const inClients = data.some((x) => x.id === selId);
+    const r = (inClients ? data : cgData).find((x) => x.id === selId);
+    if (!r?.newLead || markedOpen.current.has(selId)) return;
+    const id = selId;
+    const setList = inClients ? setData : setCgData;
+    markedOpen.current.add(id);
+    setList((prev) => prev.map((x) => (x.id === id ? { ...x, newLead: false } : x)));
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (sso.blob) headers["x-ghl-sso-key"] = sso.blob;
+    fetch(`/api/opportunities/${encodeURIComponent(id)}/opened`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      cache: "no-store",
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      })
+      .catch(() => {
+        markedOpen.current.delete(id);
+        setList((prev) => prev.map((x) => (x.id === id ? { ...x, newLead: true } : x)));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selId, sso.status, sso.blob, data, cgData]);
+
   // Admin (or the open no-SSO setup view) sees everything; a restricted signed-in
   // user sees only their assigned records. ROLE-ONLY, mirroring the server rule
   // (GHL `type` is account context, not permission). ROUND 180: the SAME
@@ -3488,6 +3559,12 @@ export default function Dashboard() {
                   likely to carry one. Same component as the client row and the
                   kanban card: one mapping, one place to change it. */}
               {cgStr(r, "applicant") || "—"}
+              {/* ROUND 181 — a new applicant, until anybody opens it. */}
+              {r.newLead ? (
+                <span className="newlead-tag" title="Nobody has opened this lead yet — it clears for everyone once someone does">
+                  New lead
+                </span>
+              ) : null}
               <SourceMark src={r.src} />
             </span>
           </div>
@@ -3511,6 +3588,12 @@ export default function Dashboard() {
         <div className="clientcell">
           <span className="clname">
             {r.oppName || clientName(r) || "—"}
+            {/* ROUND 181 — and on the list row. */}
+            {r.newLead ? (
+              <span className="newlead-tag" title="Nobody has opened this lead yet — it clears for everyone once someone does">
+                New lead
+              </span>
+            ) : null}
             {r.pipelineName ? (
               <span className="divbadge" title={r.pipelineName}>
                 {r.pipelineName}
@@ -5880,11 +5963,11 @@ export default function Dashboard() {
     );
   }, [railIsCollapsed]);
   useLayoutEffect(() => {
-    let pref: "collapsed" | "expanded" = "collapsed";
+    let pref: "collapsed" | "expanded" = "expanded";
     try {
-      if (window.localStorage.getItem(RAIL_KEY) === "expanded") pref = "expanded";
+      if (window.localStorage.getItem(RAIL_KEY) === "collapsed") pref = "collapsed";
     } catch {
-      /* storage blocked — the default, collapsed */
+      /* storage blocked — the default, expanded */
     }
     const mq = window.matchMedia("(max-width: 640px)");
     setRailPref(pref);
@@ -6275,7 +6358,8 @@ export default function Dashboard() {
               and "Open Recruiting" is the way in for somebody with no entry:
               it opens the board's own, longer explanation.
               ⚠️ ADDITION 1 — the button stays visible COLLAPSED, as an icon
-              with the line in its title, because collapsed is the default. */}
+              with the line in its title — collapsed was the default in 177,
+              and is still one press of « away (and forced at ≤640px). */}
           {cgEmptyCause ? (
             <>
               <div className="railpipenote">{RECRUITING_EMPTY_LINE[cgEmptyCause]}</div>

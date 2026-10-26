@@ -121,17 +121,17 @@ MODE=full section "10 · two caregiver loads per page load" app/page.tsx \
       !cgTried.current &&' \
 '      (clientSettled || view === "caregivers") &&'
 
-MODE=full section "11 · the default is expanded again" app/page.tsx \
-'    let pref: "collapsed" | "expanded" = "collapsed";
-    try {
-      if (window.localStorage.getItem(RAIL_KEY) === "expanded") pref = "expanded";' \
+MODE=full section "11 · (ROUND 181) the page reads the old collapsed default" app/page.tsx \
 '    let pref: "collapsed" | "expanded" = "expanded";
     try {
-      if (window.localStorage.getItem(RAIL_KEY) === "collapsed") pref = "collapsed";'
+      if (window.localStorage.getItem(RAIL_KEY) === "collapsed") pref = "collapsed";' \
+'    let pref: "collapsed" | "expanded" = "collapsed";
+    try {
+      if (window.localStorage.getItem(RAIL_KEY) === "expanded") pref = "expanded";'
 
 MODE=full section "12 · no inline script — the collapse is read after hydration" app/layout.tsx \
-'if(localStorage.getItem("mm.rail")==="expanded"&&' \
-'if(false&&'
+'if(c||matchMedia("(max-width: 640px)").matches)' \
+'if(false)'
 
 MODE=lib section "13 · the default landing picks a hidden pipeline" lib/recruitingSidebar.ts \
 '    groupList.find((p) => !isHiddenFromSidebar(hidden, p.id))?.id ||

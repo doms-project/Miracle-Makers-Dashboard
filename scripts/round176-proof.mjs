@@ -569,11 +569,9 @@ ok("🔴 clicking the heading changes nothing",
   JSON.stringify(r0) === JSON.stringify(r1), { r0, r1 });
 
 console.log("\n6b · THE ENTRIES");
-// ⚠️ ROUND 177 · D10 — THE SIDEBAR STARTS COLLAPSED now, and the long-name
-// ellipsis below needs names on screen, so expand first (») — the step the
-// owner takes to read names. 6e then collapses with « exactly as before.
-await frame.click(".railcollapse");
-await page.waitForTimeout(400);
+// ⚠️ ROUND 177 · D10 made the sidebar start collapsed and this proof pressed »
+// here to read names. ROUND 181 reversed that — it starts EXPANDED — so there
+// is nothing to press: names are already on screen. 6e collapses with « as before.
 console.log(`  ${r0.entries.join(" · ")}`);
 ok("All clients first, then the five shown pipelines — no ODP",
   JSON.stringify(r0.entries) === JSON.stringify(["All clients", "OLTL Enrollment", "OLTL Transfer",

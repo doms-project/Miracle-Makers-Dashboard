@@ -471,12 +471,14 @@ const btnNow = await frame.evaluate(() => {
 ok("ROUND 178 · …and enabled, reading Refresh, once it has ended",
   btnNow.disabled === false && /Refresh$/.test(btnNow.label.trim()), btnNow);
 
-console.log("\n5a · 🔴 D10 — A FRESH BROWSER STARTS COLLAPSED, WITH NO WIDE FRAME");
+// ⚠️ ROUND 181 REVERSED D10: a fresh browser now starts EXPANDED. Same
+// assertion shape — every frame one width, never the other — other way round.
+console.log("\n5a · 🔴 D10/R181 — A FRESH BROWSER STARTS EXPANDED, WITH NO NARROW FRAME");
 const w0 = await frame.evaluate(() => window.__railW);
-ok("🔴 every sampled frame from first paint is 64px — never 184",
-  w0.length > 0 && w0.every((w) => w === 64), [...new Set(w0)]);
-ok("…the server HTML already says collapsed",
-  /<html[^>]*data-rail="collapsed"/.test(await (await fetch(`${base}/`)).text()), null);
+ok("🔴 every sampled frame from first paint is 184px — never 64",
+  w0.length > 0 && w0.every((w) => w === 184), [...new Set(w0)]);
+ok("…the server HTML already says expanded",
+  /<html[^>]*data-rail="expanded"/.test(await (await fetch(`${base}/`)).text()), null);
 
 console.log("\n5b · D8 — RECRUITING LOADS ONCE, AFTER THE CLIENT BOARD");
 const cgReqs = A.log.filter((e) => e.cg);
@@ -729,7 +731,7 @@ const measure = () => frame.evaluate(() => {
 // element; hiding it here measures what a user of the deployed page sees.
 await frame.addStyleTag({ content: "nextjs-portal{display:none!important}" });
 const heights = {};
-for (const mode of ["collapsed", "expanded"]) {
+for (const mode of ["expanded", "collapsed"]) { // ROUND 181: expanded is first now
   for (const hh of [700, 600]) {
     await page.setViewportSize({ width: W, height: hh });
     await page.evaluate((x) => { document.querySelector("iframe").style.height = `${x}px`; }, hh);
@@ -739,15 +741,16 @@ for (const mode of ["collapsed", "expanded"]) {
     ok(`${mode} at 1280×${hh}: stamp and last control reachable by scrolling the rail, .app unmoved`,
       m.stamp && m.last && m.app === 0, m);
   }
-  if (mode === "collapsed") {
+  if (mode === "expanded") {
     await page.setViewportSize({ width: W, height: H });
     await page.evaluate((x) => { document.querySelector("iframe").style.height = `${x}px`; }, H);
-    await frame.click(".railcollapse"); // » expands
+    await frame.click(".railcollapse"); // « collapses (ROUND 181: it starts expanded)
     await page.waitForTimeout(500);
   }
 }
 console.log(`  heights: ${JSON.stringify(Object.fromEntries(Object.entries(heights).map(([k, v]) => [k, `${v.content}/${v.box} railsec ${v.railsec}`])))}`);
-ok("» expanded the rail to 184px", heights["expanded@700"].w === 184, heights["expanded@700"].w);
+ok("the default rail is 184px", heights["expanded@700"].w === 184, heights["expanded@700"].w);
+ok("« collapsed the rail to 64px", heights["collapsed@700"].w === 64, heights["collapsed@700"].w);
 
 console.log("\n5j · 🔴 THE CHOICE SURVIVES A RELOAD — AND DOES NOT FLASH NARROW");
 await page.setViewportSize({ width: W, height: H });
@@ -757,8 +760,13 @@ const f2 = page.frames().find((x) => x !== page.mainFrame());
 await f2.waitForSelector(".railpipe", { timeout: 90000 });
 await page.waitForTimeout(1500);
 const w1 = await f2.evaluate(() => window.__railW);
-ok("🔴 after a reload, every frame is 184px — no 64px frame first", w1.length > 0 && w1.every((w) => w === 184),
+// ROUND 181 — the stored choice is now « (collapsed), so the reload must hold
+// 64px from the first frame, with no 184px default flashing first.
+ok("🔴 after a reload, every frame is 64px — no 184px frame first", w1.length > 0 && w1.every((w) => w === 64),
   [...new Set(w1)]);
+// » again, so the narrow check below is still "even for somebody who chose expanded".
+await f2.click(".railcollapse");
+await page.waitForTimeout(500);
 await page.setViewportSize({ width: 600, height: H });
 await page.evaluate(() => { document.querySelector("iframe").style.width = "600px"; });
 await page.waitForTimeout(700);
@@ -775,6 +783,8 @@ const Z = await openAs(ZERO, "user");
 // ⚠️ ATTACHED, NOT VISIBLE: whether it is visible collapsed is the assertion
 // (revert A1b crashed here instead of going red).
 await Z.frame.waitForSelector(".railopen", { state: "attached", timeout: 150000 });
+// ROUND 181 — a fresh browser starts expanded now; « to test the collapsed rail.
+await Z.frame.click(".railcollapse");
 await Z.page.waitForTimeout(800);
 const zo = await Z.frame.evaluate(() => {
   const b = document.querySelector(".railopen");
@@ -785,7 +795,7 @@ const zo = await Z.frame.evaluate(() => {
     title: b.title, label: b.getAttribute("aria-label"),
     entries: document.querySelectorAll('[aria-labelledby="railhead-recruiting"] .railpipe').length };
 });
-ok("collapsed by default for this user too", zo.w === 64, zo.w);
+ok("collapsed (after «) for this user too", zo.w === 64, zo.w);
 ok("🔴 \"Open Recruiting\" is visible and clickable in the collapsed rail", zo.shown && zo.label === "Open Recruiting", zo);
 ok("…its title says why: no pipelines assigned", /No recruiting pipelines assigned yet/.test(zo.title), zo.title);
 ok("…and they have no Recruiting entries", zo.entries === 0, zo.entries);
