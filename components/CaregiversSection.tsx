@@ -48,6 +48,7 @@ export default function CaregiversSection({
   canManage,
   selfRole,
   panelReady,
+  onLinksChanged,
 }: {
   opportunityId: string;
   ssoBlob: string | null;
@@ -64,8 +65,17 @@ export default function CaregiversSection({
   // the record came out of. See the note on `otherRole` below for why it had to
   // be passed in rather than inferred here.
   selfRole?: "caregiver" | "client";
+  // ROUND 183 — tells the board what GoHighLevel just returned, so the card's
+  // "⇄ 1 caregiver" badge follows the panel instead of waiting for a reload.
+  // `links` is THIS record's full list as read back from GoHighLevel;
+  // `otherContactId` is the person just linked or unlinked, whose own count
+  // is now stale and must be re-asked.
+  onLinksChanged?: (links: Caregiver[], otherContactId?: string) => void;
 }) {
   const [caregivers, setCaregivers] = useState<Caregiver[] | null>(null);
+  // A ref, so a new callback identity from the parent never re-runs load().
+  const linksChangedRef = useRef(onLinksChanged);
+  linksChangedRef.current = onLinksChanged;
   const [loadErr, setLoadErr] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
@@ -111,6 +121,9 @@ export default function CaregiversSection({
       if (!res.ok) throw apiError(res, j);
       setLoadErr(null);
       setCaregivers(j.caregivers || []);
+      // Opening the panel is a fresh read, so it also corrects this record's
+      // badge if it was counted before a link changed elsewhere.
+      linksChangedRef.current?.(j.caregivers || []);
     } catch (e) {
       if (!isCurrent()) return;
       setLoadErr(e);
@@ -220,6 +233,7 @@ export default function CaregiversSection({
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw apiError(res, j);
       setCaregivers(j.caregivers || []);
+      linksChangedRef.current?.(j.caregivers || [], hit.id);
       setQ("");
       setHits([]);
       setOpen(false);
@@ -242,6 +256,7 @@ export default function CaregiversSection({
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw apiError(res, j);
       setCaregivers(j.caregivers || []);
+      linksChangedRef.current?.(j.caregivers || [], c.contactId);
     } catch (e) {
       setActionErr(e);
     } finally {
