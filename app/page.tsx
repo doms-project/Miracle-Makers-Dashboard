@@ -24,8 +24,10 @@ import type {
   ApiError,
   Note,
   RelationCounts,
+  Caregiver,
   EditableFieldDef,
 } from "@/lib/types";
+import { applyLinkChangeToCounts } from "@/lib/linkCounts";
 import { useGhlSession, ssoResolved, ssoWaiting } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
@@ -3315,6 +3317,17 @@ export default function Dashboard() {
    * was in neither set, so every re-render asked again.
    */
   const relInFlight = useRef<Set<string>>(new Set());
+  /**
+   * ROUND 183 — IDS WHOSE IN-FLIGHT ANSWER IS ALREADY OUT OF DATE.
+   *
+   * A link added or removed in the panel changes two people's counts. If a
+   * count request for either of them started before the change, its answer
+   * describes the world before the change and must not be recorded: it would
+   * put back the badge the change just corrected. Such an answer is dropped,
+   * and `relNudge` makes the effect run again so the id is re-asked.
+   */
+  const relStale = useRef<Set<string>>(new Set());
+  const [relNudge, setRelNudge] = useState(0);
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") {
       // No observer (very old browser, or a test environment): fall back to the
@@ -3416,6 +3429,7 @@ export default function Dashboard() {
     // success and well short of waiting for the lambda to die.
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), REL_COUNTS_TIMEOUT_MS);
+    const dropped: string[] = [];
 
     (async () => {
       try {
@@ -3442,6 +3456,11 @@ export default function Dashboard() {
         const declaredUnknown = new Set(j.unknown ?? []);
         const next: RelationCounts = {};
         for (const id of ids) {
+          if (relStale.current.has(id)) {
+            relStale.current.delete(id);
+            dropped.push(id);
+            continue;
+          }
           const c = j.counts?.[id];
           // ⚠️ A COUNT IS USED ONLY IF IT IS PRESENT *AND* NOT DECLARED UNKNOWN.
           // Absence is never turned into a zero — that was the defect: a
@@ -3463,11 +3482,20 @@ export default function Dashboard() {
         // the refresh is genuinely user-initiated, and that is a separate
         // question from the one this round is answering.
         const next: RelationCounts = {};
-        for (const id of ids) next[id] = { unknown: true };
+        for (const id of ids) {
+          if (relStale.current.has(id)) {
+            relStale.current.delete(id);
+            dropped.push(id);
+            continue;
+          }
+          next[id] = { unknown: true };
+        }
         setRelCounts((prev) => ({ ...prev, ...next }));
       } finally {
         clearTimeout(timer);
         for (const id of ids) relInFlight.current.delete(id);
+        // Only after they have left the in-flight set, or the re-run skips them.
+        if (dropped.length) setRelNudge((n) => n + 1);
       }
     })();
 
@@ -3484,7 +3512,7 @@ export default function Dashboard() {
     // `relInFlight` — so those contacts would never be re-asked and never get a
     // badge. The `finally` owns the timer, because the `finally` is the only
     // place that knows the request is over.
-  }, [onScreenIds, sso, relCounts, selId]);
+  }, [onScreenIds, sso, relCounts, selId, relNudge]);
 
   // The badge text for one record: "1 caregiver" / "2 clients", or "" when the
   // contact has no links (or its counts haven't arrived yet).
@@ -3508,6 +3536,33 @@ export default function Dashboard() {
       return parts.join(" · ");
     },
     [relCounts],
+  );
+
+  /**
+   * ROUND 183 — A LINK CHANGED IN THE PANEL; MAKE THE CARDS FOLLOW NOW.
+   *
+   * Badges were counted once per page load and never again, so a caregiver
+   * linked from the panel showed on the card only after a reload.
+   *
+   *  - THIS record's count is set from `links`, the list GoHighLevel returned
+   *    straight after the write. No extra request, and no read-after-write lag:
+   *    it is the same read the panel is showing.
+   *  - The OTHER person's count is cleared, so their card is re-asked as soon
+   *    as it is on screen (it usually sits on the other board).
+   *
+   * The counting itself is in lib/linkCounts.ts, where the proof tests it.
+   */
+  const applyLinkChange = useCallback(
+    (selfContactId: string, links: Caregiver[], otherContactId?: string) => {
+      if (!selfContactId) return;
+      // An answer already on its way for either person predates this change.
+      for (const id of [selfContactId, otherContactId])
+        if (id && relInFlight.current.has(id)) relStale.current.add(id);
+      setRelCounts((prev) =>
+        applyLinkChangeToCounts(prev, selfContactId, links, otherContactId),
+      );
+    },
+    [],
   );
 
 
@@ -10117,6 +10172,9 @@ export default function Dashboard() {
                 opportunityId={selected.id}
                 ssoBlob={sso.blob}
                 canManage={canEdit(selected)}
+                onLinksChanged={(links, otherId) =>
+                  applyLinkChange(selected.contactId, links, otherId)
+                }
                 // ITEM 2 — decided by WHICH PAYLOAD the record came from, which
                 // is exact: the caregiver scope is a different request against a
                 // different pipeline set, and the two lists never merge.
