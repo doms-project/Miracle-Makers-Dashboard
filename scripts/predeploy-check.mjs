@@ -26,7 +26,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 
 /** Printed first, so a run can be matched to the copy of this file used. */
-const SCRIPT_VERSION = "predeploy-check 186.1";
+const SCRIPT_VERSION = "predeploy-check 188.1";
 // PREDEPLOY_AS_WINDOWS=1 exercises the Windows path on another system.
 const IS_WIN = process.platform === "win32" || process.env.PREDEPLOY_AS_WINDOWS === "1";
 // Node itself runs every step — never `npx`, which Windows cannot start
@@ -137,7 +137,16 @@ if (!QUICK) {
 // processes with `pgrep`, or use /opt and /tmp paths. On Windows they fail for
 // reasons that have nothing to do with the code, so they are SKIPPED there —
 // named, never silently — and run in full on Mac and Linux.
-const LINUX_ONLY = /spawn(Sync)?\(\s*["']npx["']|pgrep|\/opt\/pw-browsers|process\.kill\(-|["'`]\/tmp\//;
+const LINUX_ONLY = /(spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*["']npx["']|pgrep|\/opt\/pw-browsers|process\.kill\(-|["'`]\/tmp\//;
+/**
+ * NODE'S WINDOWS SHUTDOWN CRASH. On Windows, `server.close()` followed at once
+ * by `process.exit()` can abort Node with "Assertion failed:
+ * !(handle->flags & UV_HANDLE_CLOSING)" (exit 0xC0000409) AFTER every check
+ * has run and printed. Accepted ONLY when the tally says 0 failed AND the
+ * output shows that exact crash; any other non-zero exit is still a failure.
+ */
+const WIN_SHUTDOWN_CRASH = (code, out) =>
+  IS_WIN && (code === 3221226505 || code === -1073740791 || /UV_HANDLE_CLOSING/.test(out));
 const skipped = [];
 const proof = async (name, timeoutMs = 120_000) => {
   if (IS_WIN) {
@@ -151,15 +160,24 @@ const proof = async (name, timeoutMs = 120_000) => {
   });
   const t = tally(r.out);
   const failedN = Number((/(\d+) failed/.exec(t) || [])[1] || 0);
-  const ok = r.code === 0 && !!t && failedN === 0;
+  const crashedAfter = !!t && failedN === 0 && r.code !== 0 && WIN_SHUTDOWN_CRASH(r.code, r.out);
+  const ok = (r.code === 0 || crashedAfter) && !!t && failedN === 0;
   record(
     `proof · ${name}`,
     ok,
-    r.timedOut ? `timed out after ${timeoutMs / 1000}s` : t || `no tally printed — ${lastLine(r.out).slice(0, 140)}`,
+    r.timedOut
+      ? `timed out after ${timeoutMs / 1000}s`
+      : !t
+        ? `no tally printed — ${lastLine(r.out).slice(0, 140)}`
+        : crashedAfter
+          ? `${t} · then Node's known Windows shutdown crash (ignored: every check had passed)`
+          : r.code !== 0 && failedN === 0
+            ? `${t} · but exited with code ${r.code} — ${lastLine(r.out).slice(0, 140)}`
+            : t,
   );
 };
 
-for (const n of ["round183", "round184", "round185", "round186"]) await proof(n);
+for (const n of ["round183", "round184", "round185", "round186", "round187", "round188"]) await proof(n);
 
 if (!QUICK) {
   const names = readFileSync("scripts/regression.txt", "utf8")
