@@ -1854,6 +1854,11 @@ export default function Dashboard() {
   const [createdRange, setCreatedRange] = useState<CreatedRange>("all");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
+  // 🔴 ROUND 190 — MASTER HAS ITS OWN. Each tab keeps its own date range: a
+  // range set on Clients no longer narrows Master, and the reverse.
+  const [masterCreatedRange, setMasterCreatedRange] = useState<CreatedRange>("all");
+  const [masterCreatedFrom, setMasterCreatedFrom] = useState("");
+  const [masterCreatedTo, setMasterCreatedTo] = useState("");
   const [cgCreatedRange, setCgCreatedRange] = useState<CreatedRange>("all");
   const [cgCreatedFrom, setCgCreatedFrom] = useState("");
   const [cgCreatedTo, setCgCreatedTo] = useState("");
@@ -4128,6 +4133,14 @@ export default function Dashboard() {
     return { stalled, noDate, approx };
   };
 
+  const masterWin = useMemo(
+    () => createdWindow(masterCreatedRange, new Date(), masterCreatedFrom, masterCreatedTo),
+    [masterCreatedRange, masterCreatedFrom, masterCreatedTo],
+  );
+  const masterUndated = useMemo(
+    () => (windowActive(masterWin) ? data.filter((r) => !easternDayKey(r.createdAt)).length : 0),
+    [data, masterWin],
+  );
   const masterColumns = useMemo(() => {
     const needle = q.trim().toLowerCase();
     // ⚠️ THE TILES FILTER THE BOARD. A number you cannot act on is trivia —
@@ -4158,7 +4171,7 @@ export default function Dashboard() {
     };
     const match = (r: OpportunityRecord) =>
       (office === "all" || r.office === office) &&
-      inCreatedWindow(r.createdAt, clientWin) &&
+      inCreatedWindow(r.createdAt, masterWin) &&
       focused(r) &&
       (needle === "" ||
         `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
@@ -4184,7 +4197,7 @@ export default function Dashboard() {
         records: other,
       });
     return cols;
-  }, [data, q, office, transferredFrom, masterFocus, clientWin]);
+  }, [data, q, office, transferredFrom, masterFocus, masterWin]);
 
   // Computed over everything the viewer can access, NOT over the focused set —
   // otherwise clicking a tile would rewrite the numbers you clicked.
@@ -8727,12 +8740,58 @@ export default function Dashboard() {
                     ))}
                   </select>
                 </div>
-                <span className="count">
-                  {masterColumns.reduce((n, c) => n + c.records.length, 0)} record
-                  {masterColumns.reduce((n, c) => n + c.records.length, 0) === 1
-                    ? ""
-                    : "s"}
-                </span>
+                {/* ROUND 189 showed the date filter Master applies; ROUND 190
+                    gives Master its OWN — the Clients board's range no longer
+                    reaches it. */}
+                <CreatedFilter
+                  id="mcreatedSel"
+                  range={masterCreatedRange}
+                  onRange={setMasterCreatedRange}
+                  from={masterCreatedFrom}
+                  onFrom={setMasterCreatedFrom}
+                  to={masterCreatedTo}
+                  onTo={setMasterCreatedTo}
+                  undated={masterUndated}
+                />
+                {(() => {
+                  // ⚠️ "N of M" AND EVERY FILTER BY NAME, so "Master doesn't
+                  // show everything" always answers itself on screen.
+                  const shown = masterColumns.reduce((n, c) => n + c.records.length, 0);
+                  const total = data.length;
+                  const on: string[] = [];
+                  if (q.trim()) on.push(`search “${q.trim()}”`);
+                  if (office !== "all") on.push(`office ${office}`);
+                  const cw = describeWindow(masterCreatedRange, masterWin);
+                  if (cw) on.push(cw);
+                  if (masterFocus) on.push(focusLabel(masterFocus));
+                  return (
+                    <span className="count mcount">
+                      {shown === total
+                        ? `${total} record${total === 1 ? "" : "s"}`
+                        : `Showing ${shown} of ${total} records`}
+                      {on.length ? (
+                        <>
+                          {" · filtered by "}
+                          {on.join(", ")}{" "}
+                          <button
+                            type="button"
+                            className="linkbtn"
+                            onClick={() => {
+                              setQ("");
+                              setOffice("all");
+                              setMasterCreatedRange("all");
+                              setMasterCreatedFrom("");
+                              setMasterCreatedTo("");
+                              setMasterFocus(null);
+                            }}
+                          >
+                            Clear filters
+                          </button>
+                        </>
+                      ) : null}
+                    </span>
+                  );
+                })()}
               </div>
               {/* 🔴 THE MASTER VIEW HAD NO NUMBERS AT ALL — it listed records
                   and nothing else, while the client board carried four tiles.
