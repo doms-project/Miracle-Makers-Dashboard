@@ -51,7 +51,8 @@ console.log("5 · Wired into both boards");
 const src = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const block = (start, len = 2500) => src.slice(src.indexOf(start), src.indexOf(start) + len);
 ok("Clients list/board/tiles (preSrc) filter by it", /inCreatedWindow\(r\.createdAt, clientWin\)/.test(block("const preSrc = useMemo")));
-ok("the Master board filters by it too, like Office", /inCreatedWindow\(r\.createdAt, clientWin\)/.test(block("const match = (r: OpportunityRecord) =>", 300)));
+// ROUND 190 — Master has its own range now (each tab keeps its own).
+ok("the Master board filters by its OWN range (round 190)", /inCreatedWindow\(r\.createdAt, masterWin\)/.test(block("const match = (r: OpportunityRecord) =>", 300)));
 ok("Recruiting (cgPreStage) filters by its own", /inCreatedWindow\(r\.createdAt, cgWin\)/.test(block("const cgPreStage = useMemo", 400)));
 ok("both toolbars render the Created control", /<CreatedFilter\s+id="createdSel"/.test(src) && /<CreatedFilter\s+id="cgCreatedSel"/.test(src));
 ok("the two sides keep separate state", /setCreatedRange/.test(src) && /setCgCreatedRange/.test(src) && /createdWindow\(cgCreatedRange/.test(src));
