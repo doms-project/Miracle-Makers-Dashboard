@@ -31,6 +31,7 @@ import { applyLinkChangeToCounts } from "@/lib/linkCounts";
 import { useGhlSession, ssoResolved, ssoWaiting } from "@/lib/useGhlSession";
 import ImportWizard from "@/components/ImportWizard";
 import CaregiversSection from "@/components/CaregiversSection";
+import PartnerName from "@/components/PartnerName";
 import { BUILD, BUILD_LABEL } from "@/lib/build";
 import {
   isOdpOnlyRecruiting,
@@ -79,7 +80,11 @@ import PipelineAdmin from "@/components/PipelineAdmin";
 import AddCaregiverDialog from "@/components/AddCaregiverDialog";
 import ReferralsSection, { type Payload as ReferralsPayload } from "@/components/ReferralsSection";
 import ReferredBy from "@/components/ReferredBy";
-import { REFERRING_PARTNER_FIELD } from "@/lib/referrals";
+import {
+  REFERRING_PARTNER_FIELD,
+  EVENT_HOST_FIELD_NAMES as EVENT_HOST_NAMES,
+  EVENT_HOST_FIELD_ID,
+} from "@/lib/referrals";
 import { isUserIdListField } from "@/lib/editable";
 import { divisionLabel } from "@/lib/division";
 import {
@@ -3364,8 +3369,31 @@ export default function Dashboard() {
     );
     for (const el of document.querySelectorAll<HTMLElement>("[data-cid]"))
       io.observe(el);
+    // ROUND 184 — CARDS THAT APPEAR AFTER THIS EFFECT RAN ARE WATCHED TOO.
+    //
+    // The scan above sees only what is on the page right now, and this effect
+    // re-runs on the CLIENT list (`visible`, `data`, `view`). Recruiting cards
+    // arrive with `cgData` and change with its own filters, none of which are
+    // in that list — so a caregiver card that rendered later was never
+    // observed and never counted. Watching for added nodes covers every board,
+    // list and filter without naming them. Observing an element twice is a
+    // no-op, so overlap with the scan costs nothing.
+    const mo =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver((muts) => {
+            for (const m of muts)
+              for (const n of m.addedNodes) {
+                if (!(n instanceof HTMLElement)) continue;
+                if (n.dataset.cid) io.observe(n);
+                for (const el of n.querySelectorAll<HTMLElement>("[data-cid]"))
+                  io.observe(el);
+              }
+          });
+    mo?.observe(document.body, { childList: true, subtree: true });
     return () => {
       cancelAnimationFrame(raf);
+      mo?.disconnect();
       io.disconnect();
     };
     // Re-attached when the rendered set changes — a filter, a sort, a reload
@@ -3602,6 +3630,9 @@ export default function Dashboard() {
     return (
       <tr
         key={r.id}
+        // ROUND 184 — the observer's hook. Without it a recruiting row's link
+        // count was never asked for, so the badge below had nothing to show.
+        data-cid={r.contactId || undefined}
         className={r.id === selId ? "sel" : ""}
         onClick={() => setSelId(r.id)}
       >
@@ -3622,6 +3653,16 @@ export default function Dashboard() {
               ) : null}
               <SourceMark src={r.src} />
             </span>
+            {/* ROUND 184 — the same badge the client row has, reading
+                "⇄ 1 client" on a caregiver's row. */}
+            {relBadge(r) ? (
+              <span
+                className="rellink"
+                title="Linked through the caregiver ↔ client association"
+              >
+                ⇄ {relBadge(r)}
+              </span>
+            ) : null}
           </div>
         </td>
         <td>{r.stage || "—"}</td>
@@ -4709,9 +4750,21 @@ export default function Dashboard() {
   // two open lists in a narrow panel overlap each other. Named `addFieldOpen`
   // rather than `addOpen` — that one is the Add Lead modal.
   const [addFieldOpen, setAddFieldOpen] = useState<string>("");
+  // ROUND 185 — a contact section with nothing answered and nothing revealed.
+  // Only a client section can be one: a caregiver section lists every field.
+  const isQuietSection = useCallback(
+    (g: { fields: unknown[]; hidden?: { id: string }[] }) =>
+      g.fields.length === 0 &&
+      !(g.hidden || []).some((d) => revealedFields.has(d.id)),
+    [revealedFields],
+  );
+  // ROUND 185 — whether the contact sections with NO answers are on screen.
+  // Off by default and per record, like `revealedFields`.
+  const [showEmptySections, setShowEmptySections] = useState(false);
   useEffect(() => {
     setRevealedFields(new Set());
     setAddFieldOpen("");
+    setShowEmptySections(false);
   }, [selId]);
 
   // Closing without choosing changes nothing — that is the whole contract of
@@ -5560,10 +5613,56 @@ export default function Dashboard() {
 
   // Look up a field definition by (fuzzy) name, and render its editor cell.
   // Render one custom field from its definition (folder-driven path).
+  /**
+   * ROUND 185 — the ONE opportunity field that holds an event's host partner,
+   * resolved exactly as app/api/referrals/route.ts resolves it: the first field
+   * whose name matches an alias, else the known id. ONE field, never "every
+   * field matching an alias" — the aliases include plain "Host", and an
+   * unrelated field of that name must stay an ordinary editable field.
+   */
+  const eventHostFieldId = useMemo(() => {
+    const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return (
+      fieldDefs.find((d) => EVENT_HOST_NAMES.some((x) => n(x) === n(d.name)))?.id ||
+      (fieldDefs.some((d) => d.id === EVENT_HOST_FIELD_ID) ? EVENT_HOST_FIELD_ID : "")
+    );
+  }, [fieldDefs]);
+
+  /**
+   * ROUND 185 — the opportunity fields that hold a PARTNER'S CONTACT ID.
+   * Shown as the partner's name (PartnerName), never as an editable id.
+   * Each is one resolved field id, the same ids the Referrals screen writes.
+   */
+  const partnerIdField = useCallback(
+    (def: EditableFieldDef): "referrer" | "host" | "" => {
+      if (referringPartnerFieldId && def.id === referringPartnerFieldId) return "referrer";
+      if (eventHostFieldId && def.id === eventHostFieldId) return "host";
+      return "";
+    },
+    [referringPartnerFieldId, eventHostFieldId],
+  );
+
   const renderField = (
     rec: OpportunityRecord,
     def: EditableFieldDef,
-  ): ReactNode => (
+  ): ReactNode => {
+    const partnerKind = partnerIdField(def);
+    if (partnerKind)
+      return (
+        <div className="f" key={`${rec.id}:${def.id}`}>
+          <label title={def.name}>{def.name}</label>
+          <PartnerName
+            id={String(rec.cf[def.id] ?? "")}
+            ssoBlob={sso.blob}
+            hint={
+              partnerKind === "referrer" && railWhere === "clients"
+                ? "change it under Referred by, at the top"
+                : "set from Referrals"
+            }
+          />
+        </div>
+      );
+    return (
     <div
       className={`f${isWideField(def.dataType) ? " wide" : ""}`}
       key={`${rec.id}:${def.id}`}
@@ -5580,7 +5679,8 @@ export default function Dashboard() {
         onOptionAdded={applyNewOption}
       />
     </div>
-  );
+    );
+  };
 
   // ITEM 3 — RESOURCES IS ONE SYSTEM, REACHABLE FROM EITHER SECTION.
   //
@@ -7789,7 +7889,9 @@ export default function Dashboard() {
                             // follow. The PATCH route's 403 is the backstop.
                             canDrag={canEdit(r)}
                             following={followsNotOwns(r)}
-                            relBadge={undefined}
+                            // ROUND 184 — was `undefined`, so a caregiver's card
+                            // never showed "⇄ 1 client" however it was linked.
+                            relBadge={relBadge(r)}
                             onOpen={() => setSelId(r.id)}
                           />
                         ))
@@ -7819,7 +7921,7 @@ export default function Dashboard() {
                       <CardBody
                         r={r}
                         following={followsNotOwns(r)}
-                        relBadge={undefined}
+                        relBadge={relBadge(r)}
                       />
                     </div>
                   ) : null;
@@ -9977,6 +10079,22 @@ export default function Dashboard() {
                       : "Changes here follow them onto every record they hold."}
                   </div>
                   {contactGroups.map((g, gi) => {
+                    // ROUND 185 — A SECTION WITH NOTHING ANSWERED IS NOT LISTED.
+                    //
+                    // A client record listed every client folder whatever it
+                    // held, so a Facebook lead who answered one form showed
+                    // four or five bare headings after it — OLTL Waiver, ODP,
+                    // Referral Partner, Event Attendance — that read like
+                    // clutter, and the last two are not about clients at all.
+                    // They are kept one click away (the control after this
+                    // map), not removed: a rep may still record something said
+                    // on the phone. A section stays listed once a field in it
+                    // has been revealed, so a reveal never vanishes.
+                    //
+                    // ⚠️ CAREGIVER SECTIONS ARE NEVER QUIET. They list every
+                    // field, filled or not (groupContactFields), so
+                    // `g.fields` is never empty there.
+                    if (!showEmptySections && isQuietSection(g)) return null;
                     // One section open by default, the rest collapsed. On a
                     // CAREGIVER record that is the first — Caregiver
                     // Application is what a recruiter reads first, and it is
@@ -10008,7 +10126,29 @@ export default function Dashboard() {
                             followed by a bare "0" reads as broken, and its
                             "Show N empty fields" control already says how many
                             questions are waiting. */}
-                        {g.fields.length ? (
+                        {/* ROUND 185 — A CAREGIVER SECTION SHOWS PROGRESS.
+                            It lists every field filled or not, so its bare
+                            count was the TOTAL ("16") whether nothing or
+                            everything was done. It now reads filled / total.
+                            A client section lists only answered fields, so
+                            its count already means "answered" and stays as
+                            it was. `hidden` is how the two are told apart:
+                            only a client section has one. */}
+                        {g.hidden === undefined && g.fields.length ? (
+                          (() => {
+                            const done = g.fields.filter((d) =>
+                              hasValue(cFields?.values[d.id]),
+                            ).length;
+                            return (
+                              <span
+                                className={`seccount${done === g.fields.length ? " complete" : ""}`}
+                                title={`${done} of ${g.fields.length} filled in`}
+                              >
+                                {done} / {g.fields.length}
+                              </span>
+                            );
+                          })()
+                        ) : g.fields.length ? (
                           <span className="seccount">{g.fields.length}</span>
                         ) : null}
                       </button>
@@ -10116,6 +10256,27 @@ export default function Dashboard() {
                     </Fragment>
                     );
                   })}
+                  {/* ROUND 185 — the sections hidden above, one click away.
+                      Worded like the field-level control, which it sits just
+                      under, so the two read as the same idea at two sizes. */}
+                  {(() => {
+                    const quiet = contactGroups.filter(isQuietSection).length;
+                    if (!quiet) return null;
+                    return (
+                      <div className="addfield emptysections">
+                        <button
+                          type="button"
+                          className={`addfield-btn${showEmptySections ? " on" : ""}`}
+                          aria-expanded={showEmptySections}
+                          onClick={() => setShowEmptySections((v) => !v)}
+                        >
+                          {showEmptySections
+                            ? `Hide ${quiet} empty section${quiet === 1 ? "" : "s"}`
+                            : `Show ${quiet} empty section${quiet === 1 ? "" : "s"}`}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </>
               ) : null}
 

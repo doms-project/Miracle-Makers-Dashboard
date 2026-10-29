@@ -2372,3 +2372,16 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfsaved{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px;margin:8px 0 0;padding:7px 10px;border:1px solid var(--ok-line,#bcd9c0);border-radius:8px;background:var(--ok-bg,#f2f9f3);font-size:12.5px;font-weight:700;color:var(--ink);}
 .rfsavedwhy{font-weight:400;font-size:11.5px;color:var(--muted);}
 .rfsavedx{margin-left:auto;border:0;background:transparent;font-size:14px;line-height:1;color:var(--muted);cursor:pointer;padding:0 2px;}
+
+/* ROUND 185 — "Show N empty sections", under the last contact section.
+   Same quiet text button as "Show N empty fields"; a little more room above so
+   it reads as closing the Contact block rather than belonging to the section
+   just before it. */
+.addfield.emptysections{margin:12px 0 4px;}
+
+/* ROUND 185 — a partner field shows the partner's name, not their id. */
+.partnername{font-weight:600;color:var(--ink);}
+
+/* ROUND 185 — a caregiver section with every field filled in. Green, quietly,
+   so a complete section is recognisable at a glance without shouting. */
+.sechead.sectoggle .seccount.complete{color:#1f7a4d;background:#eaf6ef;border-color:#bfe3cf;}
