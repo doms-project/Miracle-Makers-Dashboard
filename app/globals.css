@@ -2385,3 +2385,9 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 /* ROUND 185 — a caregiver section with every field filled in. Green, quietly,
    so a complete section is recognisable at a glance without shouting. */
 .sechead.sectoggle .seccount.complete{color:#1f7a4d;background:#eaf6ef;border-color:#bfe3cf;}
+
+/* ROUND 188 — the "Created" filter: date boxes sized like the selects beside them. */
+.createdfilter input[type="date"]{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);box-shadow:var(--shadow-sm);}
+.createdfilter input[type="date"]:focus{border-color:var(--plum);outline:none;box-shadow:0 0 0 3px var(--plum-soft);}
+.createdfilter .createdto{color:var(--ink-3);}
+.createdfilter .createdundated{font-size:11.5px;color:var(--ink-3);}

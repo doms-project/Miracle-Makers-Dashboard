@@ -74,6 +74,15 @@ import {
   formatEasternDay,
   formatEasternNoZone,
 } from "@/lib/dates";
+import {
+  CREATED_RANGE_OPTIONS,
+  createdWindow,
+  inCreatedWindow,
+  windowActive,
+  describeWindow,
+  easternDayKey,
+  type CreatedRange,
+} from "@/lib/createdRange";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
@@ -1463,6 +1472,67 @@ function daysInStage(
 //     THE MOVE DIALOG — it never moves the card. A column here is a CATEGORY,
 //     so a drop can't decide by itself which pipeline is meant, and nothing has
 //     happened until the dialog is submitted.
+/**
+ * ROUND 188 — "Created" filter for a board's toolbar. Same look as Office and
+ * Pipeline. With "Custom range…" two date boxes appear; either may be left
+ * empty for an open-ended range. When records are left out only because they
+ * carry no created date, it says how many — never silently.
+ */
+function CreatedFilter({
+  id,
+  range,
+  onRange,
+  from,
+  onFrom,
+  to,
+  onTo,
+  undated,
+}: {
+  id: string;
+  range: CreatedRange;
+  onRange: (r: CreatedRange) => void;
+  from: string;
+  onFrom: (v: string) => void;
+  to: string;
+  onTo: (v: string) => void;
+  undated: number;
+}) {
+  return (
+    <div className="officefilter createdfilter">
+      <label htmlFor={id}>Created</label>
+      <select id={id} value={range} onChange={(e) => onRange(e.target.value as CreatedRange)}>
+        {CREATED_RANGE_OPTIONS.map(([k, label]) => (
+          <option key={k} value={k}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {range === "custom" ? (
+        <>
+          <input
+            type="date"
+            aria-label="Created from"
+            value={from}
+            onChange={(e) => onFrom(e.target.value)}
+          />
+          <span className="createdto">to</span>
+          <input
+            type="date"
+            aria-label="Created to"
+            value={to}
+            onChange={(e) => onTo(e.target.value)}
+          />
+        </>
+      ) : null}
+      {undated ? (
+        <span className="createdundated" title="These records carry no created date, so a date filter cannot place them.">
+          {undated} with no date not shown
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function MasterCard({
   r,
   following,
@@ -1779,6 +1849,14 @@ export default function Dashboard() {
 
   const [stage, setStage] = useState<string>("all");
   const [office, setOffice] = useState<string>("all"); // office filter (client req)
+  // ROUND 188 — created-date filter, one per side so Clients and Recruiting
+  // never narrow each other. Eastern calendar days; see lib/createdRange.ts.
+  const [createdRange, setCreatedRange] = useState<CreatedRange>("all");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const [cgCreatedRange, setCgCreatedRange] = useState<CreatedRange>("all");
+  const [cgCreatedFrom, setCgCreatedFrom] = useState("");
+  const [cgCreatedTo, setCgCreatedTo] = useState("");
   // ITEM — SOURCE FILTER. The "By source" tile counts records by the NATIVE
   // opportunity `source`; clicking one narrows the list/board/chips to it.
   // Held as a normalised key (trimmed, lower-cased) because `source` is free
@@ -2965,6 +3043,18 @@ export default function Dashboard() {
   // the payload was in it. The count was technically true and completely
   // misleading. Stage is excluded from this set on purpose — including it would
   // collapse the chip row to the single chip you just clicked.
+  const clientWin = useMemo(
+    () => createdWindow(createdRange, new Date(), createdFrom, createdTo),
+    [createdRange, createdFrom, createdTo],
+  );
+  /** Records a created-date filter leaves out only because they have no date. */
+  const clientUndated = useMemo(
+    () =>
+      windowActive(clientWin)
+        ? data.filter((r) => !isReassignRec(r) && !easternDayKey(r.createdAt)).length
+        : 0,
+    [data, clientWin],
+  );
   const preSrc = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return data.filter(
@@ -2978,6 +3068,7 @@ export default function Dashboard() {
         // treat as their work. Master reads `data` directly and is unaffected.
         !isReassignRec(r) &&
         (office === "all" || r.office === office) &&
+        inCreatedWindow(r.createdAt, clientWin) &&
         (scope === "all" ||
           (scope === "shared"
             ? r.shared
@@ -2990,7 +3081,7 @@ export default function Dashboard() {
             .toLowerCase()
             .includes(needle)),
     );
-  }, [data, office, q, scope, adminPipeline]);
+  }, [data, office, q, scope, adminPipeline, clientWin]);
 
   // The source filter sits BETWEEN preSrc and preStage on purpose. The "By
   // source" tile has to keep listing every channel while one is selected —
@@ -4067,6 +4158,7 @@ export default function Dashboard() {
     };
     const match = (r: OpportunityRecord) =>
       (office === "all" || r.office === office) &&
+      inCreatedWindow(r.createdAt, clientWin) &&
       focused(r) &&
       (needle === "" ||
         `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
@@ -4092,7 +4184,7 @@ export default function Dashboard() {
         records: other,
       });
     return cols;
-  }, [data, q, office, transferredFrom, masterFocus]);
+  }, [data, q, office, transferredFrom, masterFocus, clientWin]);
 
   // Computed over everything the viewer can access, NOT over the focused set —
   // otherwise clicking a tile would rewrite the numbers you clicked.
@@ -4441,11 +4533,23 @@ export default function Dashboard() {
   // Everything EXCEPT the stage filter — the stage chips count against this, so
   // a chip shows how many it would reveal rather than how many are showing now.
   // Same rule as the client chips (report 42), for the same reason.
+  const cgWin = useMemo(
+    () => createdWindow(cgCreatedRange, new Date(), cgCreatedFrom, cgCreatedTo),
+    [cgCreatedRange, cgCreatedFrom, cgCreatedTo],
+  );
+  const cgUndated = useMemo(
+    () =>
+      windowActive(cgWin)
+        ? cgData.filter((r) => r.pipelineId === cgActivePipeline && !easternDayKey(r.createdAt)).length
+        : 0,
+    [cgData, cgActivePipeline, cgWin],
+  );
   const cgPreStage = useMemo(() => {
     const needle = cgQuery.trim().toLowerCase();
     return cgData.filter(
       (r) =>
         r.pipelineId === cgActivePipeline &&
+        inCreatedWindow(r.createdAt, cgWin) &&
         (needle === "" ||
           // Stage is searchable here as well as the name: with no office or
           // county to filter on, it is the only other thing worth typing.
@@ -4453,7 +4557,7 @@ export default function Dashboard() {
             .toLowerCase()
             .includes(needle)),
     );
-  }, [cgData, cgActivePipeline, cgQuery]);
+  }, [cgData, cgActivePipeline, cgQuery, cgWin]);
 
   const cgVisible = useMemo(
     () => (cgStage ? cgPreStage.filter((r) => r.stage === cgStage) : cgPreStage),
@@ -7294,6 +7398,16 @@ export default function Dashboard() {
               </select>
             </div>
           ) : null}
+          <CreatedFilter
+            id="createdSel"
+            range={createdRange}
+            onRange={setCreatedRange}
+            from={createdFrom}
+            onFrom={setCreatedFrom}
+            to={createdTo}
+            onTo={setCreatedTo}
+            undated={clientUndated}
+          />
           <div className="officefilter">
             <label htmlFor="officeSel">Office</label>
             <select
@@ -7676,6 +7790,16 @@ export default function Dashboard() {
                     section has. Office and county are deliberately NOT here:
                     both are client custom fields and would offer an applicant
                     a dimension every row is blank on. */}
+                <CreatedFilter
+                  id="cgCreatedSel"
+                  range={cgCreatedRange}
+                  onRange={setCgCreatedRange}
+                  from={cgCreatedFrom}
+                  onFrom={setCgCreatedFrom}
+                  to={cgCreatedTo}
+                  onTo={setCgCreatedTo}
+                  undated={cgUndated}
+                />
                 <div className="officefilter">
                   <label htmlFor="cgSortSel">Sort</label>
                   <select
@@ -8967,6 +9091,10 @@ export default function Dashboard() {
                     const on: string[] = [];
                     if (q.trim()) on.push(`search “${q.trim()}”`);
                     if (office !== "all") on.push(`office ${office}`);
+                    {
+                      const cw = describeWindow(createdRange, clientWin);
+                      if (cw) on.push(cw);
+                    }
                     if (scope !== "all") on.push(`division ${scope}`);
                     if (adminPipeline !== "all")
                       on.push(
