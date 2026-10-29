@@ -658,7 +658,8 @@ export async function GET(request: Request) {
         const rows = res.rows
           .map((c) => ({
             id: c.id,
-            org: c.name,
+            // ROUND 186 — the organisation, when one was saved as the company.
+            org: c.company || c.name,
             cat: c.fields[catId] || "",
             division: c.fields[divId] || "",
             ownerId: c.assignedTo || "",
@@ -712,7 +713,9 @@ export async function GET(request: Request) {
 
       const allPartners: RawPartner[] = partnerRes.rows.map((c) => ({
         id: c.id,
-        org: c.name,
+        // ROUND 186 — the organisation, when one was saved as the company,
+        // else the contact's name (every partner saved before this round).
+        org: c.company || c.name,
         email: c.email,
         phone: c.phone,
         cat: c.fields[F.category] || "",
@@ -2806,9 +2809,15 @@ export async function POST(request: Request) {
         // the first word of the org. With no key the search-then-create below
         // is unchanged, and it is the only path where a NAME may be reused.
         if (pPhone || pEmail) {
+          // 🔴 ROUND 186 — THE ORGANISATION WAS LOST HERE. With a contact
+          // person named, `firstName` took their name and `org` went nowhere,
+          // so the partner was listed — and credited, and shown as an event's
+          // host — under the person. The organisation is now the contact's
+          // Company Name, which the partner list reads first.
           const madeP = await createPersonOrConflict({
             firstName: clean(body.firstName) || org,
             lastName: clean(body.lastName),
+            companyName: org,
             ...(pEmail ? { email: pEmail } : {}),
             ...(pPhone ? { phone: pPhone } : {}),
             ...(pOwner ? { assignedTo: pOwner } : {}),
@@ -2828,6 +2837,7 @@ export async function POST(request: Request) {
           firstName: clean(body.firstName),
           lastName: clean(body.lastName),
           name: org,
+          companyName: org, // ROUND 186 — see the branch above
           ...(pEmail ? { email: pEmail } : {}),
           ...(pPhone ? { phone: pPhone } : {}),
           // 🔴 THE OWNER IS THE POINT OF THE FIELD, per the brief: "who holds

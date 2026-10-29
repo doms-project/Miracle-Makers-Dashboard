@@ -3960,6 +3960,8 @@ export async function upsertContact(fields: {
    * 101. Owning the partner and working the case are different questions.
    */
   assignedTo?: string;
+  /** ROUND 186 — see createContact. */
+  companyName?: string;
   customFields?: { id: string; value: unknown }[];
 }): Promise<{ id: string; isNew: boolean }> {
   const { locationId } = requireEnv();
@@ -3972,6 +3974,7 @@ export async function upsertContact(fields: {
     "phone",
     "source",
     "assignedTo",
+    "companyName",
   ] as const)
     if (fields[k]) body[k] = fields[k];
   if (fields.customFields?.length) body.customFields = fields.customFields;
@@ -4028,6 +4031,12 @@ export async function createContact(fields: {
   name?: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * ROUND 186 — GoHighLevel's own "Company Name" on the contact. A referral
+   * partner's ORGANISATION goes here, so that naming a contact person in
+   * first/last no longer loses it.
+   */
+  companyName?: string;
   email?: string;
   phone?: string;
   source?: string;
@@ -4038,7 +4047,7 @@ export async function createContact(fields: {
   const first = (fields.firstName || fields.name || "").trim();
   const body: Record<string, unknown> = { locationId };
   if (first) body.firstName = first;
-  for (const k of ["lastName", "email", "phone", "source", "assignedTo"] as const)
+  for (const k of ["lastName", "email", "phone", "source", "assignedTo", "companyName"] as const)
     if (fields[k]) body[k] = fields[k];
   if (fields.customFields?.length) body.customFields = fields.customFields;
 
@@ -4115,6 +4124,8 @@ export async function ensureContact(fields: {
   name: string;
   firstName?: string;
   lastName?: string;
+  /** ROUND 186 — see createContact. */
+  companyName?: string;
   email?: string;
   phone?: string;
   source?: string;
@@ -4356,6 +4367,12 @@ export async function searchContacts(query: string): Promise<ContactHit[]> {
 export interface ContactByField {
   id: string;
   name: string;
+  /**
+   * ROUND 186 — the contact's Company Name ("" when none). A referral
+   * partner's organisation lives here when a contact person was named too.
+   * Optional: only the custom-field search fills it.
+   */
+  company?: string;
   email: string;
   phone: string;
   assignedTo: string;
@@ -4513,6 +4530,7 @@ export async function ghlSearchContacts(
       row: {
         id: String(c.id ?? c.contactId ?? ""),
         name: contactDisplay(c),
+        company: String(rec.companyName ?? "").trim(),
         email: String(c.email ?? ""),
         phone: String(rec.phone ?? ""),
         assignedTo: String(rec.assignedTo ?? rec.assignedUserId ?? ""),

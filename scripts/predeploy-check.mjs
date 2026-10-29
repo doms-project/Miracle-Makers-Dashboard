@@ -22,8 +22,18 @@
 // R177_LIB_ONLY): they need a local Chrome. Everything else in the regression
 // set runs in full. A proof that prints no "N passed" line counts as FAILED.
 // ---------------------------------------------------------------------------
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
+
+/** Printed first, so a run can be matched to the copy of this file used. */
+const SCRIPT_VERSION = "predeploy-check 186.1";
+// PREDEPLOY_AS_WINDOWS=1 exercises the Windows path on another system.
+const IS_WIN = process.platform === "win32" || process.env.PREDEPLOY_AS_WINDOWS === "1";
+// Node itself runs every step — never `npx`, which Windows cannot start
+// without a shell, and a shell would split the project path at its spaces.
+const NODE = process.execPath;
+const TSC = "node_modules/typescript/bin/tsc";
+const NEXT = "node_modules/next/dist/bin/next";
 
 const QUICK = process.argv.includes("--quick");
 const results = [];
@@ -37,22 +47,33 @@ const DIM = (s) => color(2, s);
 function run(cmd, args, { timeoutMs, env = {} } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
-      detached: true, // own process group, so a timeout kills grandchildren too
+      // Own process group on Mac/Linux, so a timeout kills grandchildren too.
+      // Windows has no process groups; taskkill /T does the same job there.
+      detached: !IS_WIN,
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ...env, FORCE_COLOR: "0" },
     });
+    const killTree = () => {
+      if (IS_WIN) spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      else try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    };
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      killTree();
     }, timeoutMs);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, out: `${out}\ncould not start: ${e.message}`, timedOut: false });
+    });
     child.on("close", (code) => {
       clearTimeout(timer);
       // Anything the step left running (a dev server, a browser) goes too.
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      killTree();
       resolve({ code: timedOut ? -1 : code, out, timedOut });
     });
   });
@@ -66,7 +87,7 @@ function record(name, ok, detail) {
 const lastLine = (out) => out.trim().split("\n").filter(Boolean).slice(-1)[0] || "";
 const tally = (out) => (out.match(/[0-9]+ passed[^\n]*/g) || []).slice(-1)[0] || "";
 
-console.log(`Pre-deploy check${QUICK ? " (quick)" : ""}\n`);
+console.log(`${SCRIPT_VERSION}${QUICK ? " (quick)" : ""}${IS_WIN ? " · Windows" : ""}\n`);
 
 // 1 · Build stamp ─────────────────────────────────────────────────────────────
 {
@@ -85,7 +106,7 @@ console.log(`Pre-deploy check${QUICK ? " (quick)" : ""}\n`);
 
 // 2 · TypeScript ──────────────────────────────────────────────────────────────
 {
-  const r = await run("npx", ["tsc", "--noEmit"], { timeoutMs: 300_000 });
+  const r = await run(NODE, [TSC, "--noEmit"], { timeoutMs: 300_000 });
   const errors = (r.out.match(/error TS\d+/g) || []).length;
   record(
     "TypeScript (tsc --noEmit)",
@@ -96,7 +117,7 @@ console.log(`Pre-deploy check${QUICK ? " (quick)" : ""}\n`);
 
 // 3 · Production build ────────────────────────────────────────────────────────
 if (!QUICK) {
-  const r = await run("npx", ["next", "build"], { timeoutMs: 600_000 });
+  const r = await run(NODE, [NEXT, "build"], { timeoutMs: 600_000 });
   record(
     "production build (next build)",
     r.code === 0 && /Compiled successfully/.test(r.out),
@@ -106,14 +127,25 @@ if (!QUICK) {
 
 // 4 · Loader sweep ────────────────────────────────────────────────────────────
 {
-  const r = await run("node", ["scripts/loader-sweep.mjs"], { timeoutMs: 120_000 });
+  const r = await run(NODE, ["scripts/loader-sweep.mjs"], { timeoutMs: 120_000 });
   const clean = /No loader, credential,.*matches a known defect/.test(r.out);
   record("loader sweep", r.code === 0 && clean, clean ? "clean" : lastLine(r.out).slice(0, 200));
 }
 
 // 5 + 6 · Proofs ──────────────────────────────────────────────────────────────
+// Older proofs written for Linux: they start servers with `npx`, look for
+// processes with `pgrep`, or use /opt and /tmp paths. On Windows they fail for
+// reasons that have nothing to do with the code, so they are SKIPPED there —
+// named, never silently — and run in full on Mac and Linux.
+const LINUX_ONLY = /spawn(Sync)?\(\s*["']npx["']|pgrep|\/opt\/pw-browsers|process\.kill\(-|["'`]\/tmp\//;
+const skipped = [];
 const proof = async (name, timeoutMs = 120_000) => {
-  const r = await run("node", ["--import", "tsx", `scripts/${name}-proof.mjs`], {
+  if (IS_WIN) {
+    let src = "";
+    try { src = readFileSync(`scripts/${name}-proof.mjs`, "utf8"); } catch {}
+    if (LINUX_ONLY.test(src)) { skipped.push(name); console.log(`SKIP  proof · ${name}${DIM("  ·  Linux-only harness")}`); return; }
+  }
+  const r = await run(NODE, ["--import", "tsx", `scripts/${name}-proof.mjs`], {
     timeoutMs,
     env: { R176_LIB_ONLY: "1", R177_LIB_ONLY: "1" },
   });
@@ -127,7 +159,7 @@ const proof = async (name, timeoutMs = 120_000) => {
   );
 };
 
-for (const n of ["round183", "round184", "round185"]) await proof(n);
+for (const n of ["round183", "round184", "round185", "round186"]) await proof(n);
 
 if (!QUICK) {
   const names = readFileSync("scripts/regression.txt", "utf8")
@@ -148,6 +180,8 @@ if (failed.length) {
   for (const f of failed) console.log(RED(`  · ${f.name}`) + DIM(`  ${f.detail}`));
 } else {
   console.log(GREEN(`GO — all ${results.length} checks passed (${mins} min).`));
+  if (skipped.length)
+    console.log(DIM(`Skipped on Windows (Linux-only harness, ${skipped.length}): ${skipped.join(", ")}. They run in full on Mac/Linux.`));
   if (QUICK) console.log(DIM("Quick mode skipped the build and the regression set; run without --quick before a release."));
   console.log(DIM("Not covered here: the live site. After deploying, run scripts/postdeploy-check.mjs, then scripts/live-tour.mjs to watch it in Chrome."));
 }
