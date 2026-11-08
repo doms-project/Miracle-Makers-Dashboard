@@ -1,0 +1,45 @@
+/* ---------------------------------------------------------------------------
+   ROUND 195 — SPACING: THE STAT TILES AND THE MOVES TABLES.
+
+   · CLICKABLE TILES SAT LOWER THAN THE OTHERS. Stalled, Shared with you,
+     Road-blocked and Checked this week are <button>s, and a browser centres a
+     button's content vertically whatever its `display`. Stretched to the
+     height of the tallest tile, their label dropped to the middle while every
+     other tile's label stayed at the top. They now lay out top-down like the
+     rest.
+   · MASTER'S TILES WERE ~270px TALL because "By owner" listed ten people one
+     per line in a narrow tile, and every tile stretches to the tallest. The
+     owner tile is now wider with its list in two columns, long names end in
+     "…" (the full name is on hover), and every list reads top to bottom.
+   · THE MOVES TABLES' COLUMNS JUMPED between pipelines: each table sized its
+     columns to its own content, so "Reached" sat somewhere different in every
+     one. They now share one set of widths, numbers right-aligned.
+   --------------------------------------------------------------------------- */
+.stats{gap:12px;padding:16px 22px;}
+.stats .stat{padding:13px 15px;}
+.stats .statbtn{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;}
+.stats .stat .k{line-height:1.3;}
+
+/* A grid, not a wrapping row: a tile that wraps keeps its width instead of
+   stretching across the screen on a line of its own. On a laptop the seven
+   tiles take two rows. */
+.stats.mstats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 22px 8px;}
+.mstats .stat{min-width:0;}
+.mstats .stat.wide{grid-column:span 2;}
+/* On a full-size screen, one row, each tile as wide as what it holds: the
+   lists (pipelines, owners in two columns, sources) get the room, the single
+   numbers (shared, status, road-blocked) less. Order as on screen: pipeline,
+   owner, stalled, shared, source, status, road-blocked. */
+@media (min-width:1400px){
+  .stats.mstats{grid-template-columns:minmax(0,1.35fr) minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.05fr) minmax(0,1.3fr) minmax(0,.9fr) minmax(0,1.1fr);}
+  .mstats .stat.wide{grid-column:auto;}
+}
+.mstats .stat .mini{flex-direction:column;flex-wrap:nowrap;gap:2px;}
+.mstats .stat.wide .mini{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:14px;row-gap:2px;}
+.mstats .mini .srcpick{display:block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;}
+.mnote{padding:6px 22px 14px;}
+
+.kpiblock .kpitable{table-layout:fixed;}
+.kpiblock .kpitable th:first-child{width:46%;}
+.kpiblock .kpitable th:not(:first-child),.kpiblock .kpitable td:not(:first-child){text-align:right;}
+.kpiblock .kpitable td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

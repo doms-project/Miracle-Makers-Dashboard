@@ -12,6 +12,16 @@
 //   5. Referring Partner / Event Host ids resolve to partner names (round 185)
 //   6. a client's contact sections: how many show, how many are tucked away;
 //      a caregiver's sections as filled / total (round 185)
+//   7. the data rounds 188–195 rely on, read from the live boards: a phone on
+//      each record (phone search), "last updated" (edited goes to the top),
+//      created dates (the Created filter), "New lead" labels (pinned on top);
+//      and the search itself, run on real records with the dashboard's own
+//      code (lib/smartSearch.ts): a phone finds its lead, a sales rep's name
+//      suggests that rep first
+//   8. ONE PERSON, SEVERAL CASES — how many people hold cases in more than
+//      one pipeline (an ODP case and an OLTL case, say), and whether anyone
+//      holds two in the SAME pipeline (GoHighLevel allows one per pipeline
+//      unless "Allow multiple opportunities per contact" is on)
 //
 // It judges what it reads with the dashboard's OWN code (lib/linkCounts.ts,
 // lib/fieldFolders.ts), so it cannot pass on a rule the screen does not use.
@@ -26,6 +36,10 @@
 //   EXPECT_ROUND=185      default: the round in lib/build.ts
 //   CHECK_USER_ID=<id>    a real GoHighLevel user id to sign in as (admin role);
 //                         default "postdeploy-check"
+//   LINKED_CLIENT="<name>"     a client you know has a caregiver linked, and
+//   LINKED_CAREGIVER="<name>"  a caregiver you know has a client linked. The
+//                         check otherwise samples only the first 180 people on
+//                         each board, and may find no linked pair among them.
 //
 // OPTIONAL WRITE TEST — links two TEST records, checks both badges and the
 // panel, then unlinks and checks they return. Use test records only:
@@ -38,9 +52,14 @@
 import { readFileSync } from "node:fs";
 import CryptoJS from "crypto-js";
 
+/** Printed first, so a run can be matched to the copy of this file used. */
+const SCRIPT_VERSION = "postdeploy-check 196.1";
+
 const L = await import("../lib/linkCounts.ts");
 const F = await import("../lib/fieldFolders.ts");
 const R = await import("../lib/referrals.ts");
+const SS = await import("../lib/smartSearch.ts");
+const OW = await import("../lib/owners.ts");
 
 const URL_ = (process.env.DASHBOARD_URL || "").trim().replace(/\/+$/, "");
 const SECRET = (process.env.GHL_SSO_SECRET || "").trim();
@@ -94,13 +113,15 @@ const nm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 /** How a record is named on screen: the case name, else the person. */
 const recName = (rec) => rec?.oppName || rec?.contactName || [rec?.first, rec?.last].filter(Boolean).join(" ") || rec?.id || "?";
 
-console.log(`Post-deploy check · ${URL_} · expecting v${EXPECT}\n`);
+console.log(`${SCRIPT_VERSION} · ${URL_} · expecting v${EXPECT}\n`);
 
 // 1 · Which build is live ─────────────────────────────────────────────────────
 {
   const res = await fetch(URL_ + "/", { signal: AbortSignal.timeout(60_000) }).catch((e) => ({ ok: false, status: 0, text: async () => String(e) }));
   const html = await res.text();
-  const seen = [...new Set(html.match(/\bv\d{3}[a-z]?\b/g) || [])];
+  // The footer renders the stamp as ">v185</div>"; matching that shape keeps
+  // other text that merely looks like a version number out of the answer.
+  const seen = [...new Set([...html.matchAll(/>v(\d{3}[a-z]?)</g)].map((m) => `v${m[1]}`))];
   if (!res.ok) FAIL("the dashboard page loads", `HTTP ${res.status}`);
   else if (seen.includes(`v${EXPECT}`)) PASS(`the live build is v${EXPECT}`);
   else
@@ -151,10 +172,19 @@ async function countsFor(ids) {
   return out;
 }
 const linked = {};
+const named = {
+  client: (process.env.LINKED_CLIENT || "").trim().toLowerCase(),
+  caregiver: (process.env.LINKED_CAREGIVER || "").trim().toLowerCase(),
+};
 for (const kind of ["client", "caregiver"]) {
   const recs = boards[kind]?.records || [];
   if (!recs.length) continue;
-  const ids = [...new Set(recs.map((r) => r.contactId).filter(Boolean))].slice(0, 180);
+  // A named record goes first, so it is checked whatever the sample holds.
+  const pick = named[kind]
+    ? recs.find((r) => `${r.oppName} ${r.contactName}`.toLowerCase().includes(named[kind]))
+    : null;
+  if (named[kind] && !pick) WARN(`${kind === "client" ? "LINKED_CLIENT" : "LINKED_CAREGIVER"} found on the board`, `no record matching "${named[kind]}"`);
+  const ids = [...new Set([pick?.contactId, ...recs.map((r) => r.contactId)].filter(Boolean))].slice(0, 180);
   const label = kind === "client" ? "Clients" : "Recruiting";
   try {
     const counts = await countsFor(ids);
@@ -163,7 +193,9 @@ for (const kind of ["client", "caregiver"]) {
     const withLinks = vals.filter(([, v]) => !v.unknown && (v.caregivers || v.clients));
     if (unknown > vals.length / 4) WARN(`${label}: link badges readable`, `${unknown} of ${vals.length} came back "links unknown"`);
     else PASS(`${label}: link badges readable`, `${vals.length} checked · ${withLinks.length} linked${unknown ? ` · ${unknown} unknown` : ""}`);
-    const hit = withLinks[0];
+    const hit = (pick && withLinks.find(([id]) => id === pick.contactId)) || withLinks[0];
+    if (pick && !withLinks.some(([id]) => id === pick.contactId))
+      WARN(`${recName(pick)} has links`, "the server counts none for this person — is the link in place?");
     if (hit) linked[kind] = { rec: recs.find((r) => r.contactId === hit[0]), count: hit[1] };
   } catch (e) {
     FAIL(`${label}: link badges readable`, String(e.message || e));
@@ -191,6 +223,22 @@ for (const kind of ["client", "caregiver"]) {
 // 5 · Partner names ───────────────────────────────────────────────────────────
 {
   const defs = boards.client?.fieldDefs || [];
+  // ONE field named "Referring Partner" is what the panel, "Referred by" and
+  // the Referrals screen all assume: each picks the FIRST match. A second field
+  // of the same name is shown as an ordinary box holding a raw id, and its
+  // values are invisible to "Referred by".
+  {
+    const same = defs.filter((d) => nm(d.name) === nm("Referring Partner"));
+    if (same.length > 1) {
+      const fn = boards.client?.folderNames || {};
+      const recs = [...(boards.client?.records || []), ...(boards.caregiver?.records || [])];
+      const desc = same.map((d, i) => {
+        const filled = recs.filter((r) => String(r.cf?.[d.id] ?? "").trim()).length;
+        return `${i === 0 ? "USED" : "IGNORED"} ${d.id} in "${fn[d.parentId] || d.parentId || "no folder"}" · ${filled} record(s) hold a value`;
+      });
+      WARN(`exactly one "Referring Partner" field`, `${same.length} exist — ${desc.join(" | ")}`);
+    } else if (same.length === 1) PASS(`exactly one "Referring Partner" field`, same[0].id);
+  }
   const refId =
     defs.find((d) => nm(d.name) === nm("Referring Partner"))?.id ||
     (defs.some((d) => d.id === R.REFERRING_PARTNER_FIELD) ? R.REFERRING_PARTNER_FIELD : "");
@@ -263,7 +311,98 @@ async function sections(kind, rec) {
   }
 }
 
-// 7 · Optional write test ─────────────────────────────────────────────────────
+
+// 7 · The data rounds 188–195 rely on ──────────────────────────────────────
+{
+  const clientRecs = boards.client?.records || [];
+  const cgRecs = boards.caregiver?.records || [];
+  const all = [...clientRecs, ...cgRecs];
+  if (all.length) {
+    const of = (n) => `${n} of ${all.length}`;
+    const phoneOf = (r) => String(r.contactPhone || "").replace(/\D/g, "");
+    const withPhone = all.filter((r) => phoneOf(r).length >= 7).length;
+    if (!withPhone)
+      FAIL("records carry a phone (round 195: search by phone)", `none of ${all.length} do — searching a phone number will find nobody until the board payload includes contactPhone`);
+    else if (withPhone < all.length / 2)
+      WARN("records carry a phone (round 195: search by phone)", `${of(withPhone)} — the rest cannot be found by phone (no phone on the contact, or none in the payload)`);
+    else PASS("records carry a phone (round 195: search by phone)", of(withPhone));
+
+    const withUpd = all.filter((r) => r.updatedAt).length;
+    if (!withUpd)
+      WARN("records carry \"last updated\" (round 191: edited goes to the top)", "none do — new leads and stage moves go to the top today; a field edit or a returning form will too once the server sends updatedAt");
+    else PASS("records carry \"last updated\" (round 191: edited goes to the top)", of(withUpd));
+
+    const noCreated = all.filter((r) => !r.createdAt).length;
+    if (noCreated) WARN("records carry a created date (round 188: Created filter)", `${noCreated} do not — a date range leaves them out and says how many`);
+    else PASS("records carry a created date (round 188: Created filter)", `all ${all.length}`);
+
+    const unopened = all.filter((r) => r.newLead === true).length;
+    INFO(`${unopened} unopened "New lead" case(s) — these sit at the top of every board until opened (round 192)`);
+
+    // The search, run on real records with the dashboard's own code.
+    const ix = (r) =>
+      SS.indexRecord([r.oppName, r.first, r.last, r.office, r.stage, r.harmony, r.cm, r.cg, r.rep, r.src], r.contactPhone, r.contactEmail);
+    const sample = clientRecs.find((r) => phoneOf(r).length >= 10) || cgRecs.find((r) => phoneOf(r).length >= 10);
+    if (sample) {
+      const d = phoneOf(sample).slice(-10);
+      const forms = [d.slice(-4), `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`, `+1 ${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`];
+      const missed = forms.filter((f) => !SS.matchesQuery(ix(sample), SS.parseQuery(f)));
+      if (missed.length) FAIL("a phone finds its lead, in any format", `${recName(sample)}: not found by ${missed.join(" / ")}`);
+      else PASS("a phone finds its lead, in any format", `${recName(sample)} by …${d.slice(-4)}, (${d.slice(0, 3)}) ${d.slice(3, 6)}-…, +1 …`);
+    }
+    const opts = OW.ownerOptions(clientRecs);
+    const top = [...opts.owners].sort((a, b) => b.n - a.n)[0];
+    if (top) {
+      const first = top.name.split(/\s+/)[0];
+      const sg = SS.suggest({
+        query: first,
+        ownerWord: "Sales rep",
+        owners: opts.owners,
+        unassigned: opts.unassigned,
+        records: clientRecs.slice(0, 400).map((r) => ({ id: r.id, name: recName(r), detail: "", ix: ix(r), activity: 0 })),
+      });
+      const hit = sg.find((x) => x.kind === "owner" && x.value === top.id);
+      if (!hit) FAIL("typing a sales rep's name suggests them", `"${first}" did not suggest ${top.name}`);
+      else if (sg[0] !== hit) WARN("typing a sales rep's name suggests them first", `"${first}" suggests ${sg[0].label} (${sg[0].detail}) before ${top.name} — two people share the name; both are offered`);
+      else PASS("typing a sales rep's name suggests them first", `"${first}" → ${hit.label} · ${hit.detail}`);
+    }
+  }
+}
+
+// 8 · One person, several cases ─────────────────────────────────────────────
+{
+  const all = [
+    ...(boards.client?.records || []).map((r) => ({ ...r, _board: "Clients" })),
+    ...(boards.caregiver?.records || []).map((r) => ({ ...r, _board: "Recruiting" })),
+  ];
+  const byPerson = new Map();
+  for (const r of all) {
+    if (!r.contactId) continue;
+    const l = byPerson.get(r.contactId) || [];
+    if (!l.some((x) => x.id === r.id)) l.push(r);
+    byPerson.set(r.contactId, l);
+  }
+  const multi = [...byPerson.values()].filter((l) => l.length > 1);
+  const samePipe = multi.filter((l) => new Set(l.map((x) => x.pipelineId)).size < l.length);
+  const combos = new Map();
+  for (const l of multi) {
+    const k = [...new Set(l.map((x) => x.pipelineName || x.pipelineId))].sort().join(" + ");
+    combos.set(k, (combos.get(k) || 0) + 1);
+  }
+  INFO(`${multi.length} person(s) hold more than one case on the boards you can see`);
+  for (const [k, n] of [...combos.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)) INFO(`  ${n} × ${k}`);
+  if (samePipe.length) {
+    const ex = samePipe[0];
+    WARN(
+      "one case per person per pipeline",
+      `${samePipe.length} person(s) hold two or more cases in the SAME pipeline — "Allow multiple opportunities per contact" is on, or a workflow creates instead of updating. e.g. ${recName(ex[0])}: ${ex.map((x) => `${x.pipelineName} (created ${String(x.createdAt || "?").slice(0, 10)})`).join(", ")}`,
+    );
+  } else if (multi.length)
+    PASS("one case per person per pipeline", "a second form for a pipeline the person is already in updates their case; a form for another pipeline (ODP → OLTL) opens a new one");
+  else INFO("nobody holds a second case among the records loaded");
+}
+
+// 9 · Optional write test ─────────────────────────────────────────────────────
 if (process.env.WRITE_TEST === "1") {
   const oppId = (process.env.TEST_CLIENT_OPP_ID || "").trim();
   const cgContact = (process.env.TEST_CAREGIVER_CONTACT_ID || "").trim();

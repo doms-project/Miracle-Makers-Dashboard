@@ -56,14 +56,20 @@ function shift(key: string, days: number): string {
 const validKey = (s: string | undefined | null): string =>
   s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
 
+/**
+ * ROUND 191 — `now` may be a Date OR an Eastern day key ("YYYY-MM-DD"). The
+ * page passes the day key it keeps in state, so a window like "Today" is
+ * recomputed when the Eastern date changes. Before, it was computed once when
+ * the range was picked, and a tab left open overnight kept showing yesterday.
+ */
 export function createdWindow(
   range: CreatedRange,
-  now: Date,
+  now: Date | string,
   customFrom?: string,
   customTo?: string,
 ): CreatedWindow {
   if (range === "all") return { from: null, to: null };
-  const today = easternDayKey(now);
+  const today = typeof now === "string" && validKey(now) ? now : easternDayKey(now);
   const [y, m] = today.split("-").map(Number);
   if (range === "today") return { from: today, to: today };
   if (range === "week") {

@@ -6,7 +6,7 @@
 //   2. TypeScript                     (npx tsc --noEmit)
 //   3. the production build           (npx next build)
 //   4. the loader sweep
-//   5. the newest round proofs        (183, 184, 185)
+//   5. the newest round proofs        (183 to 196)
 //   6. the standing regression set    (scripts/regression.txt)
 //
 // Run:   node scripts/predeploy-check.mjs
@@ -26,7 +26,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 
 /** Printed first, so a run can be matched to the copy of this file used. */
-const SCRIPT_VERSION = "predeploy-check 190.1";
+const SCRIPT_VERSION = "predeploy-check 196.1";
 // PREDEPLOY_AS_WINDOWS=1 exercises the Windows path on another system.
 const IS_WIN = process.platform === "win32" || process.env.PREDEPLOY_AS_WINDOWS === "1";
 // Node itself runs every step — never `npx`, which Windows cannot start
@@ -177,7 +177,7 @@ const proof = async (name, timeoutMs = 120_000) => {
   );
 };
 
-for (const n of ["round183", "round184", "round185", "round186", "round187", "round188", "round189", "round190"]) await proof(n);
+for (const n of ["round183", "round184", "round185", "round186", "round187", "round188", "round189", "round190", "round191", "round192", "round193", "round194", "round195", "round196"]) await proof(n);
 
 if (!QUICK) {
   const names = readFileSync("scripts/regression.txt", "utf8")

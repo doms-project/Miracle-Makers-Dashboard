@@ -27,7 +27,8 @@ console.log("2 · Each board reads only its own");
 ok("Clients reads clientWin", /inCreatedWindow\(r\.createdAt, clientWin\)/.test(preSrc));
 ok("🔴 Master reads masterWin — and never clientWin", /inCreatedWindow\(r\.createdAt, masterWin\)/.test(masterCols) && !/clientWin/.test(masterCols));
 ok("Recruiting reads cgWin", /inCreatedWindow\(r\.createdAt, cgWin\)/.test(cgPre));
-ok("masterWin is built from Master's own state", /createdWindow\(masterCreatedRange, new Date\(\), masterCreatedFrom, masterCreatedTo\)/.test(src));
+// ROUND 191 — "today" is the day key the page keeps current, not a one-off new Date().
+ok("masterWin is built from Master's own state", /createdWindow\(masterCreatedRange, todayKey, masterCreatedFrom, masterCreatedTo\)/.test(src));
 
 console.log("3 · Each toolbar drives only its own");
 ok("Master's control is bound to Master's state", /id="mcreatedSel"\s+range=\{masterCreatedRange\}\s+onRange=\{setMasterCreatedRange\}/.test(mToolbar));

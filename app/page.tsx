@@ -83,6 +83,29 @@ import {
   easternDayKey,
   type CreatedRange,
 } from "@/lib/createdRange";
+import { byLatestActivity } from "@/lib/activity";
+// ROUND 194 — the three board toolbars' layout (scoped to `.filterbar`).
+import "./filterbar.css";
+// ROUND 195 — spacing of the stat tiles and the Moves tables.
+import "./spacing.css";
+import {
+  parseQuery,
+  indexRecord,
+  matchesQuery,
+  suggest,
+  splitNames,
+  type Indexed,
+  type Suggestion,
+} from "@/lib/smartSearch";
+import { latestActivity } from "@/lib/activity";
+import {
+  EVERYONE,
+  UNASSIGNED,
+  matchesOwner,
+  ownerNames as collectOwnerNames,
+  ownerOptions,
+  describeOwner,
+} from "@/lib/owners";
 import AddClientDialog from "@/components/AddClientDialog";
 import PipelineAccessTab from "@/components/PipelineAccessTab";
 import PipelineAdmin from "@/components/PipelineAdmin";
@@ -1473,6 +1496,203 @@ function daysInStage(
 //     so a drop can't decide by itself which pipeline is meant, and nothing has
 //     happened until the dialog is submitted.
 /**
+ * 🔴 ROUND 195 — ONE SMART SEARCH BOX, USED BY ALL THREE TOOLBARS.
+ * (Round 193 added Owner/Recruiter dropdowns; the owner asked for search to
+ * do it instead, so they are gone and this box does it — lib/smartSearch.ts.)
+ *
+ * Typing filters the board (any word order, phone in any format, part of an
+ * email) and lists SUGGESTIONS underneath: people (Sales rep / Recruiter,
+ * Case manager), offices, and the best-matching leads. Picking a person adds a
+ * tag inside the box that shows exactly their cases; picking a lead opens it.
+ *
+ * Keys: "/" jumps here (the page's keydown effect) · ↑ ↓ move · Enter picks ·
+ * Esc closes the list, then clears the text · Backspace on an empty box
+ * removes the last tag. Escape is stopped here, so it never also closes the
+ * open record — the page's own Escape listener sits on `document`.
+ */
+type SearchChip = { key: string; label: string; onRemove: () => void };
+
+/** ROUND 195 — case managers and offices, with how many cases each has in a set. */
+function tallyPeople(rows: OpportunityRecord[]) {
+  const cms = new Map<string, { name: string; n: number }>();
+  const offs = new Map<string, number>();
+  for (const r of rows) {
+    for (const n of splitNames(r.cm)) {
+      const k = n.toLowerCase();
+      const hit = cms.get(k);
+      if (hit) hit.n++;
+      else cms.set(k, { name: n, n: 1 });
+    }
+    if (r.office) offs.set(r.office, (offs.get(r.office) || 0) + 1);
+  }
+  return {
+    caseManagers: [...cms.values()],
+    offices: [...offs.entries()].map(([name, n]) => ({ name, n })),
+  };
+}
+
+function SearchBox({
+  which,
+  value,
+  onChange,
+  placeholder,
+  chips = [],
+  suggestions = [],
+  onPick,
+  leadsLabel = "Leads",
+}: {
+  which: "clients" | "master" | "recruiting";
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  chips?: SearchChip[];
+  suggestions?: Suggestion[];
+  onPick?: (s: Suggestion) => void;
+  leadsLabel?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  useEffect(() => setActive(-1), [value]);
+  const show = open && value.trim() !== "" && suggestions.length > 0;
+  const pick = (sg: Suggestion) => {
+    onPick?.(sg);
+    setOpen(false);
+    setActive(-1);
+  };
+  const group = (k: Suggestion["kind"]) =>
+    k === "record" ? leadsLabel : k === "office" ? "Offices" : "People";
+  const listId = `${which}-suggestions`;
+  return (
+    <div className="search smartsearch">
+      <IconSearch />
+      {chips.map((c) => (
+        <span key={c.key} className="searchchip">
+          {c.label}
+          <button
+            type="button"
+            aria-label={`Remove ${c.label}`}
+            onClick={() => {
+              c.onRemove();
+              ref.current?.focus();
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        ref={ref}
+        data-search={which}
+        placeholder={chips.length ? "Search within…" : placeholder}
+        value={value}
+        title="Press / to jump here · ↑ ↓ and Enter pick a suggestion · Esc clears"
+        role="combobox"
+        aria-expanded={show}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={show && active >= 0 ? `${listId}-${active}` : undefined}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && suggestions.length) {
+            e.preventDefault();
+            setOpen(true);
+            setActive((i) => Math.min(i + 1, suggestions.length - 1));
+          } else if (e.key === "ArrowUp" && show) {
+            e.preventDefault();
+            setActive((i) => Math.max(i - 1, -1));
+          } else if (e.key === "Enter" && show && active >= 0) {
+            e.preventDefault();
+            pick(suggestions[active]);
+          } else if (e.key === "Escape" && show) {
+            e.stopPropagation();
+            setOpen(false);
+          } else if (e.key === "Escape" && value) {
+            e.stopPropagation();
+            onChange("");
+          } else if (e.key === "Backspace" && !value && chips.length) {
+            chips[chips.length - 1].onRemove();
+          }
+        }}
+      />
+      {value ? (
+        <button
+          type="button"
+          className="searchclear"
+          aria-label="Clear search"
+          title="Clear search (Esc)"
+          onClick={() => {
+            onChange("");
+            ref.current?.focus();
+          }}
+        >
+          ×
+        </button>
+      ) : null}
+      {show ? (
+        <div id={listId} role="listbox" className="sugg">
+          {suggestions.map((sg, i) => (
+            <Fragment key={`${sg.kind}:${sg.value}`}>
+              {i === 0 || group(suggestions[i - 1].kind) !== group(sg.kind) ? (
+                <div className="sugghead">{group(sg.kind)}</div>
+              ) : null}
+              <div
+                id={`${listId}-${i}`}
+                role="option"
+                aria-selected={i === active}
+                className={`suggrow${i === active ? " on" : ""}`}
+                // mousedown, not click: the input must not lose focus first.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pick(sg);
+                }}
+                onMouseEnter={() => setActive(i)}
+              >
+                <span className="sugglabel">{sg.label}</span>
+                <span className="suggdetail">{sg.detail}</span>
+              </div>
+            </Fragment>
+          ))}
+          <div className="suggfoot">↑ ↓ to move · Enter to pick · Esc to close</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 🔴 ROUND 191 — TODAY'S EASTERN DATE, KEPT CURRENT. The Created windows used
+ * to read the clock only when a range was picked, so "Today" left open
+ * overnight went on showing yesterday. This re-reads the Eastern day once a
+ * minute and whenever the tab comes back into view, and changes only when the
+ * day does — so it re-renders once a day, not once a minute.
+ */
+function useEasternToday(): string {
+  const [key, setKey] = useState(() => easternDayKey(new Date()));
+  useEffect(() => {
+    const tick = () => {
+      const now = easternDayKey(new Date());
+      if (now) setKey((k) => (k === now ? k : now));
+    };
+    const t = setInterval(tick, 60_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+  return key;
+}
+
+/**
  * ROUND 188 — "Created" filter for a board's toolbar. Same look as Office and
  * Pipeline. With "Custom range…" two date boxes appear; either may be left
  * empty for an open-ended range. When records are left out only because they
@@ -1500,7 +1720,12 @@ function CreatedFilter({
   return (
     <div className="officefilter createdfilter">
       <label htmlFor={id}>Created</label>
-      <select id={id} value={range} onChange={(e) => onRange(e.target.value as CreatedRange)}>
+      <select
+        id={id}
+        className={range !== "all" ? "on" : undefined}
+        value={range}
+        onChange={(e) => onRange(e.target.value as CreatedRange)}
+      >
         {CREATED_RANGE_OPTIONS.map(([k, label]) => (
           <option key={k} value={k}>
             {label}
@@ -1508,21 +1733,24 @@ function CreatedFilter({
         ))}
       </select>
       {range === "custom" ? (
-        <>
+        // ROUND 194 — one box, "from → to", the height of the controls beside it.
+        <span className="createdrange">
           <input
             type="date"
             aria-label="Created from"
             value={from}
             onChange={(e) => onFrom(e.target.value)}
           />
-          <span className="createdto">to</span>
+          <span className="createdto" aria-hidden="true">
+            →
+          </span>
           <input
             type="date"
             aria-label="Created to"
             value={to}
             onChange={(e) => onTo(e.target.value)}
           />
-        </>
+        </span>
       ) : null}
       {undated ? (
         <span className="createdundated" title="These records carry no created date, so a date filter cannot place them.">
@@ -1862,6 +2090,15 @@ export default function Dashboard() {
   const [cgCreatedRange, setCgCreatedRange] = useState<CreatedRange>("all");
   const [cgCreatedFrom, setCgCreatedFrom] = useState("");
   const [cgCreatedTo, setCgCreatedTo] = useState("");
+  // ROUND 191 — the Eastern date the three Created windows count "today" from.
+  const todayKey = useEasternToday();
+  // 🔴 ROUND 193 — OWNER FILTERS, by owner id. Clients and Master share one,
+  // as they share Office and search; Recruiting has its own.
+  const [ownerF, setOwnerF] = useState<string>(EVERYONE);
+  const [cgOwnerF, setCgOwnerF] = useState<string>(EVERYONE);
+  // ROUND 195 — a case manager picked from the search suggestions (by name, as
+  // the record stores it). Shared by Clients and Master, like the owner.
+  const [cmF, setCmF] = useState<string>("");
   // ITEM — SOURCE FILTER. The "By source" tile counts records by the NATIVE
   // opportunity `source`; clicking one narrows the list/board/chips to it.
   // Held as a normalised key (trimmed, lower-cased) because `source` is free
@@ -2445,6 +2682,27 @@ export default function Dashboard() {
       const t = e.target as HTMLElement | null;
       if (t?.closest?.("[data-esc-local]")) return;
       setSelId(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 🔴 ROUND 193 — "/" JUMPS TO THE SEARCH BOX of whichever board is on screen
+  // (Clients, Master or Recruiting). Ignored while typing in any field, with a
+  // modifier key held, or while a modal dialog is open over the page.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const box = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-search]")).find(
+        (el) => el.offsetParent !== null,
+      );
+      if (!box) return;
+      e.preventDefault();
+      box.focus();
+      box.select();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -3048,21 +3306,60 @@ export default function Dashboard() {
   // the payload was in it. The count was technically true and completely
   // misleading. Stage is excluded from this set on purpose — including it would
   // collapse the chip row to the single chip you just clicked.
+  // 🔴 ROUND 191 — NEWEST ACTIVITY FIRST. Every client view (list, board,
+  // Master) reads this instead of the raw payload, so a new lead, an edited
+  // case, or a case whose person came back through another form is at the
+  // top. A Sort the viewer picks still wins; see lib/activity.ts.
+  const dataByActivity = useMemo(() => byLatestActivity(data), [data]);
+  /** ROUND 193 — every owner id on either board, with a name, for the filters. */
+  const ownerNameMap = useMemo(() => collectOwnerNames(data, cgData), [data, cgData]);
+  // 🔴 ROUND 195 — THE SEARCH INDEX, built once per load, not per keystroke.
+  // Clients search every field it always did, plus phone and email; Master
+  // and Recruiting the name (and stage on Recruiting), plus phone and email.
+  const clientIx = useMemo(() => {
+    const m = new Map<string, Indexed>();
+    for (const r of data)
+      m.set(
+        r.id,
+        indexRecord(
+          [r.oppName, r.first, r.last, r.office, r.stage, r.harmony, r.cm, r.cg, r.rep, r.src],
+          r.contactPhone,
+          r.contactEmail,
+        ),
+      );
+    return m;
+  }, [data]);
+  const masterIx = useMemo(() => {
+    const m = new Map<string, Indexed>();
+    for (const r of data) m.set(r.id, indexRecord([r.oppName, r.first, r.last], r.contactPhone, r.contactEmail));
+    return m;
+  }, [data]);
+  const cgIx = useMemo(() => {
+    const m = new Map<string, Indexed>();
+    for (const r of cgData)
+      m.set(r.id, indexRecord([r.oppName, r.first, r.last, r.stage], r.contactPhone, r.contactEmail));
+    return m;
+  }, [cgData]);
+  const qParsed = useMemo(() => parseQuery(q), [q]);
+  const cgParsed = useMemo(() => parseQuery(cgQuery), [cgQuery]);
+  /** ROUND 195 — the picked case manager is one of the names on the record. */
+  const hasCm = useCallback(
+    (r: OpportunityRecord) =>
+      !cmF || splitNames(r.cm).some((n) => n.toLowerCase() === cmF.toLowerCase()),
+    [cmF],
+  );
   const clientWin = useMemo(
-    () => createdWindow(createdRange, new Date(), createdFrom, createdTo),
-    [createdRange, createdFrom, createdTo],
+    () => createdWindow(createdRange, todayKey, createdFrom, createdTo),
+    [createdRange, todayKey, createdFrom, createdTo],
   );
-  /** Records a created-date filter leaves out only because they have no date. */
-  const clientUndated = useMemo(
-    () =>
-      windowActive(clientWin)
-        ? data.filter((r) => !isReassignRec(r) && !easternDayKey(r.createdAt)).length
-        : 0,
-    [data, clientWin],
-  );
-  const preSrc = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return data.filter(
+  // Every client filter EXCEPT the created date. ROUND 191: the "no date" count
+  // reads this, so it counts only records that would otherwise be on screen —
+  // it used to count every undated record in the payload, other pipelines and
+  // offices included.
+  // ROUND 193 — and except the owner, so the Owner dropdown can count each
+  // owner's cases under every other filter.
+  const clientPreOwner = useMemo(() => {
+    return dataByActivity.filter(
       (r) =>
         // 🔴 ITEM 5a — REASSIGN IS A MASTER-VIEW QUEUE, NOT PIPELINE WORK.
         //
@@ -3073,20 +3370,52 @@ export default function Dashboard() {
         // treat as their work. Master reads `data` directly and is unaffected.
         !isReassignRec(r) &&
         (office === "all" || r.office === office) &&
-        inCreatedWindow(r.createdAt, clientWin) &&
         (scope === "all" ||
           (scope === "shared"
             ? r.shared
             : !r.shared && divisionLabel(r.pipelineName) === scope)) &&
         // Admin-only pipeline selector (convenience; the server is the boundary).
         (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
-        (needle === "" ||
-          // Searchable by name, office, stage, and the key people/ids.
-          `${r.oppName} ${r.first} ${r.last} ${r.office} ${r.stage} ${r.harmony} ${r.cm} ${r.cg} ${r.rep} ${r.src}`
-            .toLowerCase()
-            .includes(needle)),
+        // ROUND 195 — searchable by name, office, stage, the key people and
+        // ids as before, now in any word order, and by phone and email.
+        matchesQuery(clientIx.get(r.id), qParsed),
     );
-  }, [data, office, q, scope, adminPipeline, clientWin]);
+  }, [dataByActivity, office, qParsed, clientIx, scope, adminPipeline]);
+  const clientNoDate = useMemo(
+    () => clientPreOwner.filter((r) => matchesOwner(r, ownerF) && hasCm(r)),
+    [clientPreOwner, ownerF, hasCm],
+  );
+  /**
+   * ROUND 195 — the people Clients' search can suggest, counted under every
+   * client filter EXCEPT the search text and the person tags: the suggestions
+   * are found BY the text, so counting inside it would shrink every count.
+   */
+  const clientPeopleBase = useMemo(
+    () =>
+      dataByActivity.filter(
+        (r) =>
+          !isReassignRec(r) &&
+          (office === "all" || r.office === office) &&
+          (scope === "all" ||
+            (scope === "shared" ? r.shared : !r.shared && divisionLabel(r.pipelineName) === scope)) &&
+          (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
+          inCreatedWindow(r.createdAt, clientWin),
+      ),
+    [dataByActivity, office, scope, adminPipeline, clientWin],
+  );
+  const clientOwnerOpts = useMemo(
+    () => ownerOptions(clientPeopleBase, { viewerId, selected: ownerF, names: ownerNameMap }),
+    [clientPeopleBase, viewerId, ownerF, ownerNameMap],
+  );
+  /** Records a created-date filter leaves out only because they have no date. */
+  const clientUndated = useMemo(
+    () => (windowActive(clientWin) ? clientNoDate.filter((r) => !easternDayKey(r.createdAt)).length : 0),
+    [clientNoDate, clientWin],
+  );
+  const preSrc = useMemo(
+    () => clientNoDate.filter((r) => inCreatedWindow(r.createdAt, clientWin)),
+    [clientNoDate, clientWin],
+  );
 
   // The source filter sits BETWEEN preSrc and preStage on purpose. The "By
   // source" tile has to keep listing every channel while one is selected —
@@ -4134,18 +4463,15 @@ export default function Dashboard() {
   };
 
   const masterWin = useMemo(
-    () => createdWindow(masterCreatedRange, new Date(), masterCreatedFrom, masterCreatedTo),
-    [masterCreatedRange, masterCreatedFrom, masterCreatedTo],
+    () => createdWindow(masterCreatedRange, todayKey, masterCreatedFrom, masterCreatedTo),
+    [masterCreatedRange, todayKey, masterCreatedFrom, masterCreatedTo],
   );
-  const masterUndated = useMemo(
-    () => (windowActive(masterWin) ? data.filter((r) => !easternDayKey(r.createdAt)).length : 0),
-    [data, masterWin],
-  );
-  const masterColumns = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    // ⚠️ THE TILES FILTER THE BOARD. A number you cannot act on is trivia —
-    // clicking "unassigned" or "stalled" is the point of counting them.
-    const focused = (r: OpportunityRecord) => {
+  // ⚠️ THE TILES FILTER THE BOARD. A number you cannot act on is trivia —
+  // clicking "unassigned" or "stalled" is the point of counting them.
+  // ROUND 191 — lifted out of masterColumns so the "no date" count can apply
+  // the same tile.
+  const masterFocused = useCallback(
+    (r: OpportunityRecord) => {
       const f = masterFocus;
       if (!f) return true;
       switch (f.kind) {
@@ -4168,15 +4494,57 @@ export default function Dashboard() {
         default:
           return true;
       }
-    };
+    },
+    [masterFocus, dis],
+  );
+  /**
+   * ROUND 191 — the records Master's date filter leaves out only because they
+   * have no date, counted after Master's OTHER filters (search, office, tile),
+   * so the number matches what would otherwise be on screen.
+   */
+  const masterUndated = useMemo(() => {
+    if (!windowActive(masterWin)) return 0;
+    return dataByActivity.filter(
+      (r) =>
+        !easternDayKey(r.createdAt) &&
+        (office === "all" || r.office === office) &&
+        matchesOwner(r, ownerF) &&
+        hasCm(r) &&
+        masterFocused(r) &&
+        matchesQuery(masterIx.get(r.id), qParsed),
+    ).length;
+  }, [dataByActivity, masterWin, qParsed, masterIx, office, ownerF, hasCm, masterFocused]);
+  /**
+   * ROUND 193/195 — the people Master's search can suggest, counted with its
+   * other filters on and the person filters off (so a count is what picking
+   * that person will show). The search text is left out too: the suggestions
+   * are found BY the text, so counting within it would show 0 for most.
+   */
+  const masterPeopleBase = useMemo(
+    () =>
+      dataByActivity.filter(
+        (r) =>
+          (office === "all" || r.office === office) &&
+          inCreatedWindow(r.createdAt, masterWin) &&
+          masterFocused(r),
+      ),
+    [dataByActivity, office, masterWin, masterFocused],
+  );
+  const masterOwnerOpts = useMemo(
+    () => ownerOptions(masterPeopleBase, { viewerId, selected: ownerF, names: ownerNameMap }),
+    [masterPeopleBase, viewerId, ownerF, ownerNameMap],
+  );
+  const masterColumns = useMemo(() => {
     const match = (r: OpportunityRecord) =>
       (office === "all" || r.office === office) &&
       inCreatedWindow(r.createdAt, masterWin) &&
-      focused(r) &&
-      (needle === "" ||
-        `${r.oppName} ${r.first} ${r.last}`.toLowerCase().includes(needle));
+      matchesOwner(r, ownerF) &&
+      hasCm(r) &&
+      masterFocused(r) &&
+      matchesQuery(masterIx.get(r.id), qParsed);
     const byCat = new Map<MasterCatId, OpportunityRecord[]>();
-    for (const r of data) {
+    // ROUND 191 — newest activity first within every column.
+    for (const r of dataByActivity) {
       if (!match(r)) continue;
       const c = masterCategory(r, !!transferredFrom(r));
       const bucket = byCat.get(c);
@@ -4197,7 +4565,7 @@ export default function Dashboard() {
         records: other,
       });
     return cols;
-  }, [data, q, office, transferredFrom, masterFocus, masterWin]);
+  }, [dataByActivity, qParsed, masterIx, office, ownerF, hasCm, transferredFrom, masterFocused, masterWin]);
 
   // Computed over everything the viewer can access, NOT over the focused set —
   // otherwise clicking a tile would rewrite the numbers you clicked.
@@ -4205,12 +4573,95 @@ export default function Dashboard() {
   // board's source tile.
   const mFocus = (kind: string, value?: string) =>
     !!masterFocus && masterFocus.kind === kind && masterFocus.value === value;
-  const setMFocus = (kind: string, value?: string) =>
+  const setMFocus = (kind: string, value?: string) => {
+    // ROUND 193 — an owner tile and the Owner dropdown never both narrow
+    // Master: picking the tile hands the job to the tile.
+    if (kind === "owner") setOwnerF(EVERYONE);
     setMasterFocus((f) =>
       f && f.kind === kind && f.value === value
         ? null
         : ({ kind, value } as typeof f),
     );
+  };
+  /**
+   * ROUND 193 — the Owner dropdown (Clients and Master). Picking an owner
+   * clears an owner tile on either board, so the two can never disagree and
+   * leave an empty screen.
+   */
+  const pickOwner = (v: string) => {
+    setOwnerF(v);
+    setClientFocus((f) => (f && f.kind === "rep" ? null : f));
+    setMasterFocus((f) => (f && f.kind === "owner" ? null : f));
+  };
+
+  // ═══ ROUND 195 — WHAT THE CLIENTS AND MASTER SEARCH BOXES SUGGEST ═══════
+  const clientTally = useMemo(() => tallyPeople(clientPeopleBase), [clientPeopleBase]);
+  const masterTally = useMemo(() => tallyPeople(masterPeopleBase), [masterPeopleBase]);
+  /**
+   * Every client record, prepared once per load: a lead the filters hide is
+   * still offered, because picking it opens it wherever it is.
+   */
+  const clientSuggestRecords = useMemo(
+    () =>
+      dataByActivity.map((r) => ({
+        id: r.id,
+        name: r.oppName || `${r.first} ${r.last}`.trim(),
+        detail: [r.pipelineName, r.stage, r.rep && r.rep !== "—" ? r.rep : "Unassigned"].filter(Boolean).join(" · "),
+        ix: clientIx.get(r.id) || indexRecord([], ""),
+        activity: latestActivity(r),
+      })),
+    [dataByActivity, clientIx],
+  );
+  const masterSuggestRecords = useMemo(
+    () => clientSuggestRecords.map((x) => ({ ...x, ix: masterIx.get(x.id) || x.ix })),
+    [clientSuggestRecords, masterIx],
+  );
+  const clientSuggestions = useMemo(
+    () =>
+      suggest({
+        query: q,
+        ownerWord: "Sales rep",
+        owners: clientOwnerOpts.owners,
+        unassigned: clientOwnerOpts.unassigned,
+        caseManagers: clientTally.caseManagers,
+        offices: clientTally.offices,
+        records: clientSuggestRecords,
+      }),
+    [q, clientOwnerOpts, clientTally, clientSuggestRecords],
+  );
+  const masterSuggestions = useMemo(
+    () =>
+      suggest({
+        query: q,
+        ownerWord: "Sales rep",
+        owners: masterOwnerOpts.owners,
+        unassigned: masterOwnerOpts.unassigned,
+        caseManagers: masterTally.caseManagers,
+        offices: masterTally.offices,
+        records: masterSuggestRecords,
+      }),
+    [q, masterOwnerOpts, masterTally, masterSuggestRecords],
+  );
+  /** The person tags inside the Clients / Master search box. */
+  const peopleChips = useMemo(() => {
+    const out: SearchChip[] = [];
+    if (ownerF !== EVERYONE)
+      out.push({
+        key: "owner",
+        label: ownerF === UNASSIGNED ? "Unassigned" : `Sales rep: ${ownerNameMap.get(ownerF) || "former user"}`,
+        onRemove: () => setOwnerF(EVERYONE),
+      });
+    if (cmF) out.push({ key: "cm", label: `Case manager: ${cmF}`, onRemove: () => setCmF("") });
+    return out;
+  }, [ownerF, cmF, ownerNameMap]);
+  const pickClientSuggestion = (sg: Suggestion) => {
+    if (sg.kind === "record") return setSelId(sg.value);
+    if (sg.kind === "owner") pickOwner(sg.value);
+    if (sg.kind === "unassigned") pickOwner(UNASSIGNED);
+    if (sg.kind === "cm") setCmF(sg.value);
+    if (sg.kind === "office") setOffice(sg.value);
+    setQ("");
+  };
   const focusLabel = (f: NonNullable<typeof masterFocus>) =>
     f.kind === "owner" && f.value === ""
       ? "unassigned"
@@ -4547,30 +4998,100 @@ export default function Dashboard() {
   // a chip shows how many it would reveal rather than how many are showing now.
   // Same rule as the client chips (report 42), for the same reason.
   const cgWin = useMemo(
-    () => createdWindow(cgCreatedRange, new Date(), cgCreatedFrom, cgCreatedTo),
-    [cgCreatedRange, cgCreatedFrom, cgCreatedTo],
+    () => createdWindow(cgCreatedRange, todayKey, cgCreatedFrom, cgCreatedTo),
+    [cgCreatedRange, todayKey, cgCreatedFrom, cgCreatedTo],
   );
-  const cgUndated = useMemo(
-    () =>
-      windowActive(cgWin)
-        ? cgData.filter((r) => r.pipelineId === cgActivePipeline && !easternDayKey(r.createdAt)).length
-        : 0,
-    [cgData, cgActivePipeline, cgWin],
-  );
-  const cgPreStage = useMemo(() => {
-    const needle = cgQuery.trim().toLowerCase();
-    return cgData.filter(
+  // ROUND 191 — newest activity first, as on Clients (lib/activity.ts), and
+  // every Recruiting filter EXCEPT the created date, so the "no date" count
+  // honours the search as well as the pipeline.
+  // ROUND 193 — and except the recruiter, so the Recruiter dropdown can count.
+  const cgByActivity = useMemo(() => byLatestActivity(cgData), [cgData]);
+  const cgPreOwner = useMemo(() => {
+    return cgByActivity.filter(
       (r) =>
         r.pipelineId === cgActivePipeline &&
-        inCreatedWindow(r.createdAt, cgWin) &&
-        (needle === "" ||
-          // Stage is searchable here as well as the name: with no office or
-          // county to filter on, it is the only other thing worth typing.
-          `${r.oppName} ${r.first} ${r.last} ${r.stage}`
-            .toLowerCase()
-            .includes(needle)),
+        // Stage is searchable here as well as the name: with no office or
+        // county to filter on, it is the only other thing worth typing.
+        // ROUND 195 — any word order, and phone and email too.
+        matchesQuery(cgIx.get(r.id), cgParsed),
     );
-  }, [cgData, cgActivePipeline, cgQuery, cgWin]);
+  }, [cgByActivity, cgActivePipeline, cgParsed, cgIx]);
+  const cgNoDate = useMemo(
+    () => cgPreOwner.filter((r) => matchesOwner(r, cgOwnerF)),
+    [cgPreOwner, cgOwnerF],
+  );
+  // ROUND 195 — recruiters counted without the search text (see clientPeopleBase).
+  const cgOwnerOpts = useMemo(
+    () =>
+      ownerOptions(
+        cgByActivity.filter((r) => r.pipelineId === cgActivePipeline && inCreatedWindow(r.createdAt, cgWin)),
+        { viewerId, selected: cgOwnerF, names: ownerNameMap },
+      ),
+    [cgByActivity, cgActivePipeline, cgWin, viewerId, cgOwnerF, ownerNameMap],
+  );
+  /** ROUND 193 — picking a recruiter clears a recruiter tile, so they never disagree. */
+  const pickCgOwner = (v: string) => {
+    setCgOwnerF(v);
+    setCgFocus((f) => (f && f.kind === "recruiter" ? null : f));
+  };
+  const cgOwnerLabel = describeOwner(cgOwnerF, ownerNameMap, "recruiter");
+  /**
+   * ROUND 195 — every applicant on the board's pipelines, prepared once per
+   * load for the suggestions: not only the ones the filters show, because
+   * picking one opens it wherever it is.
+   */
+  const cgSuggestRecords = useMemo(
+    () =>
+      cgByActivity.map((r) => ({
+        id: r.id,
+        name: r.oppName || `${r.first} ${r.last}`.trim(),
+        detail: [r.pipelineName, r.stage, r.rep && r.rep !== "—" ? r.rep : "Unassigned"].filter(Boolean).join(" · "),
+        ix: cgIx.get(r.id) || indexRecord([], ""),
+        activity: latestActivity(r),
+      })),
+    [cgByActivity, cgIx],
+  );
+  /** ROUND 195 — what Recruiting's search box suggests as you type. */
+  const cgSuggestions = useMemo(
+    () =>
+      suggest({
+        query: cgQuery,
+        ownerWord: "Recruiter",
+        owners: cgOwnerOpts.owners,
+        unassigned: cgOwnerOpts.unassigned,
+        records: cgSuggestRecords,
+      }),
+    [cgQuery, cgOwnerOpts, cgSuggestRecords],
+  );
+  const cgChips = useMemo(
+    () =>
+      cgOwnerF === EVERYONE
+        ? []
+        : [
+            {
+              key: "owner",
+              label: cgOwnerF === UNASSIGNED ? "Unassigned" : `Recruiter: ${ownerNameMap.get(cgOwnerF) || "former user"}`,
+              onRemove: () => setCgOwnerF(EVERYONE),
+            },
+          ],
+    [cgOwnerF, ownerNameMap],
+  );
+  const pickCgSuggestion = (sg: Suggestion) => {
+    if (sg.kind === "record") return setSelId(sg.value);
+    if (sg.kind === "owner") pickCgOwner(sg.value);
+    if (sg.kind === "unassigned") pickCgOwner(UNASSIGNED);
+    setCgQuery("");
+  };
+  const cgUndated = useMemo(
+    () => (windowActive(cgWin) ? cgNoDate.filter((r) => !easternDayKey(r.createdAt)).length : 0),
+    [cgNoDate, cgWin],
+  );
+  const cgPreStage = useMemo(
+    () => cgNoDate.filter((r) => inCreatedWindow(r.createdAt, cgWin)),
+    [cgNoDate, cgWin],
+  );
+  /** ROUND 191 — the Recruiting date filter in words, "" when it is off. */
+  const cgDateLabel = describeWindow(cgCreatedRange, cgWin);
 
   const cgVisible = useMemo(
     () => (cgStage ? cgPreStage.filter((r) => r.stage === cgStage) : cgPreStage),
@@ -7335,15 +7856,19 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="toolbar">
-          <div className="search">
-            <IconSearch />
-            <input
-              placeholder="Search by client, office, stage, caregiver, case manager…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
+        {/* ROUND 194 — row 1: search, with Sort and Group on the right; row 2:
+            the filters; then the count. Layout in app/filterbar.css. */}
+        <div className="toolbar filterbar">
+          <SearchBox
+            which="clients"
+            placeholder="Search by client, office, stage, caregiver, case manager…"
+            value={q}
+            onChange={setQ}
+            chips={peopleChips}
+            suggestions={clientSuggestions}
+            onPick={pickClientSuggestion}
+          />
+          <div className="filters">
           {/* Division / Shared-with-me — REPS ONLY.
               Options come from the viewer's own payload, so no division they
               hold nothing in is ever named.
@@ -7367,6 +7892,7 @@ export default function Dashboard() {
               <label htmlFor="scopeSel">Show</label>
               <select
                 id="scopeSel"
+                className={scope !== "all" ? "on" : undefined}
                 value={scope}
                 onChange={(e) => setScope(e.target.value)}
               >
@@ -7392,6 +7918,7 @@ export default function Dashboard() {
               <label htmlFor="pipeSel">Pipeline</label>
               <select
                 id="pipeSel"
+                className={adminPipeline !== "all" ? "on" : undefined}
                 value={adminPipeline}
                 onChange={(e) => setAdminPipeline(e.target.value)}
               >
@@ -7425,6 +7952,7 @@ export default function Dashboard() {
             <label htmlFor="officeSel">Office</label>
             <select
               id="officeSel"
+              className={office !== "all" ? "on" : undefined}
               value={office}
               onChange={(e) => setOffice(e.target.value)}
             >
@@ -7436,6 +7964,8 @@ export default function Dashboard() {
               ))}
             </select>
           </div>
+          </div>
+          <div className="viewctls">
           <div className="officefilter">
             <label htmlFor="sortSel">Sort</label>
             <select
@@ -7443,7 +7973,8 @@ export default function Dashboard() {
               value={sortKey ?? ""}
               onChange={(e) => setSortKey(e.target.value || null)}
             >
-              <option value="">Default order</option>
+              {/* ROUND 191 — the default is now newest activity first. */}
+              <option value="">Latest activity</option>
               {sortDims.map((d) => (
                 <option key={d.key} value={d.key}>
                   {d.label}
@@ -7476,6 +8007,7 @@ export default function Dashboard() {
                 </option>
               ))}
             </select>
+          </div>
           </div>
           <span className="count">
             {/* "in pipeline" used to count the WHOLE payload even with a
@@ -7771,15 +8303,18 @@ export default function Dashboard() {
                   </button>
                 </div>
               ) : null}
-              <div className="toolbar mtoolbar">
-                <div className="search">
-                  <IconSearch />
-                  <input
-                    placeholder={`Search ${cgNoun.many} by name…`}
-                    value={cgQuery}
-                    onChange={(e) => setCgQuery(e.target.value)}
-                  />
-                </div>
+              <div className="toolbar mtoolbar filterbar">
+                <SearchBox
+                  which="recruiting"
+                  placeholder={`Search ${cgNoun.many} by name…`}
+                  value={cgQuery}
+                  onChange={setCgQuery}
+                  chips={cgChips}
+                  suggestions={cgSuggestions}
+                  onPick={pickCgSuggestion}
+                  leadsLabel={cgNoun.many.charAt(0).toUpperCase() + cgNoun.many.slice(1)}
+                />
+                <div className="filters">
                 {cgVisiblePipelines.length > 1 ? (
                   <div className="officefilter">
                     <label htmlFor="cgPipeSel">Pipeline</label>
@@ -7813,6 +8348,8 @@ export default function Dashboard() {
                   onTo={setCgCreatedTo}
                   undated={cgUndated}
                 />
+                </div>
+                <div className="viewctls">
                 <div className="officefilter">
                   <label htmlFor="cgSortSel">Sort</label>
                   <select
@@ -7820,25 +8357,28 @@ export default function Dashboard() {
                     value={cgSortKey || ""}
                     onChange={(e) => setCgSortKey(e.target.value || null)}
                   >
-                    <option value="">Default order</option>
+                    <option value="">Latest activity</option>
                     {CG_COLUMNS.map((c) => (
                       <option key={c.key} value={c.key}>
                         {c.label}
                       </option>
                     ))}
                   </select>
+                  {/* ROUND 194 — inside the Sort group, beside its dropdown.
+                      It sat outside it, so it took none of the toolbar's
+                      styling and wrapped away from Sort on its own. */}
+                  <button
+                    type="button"
+                    className="dirbtn"
+                    onClick={() =>
+                      setCgSortDir((d) => (d === "asc" ? "desc" : "asc"))
+                    }
+                    disabled={!cgSortKey}
+                    title={cgSortDir === "asc" ? "Ascending" : "Descending"}
+                  >
+                    {cgSortDir === "asc" ? "▲" : "▼"}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="dirbtn"
-                  onClick={() =>
-                    setCgSortDir((d) => (d === "asc" ? "desc" : "asc"))
-                  }
-                  disabled={!cgSortKey}
-                  title={cgSortDir === "asc" ? "Ascending" : "Descending"}
-                >
-                  {cgSortDir === "asc" ? "▲" : "▼"}
-                </button>
                 <div className="officefilter">
                   <label htmlFor="cgGroupSel">Group</label>
                   <select
@@ -7851,6 +8391,7 @@ export default function Dashboard() {
                     <option value="recruiter">Recruiter</option>
                     <option value="pipeline">Pipeline</option>
                   </select>
+                </div>
                 </div>
                 {/* 🔴 THE COUNT MUST NAME WHAT IT COUNTS. It read `cgVisible`
                     — the set BEFORE the tile filter — so with a recruiter
@@ -7869,6 +8410,36 @@ export default function Dashboard() {
                   ) : (
                     cgCount(cgVisible.length)
                   )}
+                  {/* 🔴 ROUND 191 — Recruiting names its date filter, as
+                      Clients and Master do. A board narrowed to "Last month"
+                      that only said "4 applicants" read as 4 in total. */}
+                  {/* ROUND 193 — and the recruiter, when one is picked. */}
+                  {cgOwnerLabel ? (
+                    <>
+                      {" · "}
+                      {cgOwnerLabel}{" "}
+                      <button type="button" className="linkbtn" onClick={() => setCgOwnerF(EVERYONE)}>
+                        Show everyone
+                      </button>
+                    </>
+                  ) : null}
+                  {cgDateLabel ? (
+                    <>
+                      {" · "}
+                      {cgDateLabel}{" "}
+                      <button
+                        type="button"
+                        className="linkbtn"
+                        onClick={() => {
+                          setCgCreatedRange("all");
+                          setCgCreatedFrom("");
+                          setCgCreatedTo("");
+                        }}
+                      >
+                        Show all dates
+                      </button>
+                    </>
+                  ) : null}
                 </span>
               </div>
               {/* 🔴 ROUND 121b · ITEM 3, THE MIDDLE STATE. Pipelines exist and
@@ -7978,6 +8549,16 @@ export default function Dashboard() {
                   {cgFocused.length === 0 ? (
                     <div className="empty">
                       No {cgNoun.many} match this filter.
+                      {/* ROUND 191 — and says which ones are on. */}
+                      {(() => {
+                        const on: string[] = [];
+                        if (cgQuery.trim()) on.push(`search “${cgQuery.trim()}”`);
+                        if (cgOwnerLabel) on.push(cgOwnerLabel);
+                        if (cgDateLabel) on.push(cgDateLabel);
+                        if (cgStage) on.push(`stage ${cgStage}`);
+                        if (cgFocus) on.push("a tile above");
+                        return on.length ? ` Active: ${on.join(" · ")}.` : null;
+                      })()}
                       {/* ⚠️ It guarded on `cgVisible`, so a TILE that matched
                           nothing left an empty table and no sentence — the rows
                           were gone and nothing said why. */}
@@ -8716,19 +9297,22 @@ export default function Dashboard() {
             <NoAccessNotice />
           ) : (
             <>
-              <div className="toolbar mtoolbar">
-                <div className="search">
-                  <IconSearch />
-                  <input
-                    placeholder="Search by client name…"
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                  />
-                </div>
+              <div className="toolbar mtoolbar filterbar">
+                <SearchBox
+                  which="master"
+                  placeholder="Search by client name…"
+                  value={q}
+                  onChange={setQ}
+                  chips={peopleChips}
+                  suggestions={masterSuggestions}
+                  onPick={pickClientSuggestion}
+                />
+                <div className="filters">
                 <div className="officefilter">
                   <label htmlFor="mofficeSel">Office</label>
                   <select
                     id="mofficeSel"
+                    className={office !== "all" ? "on" : undefined}
                     value={office}
                     onChange={(e) => setOffice(e.target.value)}
                   >
@@ -8753,6 +9337,7 @@ export default function Dashboard() {
                   onTo={setMasterCreatedTo}
                   undated={masterUndated}
                 />
+                </div>
                 {(() => {
                   // ⚠️ "N of M" AND EVERY FILTER BY NAME, so "Master doesn't
                   // show everything" always answers itself on screen.
@@ -8761,11 +9346,14 @@ export default function Dashboard() {
                   const on: string[] = [];
                   if (q.trim()) on.push(`search “${q.trim()}”`);
                   if (office !== "all") on.push(`office ${office}`);
+                  const ow = describeOwner(ownerF, ownerNameMap, "sales rep");
+                  if (ow) on.push(ow);
+                  if (cmF) on.push(`case manager ${cmF}`);
                   const cw = describeWindow(masterCreatedRange, masterWin);
                   if (cw) on.push(cw);
                   if (masterFocus) on.push(focusLabel(masterFocus));
                   return (
-                    <span className="count mcount">
+                    <span className="count">
                       {shown === total
                         ? `${total} record${total === 1 ? "" : "s"}`
                         : `Showing ${shown} of ${total} records`}
@@ -8776,6 +9364,9 @@ export default function Dashboard() {
                           <button
                             type="button"
                             className="linkbtn"
+                            // ROUND 191 — say it out loud: search and office
+                            // are shared with the Clients board.
+                            title="Also clears the search, office, sales rep and case manager on the Clients board — those are shared."
                             onClick={() => {
                               setQ("");
                               setOffice("all");
@@ -8783,6 +9374,8 @@ export default function Dashboard() {
                               setMasterCreatedFrom("");
                               setMasterCreatedTo("");
                               setMasterFocus(null);
+                              setOwnerF(EVERYONE);
+                              setCmF("");
                             }}
                           >
                             Clear filters
@@ -8823,7 +9416,8 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="stat gold">
+                {/* ROUND 195 — "wide": two columns of names (app/spacing.css). */}
+                <div className="stat gold wide">
                   <div className="k">By owner</div>
                   <div className="mini" style={{ marginTop: 9 }}>
                     {/* Unassigned is its OWN row, first — it is the one that
@@ -9150,6 +9744,11 @@ export default function Dashboard() {
                     const on: string[] = [];
                     if (q.trim()) on.push(`search “${q.trim()}”`);
                     if (office !== "all") on.push(`office ${office}`);
+                    {
+                      const ow = describeOwner(ownerF, ownerNameMap, "sales rep");
+                      if (ow) on.push(ow);
+                      if (cmF) on.push(`case manager ${cmF}`);
+                    }
                     {
                       const cw = describeWindow(createdRange, clientWin);
                       if (cw) on.push(cw);

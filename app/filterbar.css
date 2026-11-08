@@ -1,0 +1,56 @@
+/* ---------------------------------------------------------------------------
+   ROUND 194 — THE BOARD TOOLBARS LINE UP.
+   Clients, Master and Recruiting only (class `filterbar`): the Resources and
+   Partners toolbars share `.search` and are left exactly as they were.
+
+   · ONE HEIGHT, 34px, for the search box, every dropdown, the date boxes and
+     the ▲/▼ button. They were 37, 33, 35 and 27px, so a row never lined up.
+   · Dropdowns draw their own arrow, the same on Windows and Mac.
+   · Sort and Group are VIEW settings, not filters: they sit together on the
+     right, so picking a custom date range no longer shuffles them around.
+   · A custom range is one box ("from → to"), and "N with no date not shown"
+     is a small badge rather than loose text in the middle of the row.
+   · The count is a status line under the controls, where it is read with
+     them, instead of floating at the far right on a line of its own.
+   --------------------------------------------------------------------------- */
+.filterbar{column-gap:16px;row-gap:10px;align-items:center;}
+.filterbar > .search{flex:1 1 360px;min-width:260px;max-width:560px;height:34px;padding:0 10px 0 12px;box-sizing:border-box;}
+/* Row 1: search, then Sort + Group on the right. Row 2: the filters. */
+.filterbar > .viewctls{order:1;margin-left:auto;display:flex;align-items:center;gap:16px;flex:none;}
+.filterbar > .filters{order:2;flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;column-gap:16px;row-gap:10px;}
+.filterbar > .count{order:3;flex-basis:100%;margin:0;font-size:11.5px;color:var(--ink-3);line-height:1.4;}
+.filterbar .officefilter{flex:none;height:34px;gap:7px;}
+.filterbar .officefilter label{font-size:12px;font-weight:600;color:var(--ink-2);white-space:nowrap;}
+.filterbar .officefilter select{
+  height:34px;box-sizing:border-box;padding:0 30px 0 11px;line-height:normal;
+  -webkit-appearance:none;-moz-appearance:none;appearance:none;
+  background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23948aa6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center/10px 6px;
+}
+/* A filter that is switched on is lit, so "why can't I see this lead?" answers itself. */
+.filterbar .filters select.on{border-color:var(--plum-line);background-color:var(--plum-soft);color:var(--plum-deep);font-weight:600;}
+.filterbar .officefilter .dirbtn{height:34px;width:34px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:10px;border-radius:9px;margin-left:-3px;}
+.filterbar .createdrange{display:inline-flex;align-items:center;gap:4px;height:34px;box-sizing:border-box;padding:0 4px 0 6px;border:1px solid var(--plum-line);border-radius:9px;background:var(--plum-soft);box-shadow:var(--shadow-sm);}
+.filterbar .createdrange:focus-within{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.filterbar .createdfilter .createdrange input[type="date"]{height:30px;border:0;box-shadow:none;padding:0 4px;background:transparent;color:var(--plum-deep);}
+.filterbar .createdfilter .createdrange input[type="date"]:focus{border:0;box-shadow:none;}
+.filterbar .createdfilter .createdto{color:var(--ink-3);font-size:12px;}
+.filterbar .createdfilter .createdundated{font-size:11px;font-weight:600;color:var(--gold-ink);background:var(--gold-soft);border-radius:999px;padding:3px 9px;white-space:nowrap;}
+
+/* ---------------------------------------------------------------------------
+   ROUND 195 — THE SMART SEARCH BOX: person tags inside it, the clear ×, and
+   the suggestion list underneath. Still scoped to the three board toolbars.
+   --------------------------------------------------------------------------- */
+.filterbar > .search{position:relative;gap:6px;}
+.filterbar > .search input{flex:1;min-width:90px;}
+.filterbar .searchchip{display:inline-flex;align-items:center;gap:2px;height:24px;padding:0 3px 0 9px;border-radius:999px;background:var(--plum-soft);border:1px solid var(--plum-line);color:var(--plum-deep);font-size:11.5px;font-weight:600;white-space:nowrap;flex:none;}
+.filterbar .searchchip button{border:0;background:none;color:var(--plum);font-size:14px;line-height:1;width:18px;height:18px;border-radius:50%;cursor:pointer;padding:0;}
+.filterbar .searchchip button:hover{background:var(--plum-line);}
+.filterbar .searchclear{border:0;background:none;padding:0 2px;cursor:pointer;color:var(--ink-3);font-size:16px;line-height:1;flex:none;}
+.filterbar .searchclear:hover{color:var(--ink);}
+.filterbar .sugg{position:absolute;top:calc(100% + 6px);left:0;width:100%;min-width:360px;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);z-index:60;padding:6px;}
+.filterbar .sugghead{padding:8px 10px 4px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);}
+.filterbar .suggrow{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;}
+.filterbar .suggrow.on{background:var(--plum-soft);}
+.filterbar .sugglabel{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.filterbar .suggdetail{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:right;}
+.filterbar .suggfoot{margin-top:4px;padding:7px 10px 3px;border-top:1px solid var(--line-soft);font-size:10.5px;color:var(--ink-3);}
