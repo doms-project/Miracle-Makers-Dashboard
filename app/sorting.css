@@ -2,46 +2,118 @@
    (round195-proof checks that). */
 /* ═══ ROUND 197 — New Leads (to sort), Staffing needed lead, Sort / Assign ═══
    One text size (12px) and 28px controls throughout, as agreed. */
-.sorttab{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto;padding:4px 2px 24px;}
-.sorthead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:13px;}
-.sortkey{display:flex;gap:12px;font-size:11px;color:var(--ink-3);flex-wrap:wrap;}
-.sortmuted{color:var(--ink-3);font-weight:400;font-size:11px;}
-.sorttools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
-.sortsearch{flex:1;min-width:180px;height:30px;border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:12px;background:var(--bg);}
-.sortdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold);flex:0 0 7px;}
-.sortpill{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:6px;white-space:nowrap;color:var(--ink-2);background:var(--bg);}
-.sortname{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12px;min-width:0;}
+/* ═══ ROUND 198 — the sorting tabs, redesigned ════════════════════════════
+   Bigger, plainer labels (13px body, 15px title); lighter weights (500/600,
+   no 800s); a search box of normal width; columns the width of every other
+   board's (.col = 264px). */
+.sorttab{display:flex;flex-direction:column;gap:14px;min-height:0;overflow:auto;padding:18px 22px 28px;}
+.sorthead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px 24px;flex-wrap:wrap;}
+.sorttitle h2{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em;color:var(--ink);}
+.sorttitle p{margin:4px 0 0;font-size:13px;line-height:1.5;color:var(--ink-2);max-width:620px;}
+.sortkey{display:flex;gap:6px 8px;flex-wrap:wrap;list-style:none;margin:0;padding:0;font-size:12.5px;color:var(--ink-2);}
+.sortkey li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--bg);white-space:nowrap;}
+.sortkey b{font-weight:600;color:var(--plum-deep);}
+.sortmuted{color:var(--ink-3);font-weight:400;font-size:12px;}
+/* the numbers */
+.sortstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;}
+.sortstat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg);min-width:0;}
+.sortstat.wide{grid-column:span 2;}
+.sortstat .k{font-size:12px;font-weight:500;color:var(--ink-2);}
+.sortstat .v{font-size:24px;font-weight:600;letter-spacing:-.02em;margin-top:4px;line-height:1.1;color:var(--ink);font-variant-numeric:tabular-nums;}
+.sortstat .sub{font-size:12px;color:var(--ink-3);margin-top:4px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;}
+.sortstatk{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.sortstatk select{height:26px;font-size:12px;border:1px solid var(--line);border-radius:7px;padding:0 6px;background:var(--bg);color:var(--ink-2);}
+.sortsplit{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.sortsplit span{font-size:12px;color:var(--ink-2);background:var(--canvas);border-radius:999px;padding:3px 10px;white-space:nowrap;}
+.sortsplit b{color:var(--plum);font-weight:600;margin-left:3px;}
+.sortsplit span.staff{background:var(--gold-soft);color:var(--gold-ink);}
+.sortsplit span.staff b{color:var(--gold-ink);}
+/* search, pipelines, show / sort / group */
+.sorttools{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;}
+.sortsearchwrap{flex:0 1 340px;min-width:220px;}
+.sortsearchwrap .search{position:relative;gap:6px;height:34px;padding:0 10px 0 12px;box-sizing:border-box;min-width:0;width:100%;}
+.sortsearchwrap .search input{flex:1;min-width:80px;border:0;outline:0;background:transparent;font-size:13px;}
+.sortsearchwrap .searchchip{display:inline-flex;align-items:center;gap:2px;height:24px;padding:0 3px 0 9px;border-radius:999px;background:var(--plum-soft);border:1px solid var(--plum-line);color:var(--plum-deep);font-size:12px;font-weight:600;white-space:nowrap;flex:none;}
+.sortsearchwrap .searchchip button{border:0;background:none;color:var(--plum);font-size:14px;line-height:1;width:18px;height:18px;border-radius:50%;cursor:pointer;padding:0;}
+.sortsearchwrap .searchclear{border:0;background:none;padding:0 2px;cursor:pointer;color:var(--ink-3);font-size:16px;line-height:1;flex:none;}
+.sortsearchwrap .sugg{position:absolute;top:calc(100% + 6px);left:0;width:100%;min-width:340px;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);z-index:60;padding:6px;}
+.sortsearchwrap .sugghead{padding:8px 10px 4px;font-size:11px;font-weight:600;color:var(--ink-3);}
+.sortsearchwrap .suggrow{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;}
+.sortsearchwrap .suggrow.on{background:var(--plum-soft);}
+.sortsearchwrap .sugglabel{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.sortsearchwrap .suggdetail{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:right;}
+.sortsearchwrap .suggfoot{margin-top:4px;padding:7px 10px 3px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--ink-3);}
+.sortchips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.sortchips .chip{padding:6px 12px;}
+.sortsels{display:flex;gap:10px;align-items:center;margin-left:auto;flex-wrap:wrap;}
+.sortsel{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);font-weight:500;}
+.sortsel select{height:32px;font-size:12.5px;border:1px solid var(--line);border-radius:8px;padding:0 28px 0 10px;color:var(--ink);
+  -webkit-appearance:none;-moz-appearance:none;appearance:none;
+  background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23948aa6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center/10px 6px;}
+/* list */
+.sortdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold);flex:0 0 8px;}
+.sortpill{display:inline-block;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;white-space:nowrap;color:var(--ink-2);background:var(--bg);max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+.sortpill.pipe{background:var(--canvas);border-color:transparent;}
+.sortpill.own{background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum-deep);font-size:11.5px;}
+.sortname{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;min-width:0;color:var(--ink);}
 .sortname>span:first-child,.sortname>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.sortmeta{color:var(--ink-3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.sortage.stale{color:var(--gold-ink);background:var(--gold-soft);border-radius:6px;padding:1px 6px;}
+.sortmeta{color:var(--ink-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+.sortage{color:var(--ink-2);font-size:12px;}
+.sortage.stale{color:var(--gold-ink);background:var(--gold-soft);border-radius:999px;padding:2px 8px;font-weight:600;}
 .sortlistview{border:1px solid var(--line);border-radius:12px;background:var(--bg);overflow:hidden;}
-.sortrow{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.1fr) minmax(0,.7fr) 176px;gap:8px;align-items:center;padding:7px 10px;border-top:1px solid var(--line-soft);font-size:12px;cursor:pointer;}
+.sortrow{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.1fr) minmax(0,.8fr) 210px;gap:12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line-soft);font-size:13px;cursor:pointer;}
 .sortrow:hover{background:var(--row-hover);}
-.sortrow.head{border-top:0;font-size:11px;color:var(--ink-3);cursor:default;background:transparent;}
+.sortrow.head{border-top:0;font-size:12px;font-weight:500;color:var(--ink-3);cursor:default;background:var(--canvas);padding-top:8px;padding-bottom:8px;}
+.sortrow.head:hover{background:var(--canvas);}
 .sortwho{min-width:0;}
-.sortseg{display:flex;border:1px solid var(--plum-line);border-radius:8px;overflow:hidden;min-width:0;}
-.sortseg button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 0 3px;font-size:11px;line-height:1.1;color:var(--ink-2);background:var(--bg);border:0;border-right:1px solid var(--line-soft);cursor:pointer;min-width:0;}
+.sortgrouphead{display:flex;gap:8px;align-items:center;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--plum-deep);background:var(--plum-soft);border-top:1px solid var(--plum-line);}
+.sortgrouphead span{font-weight:500;color:var(--ink-3);}
+.sortfootline{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--line-soft);font-size:12px;color:var(--ink-3);}
+/* the Sort-to buttons: icon above label */
+.sortseg{display:flex;border:1px solid var(--plum-line);border-radius:9px;overflow:hidden;min-width:0;background:var(--bg);}
+.sortseg button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 0 4px;font-size:12px;font-weight:500;line-height:1.1;color:var(--ink-2);background:var(--bg);border:0;border-right:1px solid var(--line-soft);cursor:pointer;min-width:0;font-family:inherit;}
 .sortseg button:last-child{border-right:0;}
-.sortseg button>span{font-size:13px;}
+.sortseg button>span{font-size:14px;}
 .sortseg button:hover:not(:disabled){background:var(--plum-soft);color:var(--plum);}
 .sortseg button.soft{color:var(--ink-3);}
 .sortseg button:disabled{opacity:.4;cursor:not-allowed;}
-.sortlanes{display:flex;gap:8px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;}
-.sortlane{background:var(--canvas);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:5px;width:208px;flex:0 0 208px;max-height:72vh;overflow-y:auto;}
-.sortlane.empty{background:transparent;border:1px dashed var(--line);}
-.sortlanehead{display:flex;justify-content:space-between;font-size:12px;font-weight:600;padding:2px 4px;}
-.sortlanehead span{color:var(--ink-3);font-weight:400;}
-.sortlaneempty{padding:10px 4px;text-align:center;}
-.sortcard{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 7px;display:flex;flex-direction:column;gap:4px;cursor:pointer;}
-.sortcard:hover{border-color:var(--plum-line);}
+/* board: the same column as every other board */
+.sortlanes{display:flex;gap:14px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;}
+.sortlane{flex:0 0 264px;width:264px;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);border-radius:12px;max-height:72vh;box-shadow:var(--shadow-sm);}
+.sortlanehead{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;}
+.sortlanehead span{color:var(--ink-3);font-weight:500;}
+.sortlanebody{padding:11px;display:flex;flex-direction:column;gap:10px;overflow:auto;}
+.sortcard{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:border-color .12s,box-shadow .12s;}
+.sortcard:hover{border-color:var(--plum);box-shadow:0 4px 14px rgba(91,42,134,.12);}
 .sortcard .sortname{justify-content:space-between;}
-.sortmore{font-size:11px;color:var(--ink-3);background:none;border:0;padding:4px;cursor:pointer;}
-.sortempty{padding:28px;text-align:center;color:var(--ink-3);font-size:12px;border:1px dashed var(--line);border-radius:12px;}
-.sortwaiting{font-size:12px;color:var(--ink-2);margin:0 0 8px;}
-.sortwaiting button{background:none;border:0;color:var(--plum);cursor:pointer;font-size:12px;padding:0;text-decoration:underline;}
+.sortcard .sortmeta{margin-top:0;}
+.sortmore{font-size:12px;color:var(--plum);background:none;border:0;padding:4px;cursor:pointer;font-weight:500;}
+.sortempty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 20px;text-align:center;color:var(--ink-2);font-size:13px;border:1px dashed var(--line);border-radius:12px;background:var(--bg);}
+.sortempty b{font-weight:500;}
+.sortclear{height:30px;padding:0 12px;border:1px solid var(--plum-line);border-radius:8px;background:var(--plum-soft);color:var(--plum-deep);font-size:12.5px;font-weight:500;cursor:pointer;}
+/* on a pipeline tab: the leads waiting elsewhere — a pill with a pulsing dot */
+.sortwaiting{display:flex;flex-wrap:wrap;gap:8px;margin:10px 22px 0;}
+.sortwait{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 14px 0 12px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;}
+.sortwait b{font-weight:700;}
+.sortwait.new{background:var(--gold-soft);color:var(--gold-ink);border:1px solid #f3d5ab;}
+.sortwait.staff{background:var(--plum-soft);color:var(--plum-deep);border:1px solid var(--plum-line);}
+.sortwait:hover{filter:brightness(.97);}
+.sortwait .pulse{position:relative;width:8px;height:8px;border-radius:50%;background:currentColor;flex:none;}
+.sortwait.new .pulse{background:var(--gold);}
+.sortwait .pulse::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid currentColor;opacity:0;animation:sortpulse 1.8s ease-out infinite;}
+.sortwait.new .pulse::after{border-color:var(--gold);}
+@keyframes sortpulse{0%{transform:scale(.5);opacity:.8;}100%{transform:scale(1.6);opacity:0;}}
+@media (prefers-reduced-motion:reduce){.sortwait .pulse::after{animation:none;}}
+/* a pipeline board with nothing on it: one message, no empty columns */
+.boardempty{align-items:flex-start;justify-content:center;}
+.boardemptymsg{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:40px;padding:36px 40px;max-width:520px;text-align:center;font-size:13px;color:var(--ink-2);background:var(--bg);border:1px dashed var(--line);border-radius:12px;}
+.boardemptymsg b{font-size:14px;font-weight:600;color:var(--ink);}
 @media (max-width:720px){
-  .sortrow{grid-template-columns:minmax(0,1fr);gap:4px;}
+  .sorttab{padding:12px;}
+  .sortrow{grid-template-columns:minmax(0,1fr);gap:6px;}
   .sortrow.head{display:none;}
+  .sortstat.wide{grid-column:auto;}
+  .sortsels{margin-left:0;}
   .sortlanes{flex-direction:column;}
   .sortlane{width:100%;flex:1 1 auto;max-height:none;}
 }
@@ -68,6 +140,34 @@
 .sortbtn{height:28px;padding:0 10px;font-size:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink-2);cursor:pointer;}
 .sortbtn.primary{background:var(--plum);border-color:var(--plum);color:#fff;font-weight:600;}
 .sortbtn:disabled{opacity:.5;cursor:not-allowed;}
-/* inline tab rename (admins) */
-.railrename{width:100%;height:24px;font-size:12px;border:1px solid var(--plum-line);border-radius:6px;padding:0 6px;}
-.railrenameerr{font-size:11px;color:var(--blk);padding:2px 8px;}
+/* ROUND 198 — the sidebar rename box is gone: tabs are renamed on the
+   Pipelines screen (.pfname below). */
+/* ROUND 198 — the source logos on the sorting tabs (the boards' .srcmark) */
+.sortname .srcmark{margin:-4px 0 -4px 2px;}
+.sortsrc{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:visible;}
+.sortsrc .srcmark{margin:0;}
+.sortname .srcmark{margin:0 0 0 auto;}
+.sortnosrc{color:var(--ink-3);}
+/* a source with no logo: its initial in a neutral square, the logos' size */
+.srcmark.srcunk{width:20px;height:20px;box-sizing:border-box;border-radius:6px;background:var(--canvas);border:1px solid var(--line);
+  color:var(--ink-2);font-size:11px;font-weight:600;justify-content:center;vertical-align:middle;}
+.srcmark.srcunk.sm{width:14px;height:14px;font-size:9px;border-radius:4px;}
+.sortsrcs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.sortsrcs .srcpick{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;height:30px;padding:0 10px 0 7px;margin:0;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--ink-2);cursor:pointer;font-family:inherit;}
+.sortsrcs .srcpick b{color:var(--ink);font-weight:600;}
+.sortsrcs .srcpick .srcmark{margin:0;}
+.sortsrcs .srcpick.on{background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum-deep);}
+/* ROUND 198 — tab names, edited on the Pipelines screen */
+.pfnames{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:6px 14px;}
+.pfname{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:8px 0;}
+.pfnames .pfname + .pfname{border-top:1px solid var(--line-soft);}
+.pfname label{flex:0 0 190px;font-size:12px;font-weight:600;color:var(--ink-2);}
+.pfname input{flex:0 1 280px;min-width:180px;height:32px;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:0 10px;font:inherit;font-size:13px;background:var(--bg);color:var(--ink);}
+.pfname input:focus{outline:0;border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
+.pfnamebtn{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink-2);font:inherit;font-size:12.5px;cursor:pointer;}
+.pfnamebtn.primary{background:var(--plum);border-color:var(--plum);color:#fff;font-weight:600;}
+.pfnamebtn:disabled{opacity:.45;cursor:not-allowed;}
+.pfname .ihint{flex-basis:100%;margin-left:200px;}
+.pfghlname{font-size:11.5px;color:var(--ink-3);}
+.pfrow .pfname{padding:8px 0 4px;}
+@media (max-width:720px){.pfname label{flex-basis:100%;}.pfname .ihint{margin-left:0;}}

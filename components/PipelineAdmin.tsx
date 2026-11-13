@@ -13,6 +13,76 @@ import type {
   PipelineScope,
 } from "@/lib/pipelineConfig";
 import { withExclusion } from "@/lib/pipelineConfig";
+import { resolveLabels, DEFAULT_LABELS, LABEL_MAX } from "@/lib/sorting";
+
+/**
+ * 🔴 ROUND 198 — ONE NAME, EDITED IN PLACE. Used for the two sorting tabs, the
+ * "Staffing needed" stage label and every client pipeline's sidebar name.
+ * Enter or Save writes it; Esc puts back what is saved; "Use the default"
+ * clears the override. Display only — nothing is renamed in GoHighLevel.
+ */
+function NameEditor({
+  id,
+  label,
+  saved,
+  fallback,
+  busy,
+  onSave,
+  hint,
+}: {
+  id: string;
+  label: string;
+  /** The override stored now ("" = none). */
+  saved: string;
+  /** What shows when there is no override. */
+  fallback: string;
+  busy: boolean;
+  onSave: (name: string) => Promise<boolean>;
+  hint?: string;
+}) {
+  const [v, setV] = useState(saved || fallback);
+  useEffect(() => setV(saved || fallback), [saved, fallback]);
+  const current = saved || fallback;
+  const dirty = v.trim() !== current.trim();
+  const save = async () => {
+    if (!dirty || busy) return;
+    // Typing the default back is the same as clearing the override.
+    await onSave(v.trim() === fallback.trim() ? "" : v);
+  };
+  return (
+    <div className="pfname">
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        value={v}
+        maxLength={LABEL_MAX}
+        disabled={busy}
+        placeholder={fallback}
+        spellCheck={false}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void save();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            setV(current);
+          }
+        }}
+      />
+      <button type="button" className="pfnamebtn primary" disabled={!dirty || busy} onClick={() => void save()}>
+        Save
+      </button>
+      {saved ? (
+        <button type="button" className="pfnamebtn" disabled={busy} onClick={() => void onSave("")} title={`Back to “${fallback}”`}>
+          Use the default
+        </button>
+      ) : null}
+      {hint ? <span className="ihint">{hint}</span> : null}
+    </div>
+  );
+}
 
 /**
  * 🔴 ITEM K — SCOPE IS "WHICH PICKER LISTS THIS PIPELINE", AND THE SCREEN NOW
@@ -142,6 +212,7 @@ export default function PipelineAdmin({
   countsComplete,
   countFieldValues,
   onConfigSaved,
+  onLabelsSaved,
 }: {
   ssoBlob: string | null;
   /**
@@ -153,6 +224,8 @@ export default function PipelineAdmin({
    * has the records.
    */
   recordCounts: Record<string, number>;
+  /** ROUND 198 — a tab name changed here; the sidebar takes it without a reload. */
+  onLabelsSaved?: (labels: Record<string, string>) => void;
   /**
    * 🔴 ITEM S — TELL THE REST OF THE APP. Ticking a section saved correctly but
    * the record panel's "+ Add a section (N available)" stayed stale until a
@@ -301,6 +374,18 @@ export default function PipelineAdmin({
    * @param rowId when given, the outcome is reported IN THAT PIPELINE'S ROW
    *              rather than in the create form's status line.
    */
+  // 🔴 ROUND 198 — RENAME A CLIENTS TAB, here rather than in the sidebar.
+  // Same admin-only action the sidebar used in 197; the server refuses a
+  // duplicate or an over-long name, and the refusal shows in the row.
+  const renameTab = async (key: string, name: string, rowId: string): Promise<boolean> => {
+    const j = await post({ action: "rename-tab", key, name }, rowId);
+    if (!j?.config || !data) return false;
+    setData({ ...data, config: j.config });
+    onLabelsSaved?.((j.config.labels || {}) as Record<string, string>);
+    setRowMsg({ id: rowId, ok: name.trim() ? `Saved — the sidebar now reads “${name.trim()}”.` : "Saved — back to the default name." });
+    return true;
+  };
+
   const post = async (payload: Record<string, unknown>, rowId?: string) => {
     setBusy(true);
     setBusyAction(String(payload.action || ""));
@@ -1344,6 +1429,47 @@ export default function PipelineAdmin({
       {saved ? <div className="savemsg ok">{saved}</div> : null}
 
       {/* ── EXISTING PIPELINES ─────────────────────────────────────────── */}
+      {/* ── ROUND 198 — THE CLIENTS SIDEBAR'S OWN TABS ───────────────────── */}
+      <div className="istep" style={{ marginTop: 20 }}>Clients sidebar — the sorting tabs</div>
+      <div className="pfnames">
+        {rowMsg && rowMsg.id === "sorting-tabs" ? (
+          rowMsg.refusal ? (
+            <div className="savemsg warn pfrowmsg">{rowMsg.refusal}</div>
+          ) : rowMsg.err ? (
+            <ErrorMessage error={rowMsg.err} className="savemsg err pfrowmsg" />
+          ) : (
+            <div className="savemsg ok pfrowmsg">{rowMsg.ok}</div>
+          )
+        ) : null}
+        <NameEditor
+          id="pfname-newLeads"
+          label="New leads tab"
+          saved={data.config.labels?.newLeads || ""}
+          fallback={DEFAULT_LABELS.newLeads}
+          busy={busy}
+          onSave={(n) => renameTab("newLeads", n, "sorting-tabs")}
+          hint="The first Clients tab, where every new lead lands."
+        />
+        <NameEditor
+          id="pfname-staffingTab"
+          label="Staffing tab"
+          saved={data.config.labels?.staffingTab || ""}
+          fallback={DEFAULT_LABELS.staffingTab}
+          busy={busy}
+          onSave={(n) => renameTab("staffingTab", n, "sorting-tabs")}
+          hint="Cases with no owner, waiting to be assigned."
+        />
+        <NameEditor
+          id="pfname-staffingStage"
+          label="REASSIGN stage shows as"
+          saved={data.config.labels?.staffingStage || ""}
+          fallback={DEFAULT_LABELS.staffingStage}
+          busy={busy}
+          onSave={(n) => renameTab("staffingStage", n, "sorting-tabs")}
+          hint="The stage stays REASSIGN in GoHighLevel — only the dashboard's wording changes."
+        />
+      </div>
+
       <div className="istep" style={{ marginTop: 20 }}>Configured pipelines</div>
       <div className="pflist">
         {data.pipelines.map((p) => {
@@ -1361,7 +1487,12 @@ export default function PipelineAdmin({
               }}
             >
               <summary>
-                <b>{p.name}</b>
+                <b>{data.config.labels?.[`pipeline:${p.id}`] || p.name}</b>
+                {data.config.labels?.[`pipeline:${p.id}`] ? (
+                  <span className="pfghlname" title="Its name in GoHighLevel — unchanged">
+                    {p.name} in GoHighLevel
+                  </span>
+                ) : null}
                 <span className="pfscope">
                   {/* ⚠️ "none" IS NOT A WORD ON A SCREEN. It is a stored token;
                       what an admin needs to read is what it does. */}
@@ -1533,6 +1664,20 @@ export default function PipelineAdmin({
                 {/* 🔴 ROUND 177 · D7 — CAREGIVER PIPELINES TOO: Recruiting has
                     sidebar entries now, on the same stored `sidebar: false`.
                     Never on "none", which is on no board and has no entry. */}
+                {/* 🔴 ROUND 198 — THE NAME IT SHOWS UNDER. Client pipelines: the
+                    Clients sidebar, its board header and the pickers read it.
+                    Display only — GoHighLevel keeps the pipeline's own name. */}
+                {entry?.scope === "client" ? (
+                  <NameEditor
+                    id={`pfname-${p.id}`}
+                    label="Name in the sidebar"
+                    saved={data.config.labels?.[`pipeline:${p.id}`] || ""}
+                    fallback={p.name}
+                    busy={busy}
+                    onSave={(n) => renameTab(`pipeline:${p.id}`, n, p.id)}
+                    hint="Only the dashboard's name — the pipeline keeps its name in GoHighLevel, and nothing that reads it changes."
+                  />
+                ) : null}
                 {entry?.scope === "client" || entry?.scope === "caregiver" ? (
                   <div className="pfgroupedit">
                     <input

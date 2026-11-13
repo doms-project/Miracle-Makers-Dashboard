@@ -597,6 +597,40 @@ ok("a long name is cut with an ellipsis and carries its full name in title",
 ok("ROUND 197 — the New Leads (to sort) tab is what opens",
   await frame.evaluate(() => !!document.querySelector('.sorttab[data-sorttab="newleads"]')));
 
+// ═══ ROUND 198 — THE REDESIGNED TAB, ON THE REAL SCREEN ═══════════════════
+const nl = await frame.evaluate(() => {
+  const t = document.querySelector('.sorttab[data-sorttab="newleads"]');
+  const box = document.querySelector('input[data-search="sorting"]')?.closest(".search");
+  return {
+    list: !!t?.querySelector(".sortlistview"), lanes: !!t?.querySelector(".sortlanes"),
+    tiles: t?.querySelectorAll(".sortstat").length || 0,
+    sorted: !!t?.querySelector('[data-tile="sorted"]'),
+    searchW: box ? Math.round(box.getBoundingClientRect().width) : 0,
+    sels: [...(t?.querySelectorAll(".sortsel span") || [])].map((x) => x.textContent),
+    title: t?.querySelector(".sorttitle h2")?.textContent || "",
+    titlePx: t ? parseFloat(getComputedStyle(t.querySelector(".sorttitle h2")).fontSize) : 0,
+    addLead: [...document.querySelectorAll(".addclientbtn")].some((b) => /Add Lead/.test(b.textContent)),
+  };
+});
+ok("ROUND 198 — New Leads opens as a LIST (not a board)", nl.list && !nl.lanes, nl);
+ok("ROUND 198 — five stat tiles: waiting, arrived, by source, oldest, Sorted", nl.tiles === 5 && nl.sorted, nl.tiles);
+ok("ROUND 198 — the search box is a normal width (≤ 360px), not the whole row", nl.searchW > 150 && nl.searchW <= 360, nl.searchW);
+ok("ROUND 198 — Show, Sort and Group are there", JSON.stringify(nl.sels) === '["Show","Sort","Group"]', nl.sels);
+ok("ROUND 198 — the title reads the tab's name, at 16px", nl.title === "New Leads (to sort)" && nl.titlePx === 16, nl);
+ok("ROUND 198 — + Add Lead is offered on New Leads", nl.addLead === true);
+await frame.click('.seg button:has-text("Kanban")');
+await page.waitForTimeout(300);
+const lanesW = await frame.evaluate(() =>
+  [...document.querySelectorAll(".sorttab .sortlane")].map((l) => Math.round(l.getBoundingClientRect().width)));
+ok("ROUND 198 — Kanban columns are 264px, the width of every other board's", lanesW.length > 0 && lanesW.every((w) => w === 264), lanesW);
+const emptyLanes = await frame.evaluate(() =>
+  [...document.querySelectorAll(".sorttab .sortlane")].filter((l) => !l.querySelector(".sortcard")).length);
+ok("ROUND 198 — no empty lane is drawn", emptyLanes === 0, emptyLanes);
+ok("ROUND 198 — the choice is the sorting tabs' own (mm.sortView), not the pipeline boards'",
+  (await frame.evaluate(() => localStorage.getItem("mm.sortView"))) === "board");
+await frame.click('.seg button:has-text("List")');
+await page.waitForTimeout(300);
+
 console.log("\n6c · CLICKING AN ENTRY");
 await frame.click(`.railpipe[data-pipeline="${P.ot}"]`);
 await page.waitForTimeout(600);
@@ -624,7 +658,8 @@ const r4 = await railState();
 // none of them — and says where they are.
 const waitingLine = await frame.evaluate(() => document.querySelector(".sortwaiting")?.textContent || "");
 ok("from Master, an entry opens the board on that pipeline (its NEW LEAD cases are on the sorting tab)",
-  r4.h1 === "OLTL Enrollment" && r4.cards === 0 && /waiting in New Leads \(to sort\)/.test(waitingLine), { r4, waitingLine });
+  // ROUND 198 — the line is now a pill: "N leads waiting to be sorted in …".
+  r4.h1 === "OLTL Enrollment" && r4.cards === 0 && /waiting to be sorted in New Leads \(to sort\)/.test(waitingLine), { r4, waitingLine });
 ok("…with exactly that entry lit", JSON.stringify(r4.active) === '["OLTL Enrollment"]', r4.active);
 
 console.log("\n6d · A SHORT VIEWPORT — THE STAMP IS STILL REACHABLE");
@@ -740,6 +775,27 @@ await page.waitForTimeout(500);
 const r6 = await railState();
 ok("…and back on New Leads (to sort), it is the one lit entry",
   JSON.stringify(r6.active) === '["New Leads (to sort)"]', r6.active);
+
+// ═══ ROUND 198 — TABS ARE RENAMED ON THE PIPELINES SCREEN, NOT HERE ══════
+await frame.dblclick('.railpipe[data-pipeline="newleads"]');
+await page.waitForTimeout(300);
+ok("ROUND 198 — double-clicking a sidebar tab no longer opens a rename box",
+  await frame.evaluate(() => !document.querySelector(".rail input") && !!document.querySelector('.railpipe[data-pipeline="newleads"]')));
+
+// ═══ ROUND 198 — A PIPELINE TAB WITH NOTHING ON IT, AND THE WAITING PILL ══
+await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);
+await page.waitForTimeout(500);
+await frame.click('.seg button:has-text("Kanban")');
+await page.waitForTimeout(400);
+const pe = await frame.evaluate(() => ({
+  cols: document.querySelectorAll(".board .col").length,
+  msg: document.querySelector(".boardemptymsg b")?.textContent || "",
+  pill: document.querySelector(".sortwait.new")?.textContent?.replace(/\s+/g, " ").trim() || "",
+  pulse: !!document.querySelector(".sortwait.new .pulse"),
+  pillPx: (() => { const b = document.querySelector(".sortwait.new"); return b ? parseFloat(getComputedStyle(b).fontSize) : 0; })(),
+}));
+ok("ROUND 198 — a pipeline tab with no cases shows ONE message and no stage columns", pe.cols === 0 && /^No cases in/.test(pe.msg), pe);
+ok("ROUND 198 — the waiting leads are a coloured pill with a pulsing dot, 13px", /waiting to be sorted/.test(pe.pill) && pe.pulse && pe.pillPx === 13, pe);
 
 await browser.close();
 cleanup();

@@ -153,9 +153,10 @@ ok("the dialog: Cancel + primary on the right, the other-company link on the lef
 ok("Take for myself locks the owner to Me", /const ownerLocked = mode === "assign" && staffing === "self";/.test(dlg));
 ok("the tab: List and Board, Enroll · Transfer · Staffing, Assign on the queue", /view === "list"/.test(tab) && /"Enroll"/.test(tab) && /"Transfer"/.test(tab) && /"Staffing"/.test(tab) && /Assign/.test(tab));
 ok("the tab: unopened first then newest; the queue oldest first", /Number\(!!b\.newLead\) - Number\(!!a\.newLead\)/.test(tab) && /ts\(a\.stageChangedAt \|\| a\.createdAt\) - ts\(b\.stageChangedAt/.test(tab));
-ok("rename: double-click is admin-only and saves through rename-tab", /onDoubleClick=\{isAdminViewer \?/.test(page) && /action: "rename-tab"/.test(page));
+// ROUND 198 — renaming moved to the Pipelines screen (round198-proof checks it there).
+ok("rename: saved through the admin-only rename-tab action", /action: "rename-tab"/.test(read("../components/PipelineAdmin.tsx")));
 ok("Master's column reads the Staffing needed label", /staffingLabel=\{tabLabels\.staffingStage\}/.test(page));
-ok("the build says 197", /round: "197"/.test(read("../lib/build.ts")));
+ok("the build is 197 or later", Number((/round: "(\d+)/.exec(read("../lib/build.ts")) || [])[1]) >= 197);
 
 console.log(`\n${pass} passed · ${fail} failed`);
 if (fail) process.exit(1);

@@ -4,12 +4,13 @@ import {
   invalidateOpportunity,
   moveOpportunity,
   sortOpportunity,
+  stampSortedFromNewLeads,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { canEditRecord, canManageFollowers, isAdminSession, viewerFor } from "@/lib/visibility";
-import { canSort, canAssignStaffing, isNewLeadStage } from "@/lib/sorting";
+import { canSort, canAssignStaffing, isNewLeadStage, isStaffingStage } from "@/lib/sorting";
 import {
   userDivisions,
   getUserHomePipelines,
@@ -354,7 +355,16 @@ async function postHandler(
     // was before the transfer, and every caller downstream (the webhook payload
     // included) would be told the move had not happened.
     invalidateOpportunity(id);
-    const record = await getOpportunityById(id);
+    let record = await getOpportunityById(id);
+
+    // 🔴 ROUND 198 — A NEW LEAD SENT STRAIGHT TO STAFFING NEEDED counts in the
+    // New Leads stats ("went to Staffing"). Judged on what actually happened —
+    // was NEW LEAD, is now REASSIGN — not on what the request asked for.
+    // Best-effort: the move is done; a missing field only means no count.
+    if (isNewLeadStage(target.stage) && record && isStaffingStage(record.stage)) {
+      result.steps.push(`stats: ${await stampSortedFromNewLeads(id, "staffing", record.pipelineId, session?.userId || "")}`);
+      record = (await getOpportunityById(id)) ?? record;
+    }
 
     // ITEM 5 — ONE event for what GoHighLevel sees as several unrelated writes.
     // This is the whole reason outbound webhooks exist rather than GHL triggers:

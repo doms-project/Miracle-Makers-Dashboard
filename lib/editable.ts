@@ -80,6 +80,9 @@ export const READ_ONLY_FIELDS: string[] = [
   // seen loses its label). Blocklisted here AND hidden in fieldFolders.ts, for
   // the same two reasons as Stage History.
   "First Opened",
+  // 🔴 ROUND 198 — written by the sort itself; a hand edit would move a lead
+  // between the New Leads stats' columns. Hidden in fieldFolders.ts as well.
+  "Sorted From New Leads",
 ];
 
 // ═══ ROUND 151 — FIELDS WHOSE STORED VALUE IS A LIST OF USER IDS ═══════════

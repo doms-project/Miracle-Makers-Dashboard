@@ -117,7 +117,8 @@ export function nameScore(name: string, tokens: string[]): number {
   return total / tokens.length + (n === tokens.join(" ") ? 1 : 0);
 }
 
-export type SuggestionKind = "owner" | "unassigned" | "cm" | "office" | "record";
+// ROUND 198 — "pipeline" and "source": the New Leads tab's search suggests those too.
+export type SuggestionKind = "owner" | "unassigned" | "cm" | "office" | "record" | "pipeline" | "source";
 
 export interface Suggestion {
   kind: SuggestionKind;

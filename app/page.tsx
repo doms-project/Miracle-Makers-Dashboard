@@ -524,6 +524,22 @@ const SourceMark = ({ src, small }: { src: string; small?: boolean }) => {
   );
 };
 
+/** ROUND 198 — SourceMark, or (no logo for this source) its initial in a neutral square. */
+const SourceMarkOrInitial = ({ src, small }: { src: string; small?: boolean }) => {
+  const t = (src || "").trim();
+  if (!t) return null;
+  if (sourceIcon(t)) return <SourceMark src={t} small={small} />;
+  return (
+    <span
+      className={small ? "srcmark srcunk sm" : "srcmark srcunk"}
+      title={`Source: ${t}`}
+      aria-label={`Source: ${t}`}
+    >
+      {t.charAt(0).toUpperCase()}
+    </span>
+  );
+};
+
 const fmtSize = (bytes: number): string => {
   if (!bytes) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -1558,7 +1574,7 @@ function SearchBox({
   onPick,
   leadsLabel = "Leads",
 }: {
-  which: "clients" | "master" | "recruiting";
+  which: "clients" | "master" | "recruiting" | "sorting";
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
@@ -1578,7 +1594,15 @@ function SearchBox({
     setActive(-1);
   };
   const group = (k: Suggestion["kind"]) =>
-    k === "record" ? leadsLabel : k === "office" ? "Offices" : "People";
+    k === "record"
+      ? leadsLabel
+      : k === "office"
+        ? "Offices"
+        : k === "pipeline"
+          ? "Pipelines"
+          : k === "source"
+            ? "Sources"
+            : "People";
   const listId = `${which}-suggestions`;
   return (
     <div className="search smartsearch">
@@ -2224,6 +2248,26 @@ export default function Dashboard() {
   // one of them would be missed. While a sorting tab is open adminPipeline is
   // simply left alone.
   const [sortTab, setSortTab] = useState<"newleads" | "staffing" | null>("newleads");
+  // 🔴 ROUND 198 — THE SORTING TABS HAVE THEIR OWN List / Kanban, AND IT STARTS
+  // ON LIST. Sharing `view` with the pipeline boards meant a board chosen on a
+  // pipeline tab opened New Leads as a board too. Remembered per browser under
+  // a new key, so nobody starts on the board because of what 197 remembered.
+  const [sortView, setSortViewRaw] = useState<"list" | "board">("list");
+  const setSortView = (v: "list" | "board") => {
+    setSortViewRaw(v);
+    try {
+      window.localStorage.setItem("mm.sortView", v);
+    } catch {
+      /* not fatal */
+    }
+  };
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("mm.sortView") === "board") setSortViewRaw("board");
+    } catch {
+      /* storage blocked — List */
+    }
+  }, []);
   const [viewerStaffing, setViewerStaffing] = useState<"admin" | "any" | "self" | "off">("off");
   const [viewerPeer, setViewerPeer] = useState(false);
   const [tabLabelsRaw, setTabLabelsRaw] = useState<Record<string, string>>({});
@@ -2234,7 +2278,6 @@ export default function Dashboard() {
     target?: "enroll" | "transfer";
   } | null>(null);
   const [staffRec, setStaffRec] = useState<OpportunityRecord | null>(null);
-  const [renaming, setRenaming] = useState<{ key: string; value: string; err: string | null; busy: boolean } | null>(null);
   // Pipelines whose fetch failed on the last load. Their records are missing —
   // said out loud, because an absent pipeline looks exactly like an empty one.
   const [failedPipelines, setFailedPipelines] = useState<
@@ -4410,6 +4453,14 @@ export default function Dashboard() {
   // array still carries it and this lookup works. Verified before building on
   // it, because a hidden field that also vanished from the defs would have
   // made every number here silently fall back.
+  // ROUND 198 — the New Leads stats read this field (lib/sorting.ts).
+  const sortedFieldId = useMemo(
+    () =>
+      fieldDefs.find(
+        (d) => (d.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === "sortedfromnewleads",
+      )?.id || null,
+    [fieldDefs],
+  );
   const stageHistoryFieldId = useMemo(
     () =>
       fieldDefs.find(
@@ -7044,63 +7095,11 @@ export default function Dashboard() {
     }
   }, [sortTab]);
 
-  // ═══ ROUND 197 — rename a tab (admins, double-click) ═════════════════════
-  const startRename = (key: string, current: string) =>
-    setRenaming({ key, value: current, err: null, busy: false });
-  const saveRename = async (key: string, value: string) => {
-    const taken = [
-      ...(key === "newLeads" ? [] : [tabLabels.newLeads]),
-      ...(key === "staffingTab" ? [] : [tabLabels.staffingTab]),
-      ...sidebar.entries
-        .filter((e) => `pipeline:${e.id}` !== key)
-        .map((e) => pipeDisplay(e.id, e.name)),
-    ];
-    const problem = labelProblem(value, taken);
-    if (problem) {
-      setRenaming((r) => (r ? { ...r, err: problem } : r));
-      return;
-    }
-    setRenaming((r) => (r ? { ...r, busy: true, err: null } : r));
-    try {
-      const res = await fetch("/api/admin/pipelines", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(sso.blob ? { "x-ghl-sso-key": sso.blob } : {}),
-        },
-        body: JSON.stringify({ ssoKey: sso.blob ?? undefined, action: "rename-tab", key, name: value }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw apiError(res, j);
-      if (j.config?.labels) setTabLabelsRaw(j.config.labels);
-      setRenaming(null);
-    } catch (e) {
-      setRenaming((r) => (r ? { ...r, busy: false, err: e instanceof Error ? e.message : String(e) } : r));
-    }
-  };
-  const renameBox = (key: string, current: string) => (
-    <div className="railpipe" style={{ flexDirection: "column", alignItems: "stretch" }}>
-      <input
-        className="railrename"
-        autoFocus
-        maxLength={40}
-        defaultValue={current}
-        disabled={renaming?.busy}
-        aria-label="New tab name (empty resets to the default)"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") setRenaming(null);
-          if (e.key === "Enter") void saveRename(key, (e.target as HTMLInputElement).value);
-        }}
-        onBlur={(e) => {
-          if (!renaming?.busy && (e.target as HTMLInputElement).value.trim() === current.trim()) setRenaming(null);
-        }}
-      />
-      {renaming?.err ? <div className="railrenameerr">{renaming.err}</div> : null}
-      <div className="railrenameerr" style={{ color: "var(--ink-3)" }}>
-        Enter to save · Esc to cancel · empty = default
-      </div>
-    </div>
-  );
+  // 🔴 ROUND 198 — TABS ARE RENAMED ON THE PIPELINES SCREEN, not by
+  // double-clicking the sidebar (round 197). The owner asked for it there,
+  // beside the pipeline it names; components/PipelineAdmin.tsx saves through
+  // the same admin-only "rename-tab" action and hands the result back via
+  // onLabelsSaved below, so the sidebar updates without a reload.
   /**
    * pipelineId → records held in this tab, across BOTH families.
    *
@@ -7207,22 +7206,16 @@ export default function Dashboard() {
               ? ([["staffing", "staffingTab", tabLabels.staffingTab, sortCounts.staffing, "SN"]] as const)
               : []),
           ] as const).map(([kind, key, name, count, ini]) =>
-            renaming?.key === key ? (
-              <div key={kind}>{renameBox(key, name)}</div>
-            ) : (
+            (
               <button
                 key={kind}
                 type="button"
                 className={sortEntryActive(kind) ? "railpipe active" : "railpipe"}
                 data-pipeline={kind}
                 aria-current={sortEntryActive(kind) ? "page" : undefined}
-                title={
-                  (sidebarLoading ? name : `${name} — ${count}`) +
-                  (isAdminViewer ? " · double-click to rename" : "")
-                }
+                title={sidebarLoading ? name : `${name} — ${count}`}
                 aria-label={sidebarLoading ? name : `${name} (${count})`}
                 onClick={() => pickSortTab(kind)}
-                onDoubleClick={isAdminViewer ? () => startRename(key, name) : undefined}
               >
                 <span className="railpipeini" aria-hidden="true">
                   {ini}
@@ -7291,9 +7284,7 @@ export default function Dashboard() {
           {sidebarLoading
             ? [0, 1, 2].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
             : sidebar.entries.map((e) =>
-                renaming?.key === `pipeline:${e.id}` ? (
-                  <div key={e.id}>{renameBox(`pipeline:${e.id}`, pipeDisplay(e.id, e.name))}</div>
-                ) : (
+                (
                 <button
                   key={e.id}
                   type="button"
@@ -7308,9 +7299,6 @@ export default function Dashboard() {
                     e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
                   }
                   onClick={() => pickEntry(e.id)}
-                  onDoubleClick={
-                    isAdminViewer ? () => startRename(`pipeline:${e.id}`, pipeDisplay(e.id, e.name)) : undefined
-                  }
                 >
                   <span className="railpipeini" aria-hidden="true">
                     {e.initials}
@@ -7654,7 +7642,9 @@ export default function Dashboard() {
               section added later is excluded by default rather than included by
               accident. Resources is excluded for the same reason — it is under
               the Clients rail but has no board either. */}
-          {view === "list" || view === "board" ? (
+          {/* ROUND 198 — not on Staffing needed lead: a new lead never starts
+              there (it arrives in New Leads), so the button only confused. */}
+          {(view === "list" || view === "board") && !(sortingOn && sortTab === "staffing") ? (
             <button
               type="button"
               className="addclientbtn"
@@ -7785,16 +7775,22 @@ export default function Dashboard() {
           {railWhere === "clients" ? (
           <div className="seg">
             <button
-              className={view === "list" ? "on" : ""}
-              onClick={() => setView("list")}
+              className={(sortingOn ? sortView === "list" : view === "list") ? "on" : ""}
+              onClick={() => {
+                if (sortingOn) setSortView("list");
+                else setView("list");
+              }}
               type="button"
             >
               <IconList />
               List
             </button>
             <button
-              className={view === "board" ? "on" : ""}
-              onClick={() => setView("board")}
+              className={(sortingOn ? sortView === "board" : view === "board") ? "on" : ""}
+              onClick={() => {
+                if (sortingOn) setSortView("board");
+                else setView("board");
+              }}
               type="button"
             >
               <IconBoard />
@@ -7850,16 +7846,23 @@ export default function Dashboard() {
             this tab any more. Say where they went, so nobody concludes they
             vanished. */}
         {sortCounts.newleads || (showStaffingTab && sortCounts.staffing) ? (
-          <div className="sortwaiting">
+          // 🔴 ROUND 198 — a coloured pill with a pulsing dot, not a grey line:
+          // leads waiting to be sorted is the thing on this screen that needs
+          // somebody, so it has to be seen.
+          <div className="sortwaiting" role="status">
             {sortCounts.newleads ? (
-              <button type="button" onClick={() => pickSortTab("newleads")}>
-                {sortCounts.newleads} waiting in {tabLabels.newLeads}
+              <button type="button" className="sortwait new" onClick={() => pickSortTab("newleads")}>
+                <i className="pulse" aria-hidden="true" />
+                <b>{sortCounts.newleads}</b> {sortCounts.newleads === 1 ? "lead" : "leads"} waiting to be sorted in{" "}
+                {tabLabels.newLeads}
+                <span aria-hidden="true">→</span>
               </button>
             ) : null}
-            {sortCounts.newleads && showStaffingTab && sortCounts.staffing ? " · " : null}
             {showStaffingTab && sortCounts.staffing ? (
-              <button type="button" onClick={() => pickSortTab("staffing")}>
-                {sortCounts.staffing} in {tabLabels.staffingTab}
+              <button type="button" className="sortwait staff" onClick={() => pickSortTab("staffing")}>
+                <i className="pulse" aria-hidden="true" />
+                <b>{sortCounts.staffing}</b> waiting for an owner in {tabLabels.staffingTab}
+                <span aria-hidden="true">→</span>
               </button>
             ) : null}
           </div>
@@ -8990,6 +8993,8 @@ export default function Dashboard() {
                 // the admin screen now reaches it without a reload.
                 // ITEM S, now carrying item Q's exclusions too — a tick and an
                 // untick both have to reach the record panel without a reload.
+                // ROUND 198 — tab names are edited on this screen now.
+                onLabelsSaved={(labels) => setTabLabelsRaw(labels)}
                 onConfigSaved={(folders, exclusions, sidebarHidden) => {
                   setPipelineFolders(folders);
                   setPipelineExclusions(exclusions);
@@ -9960,7 +9965,15 @@ export default function Dashboard() {
                 ? data.filter((r) => isStaffingStage(r.stage) && !r.ownerId)
                 : data.filter((r) => isNewLeadStage(r.stage))
             }
-            view={view === "board" ? "board" : "list"}
+            view={sortView}
+            allRecords={data}
+            sortedFieldId={sortedFieldId}
+            isAdmin={isAdminViewer}
+            SearchBox={SearchBox}
+            // 🔴 ROUND 198 — THE BOARDS' SOURCE LOGOS, ICON ONLY. A source with
+            // no logo gets a neutral mark with its initial; the raw source text
+            // is always in the tooltip, so nothing is lost by dropping the word.
+            SourceMark={SourceMarkOrInitial}
             pipelines={(isAdminViewer ? pipelines : pipelines.filter((p) => homePipelineIds.includes(p.id) || data.some((r) => r.pipelineId === p.id)))}
             labels={tabLabels}
             privatePayId={PRIVATE_PAY_PIPELINE_ID}
@@ -10145,6 +10158,28 @@ export default function Dashboard() {
                   );
                 })()
               : null}
+            {/* 🔴 ROUND 198 — NOTHING TO SHOW, NO COLUMNS. A row of empty stage
+                columns says the same thing as one sentence, worse. */}
+            {!boardFocused.length ? (
+              <div className="board boardempty">
+                <div className="boardemptymsg">
+                  <b>
+                    {filtered.length === scopedTotal && !scopedTotal
+                      ? `No cases in ${headerLabel} right now.`
+                      : "Nothing matches these filters."}
+                  </b>
+                  {sortCounts.newleads ? (
+                    <span>
+                      New leads wait in{" "}
+                      <button type="button" className="linkbtn" onClick={() => pickSortTab("newleads")}>
+                        {tabLabels.newLeads} ({sortCounts.newleads})
+                      </button>{" "}
+                      until they're sorted.
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
             <div className="board">
               {boardStages.map((st) => {
                 // 🔴 boardFocused — the tile reaches the cards. Round 113's
@@ -10176,6 +10211,7 @@ export default function Dashboard() {
                 );
               })}
             </div>
+            )}
             <DragOverlay dropAnimation={null}>
               {(() => {
                 const r = dragId

@@ -251,3 +251,103 @@ export function sortStageProblem(args: {
   if (isStaffingStage(toStageName)) return "Use Staffing needed for that.";
   return null;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUND 198 — "WHERE DID THE NEW LEADS GO?" — the stats on the New Leads tab.
+//
+// 🔴 ONE STAMP PER RECORD, NOT A SHARED LOG. Every time a lead LEAVES New Leads
+// through the dashboard (Enroll / Transfer to a real stage, or Staffing), the
+// server writes one line into that case's own "Sorted From New Leads" field:
+//
+//     2026-11-14T15:02:11.000Z|pipeline|<destination pipeline id>|<user id>
+//     2026-11-14T15:02:11.000Z|staffing|<pipeline id>|<user id>
+//
+// The tab then COUNTS THE RECORDS ON THE DASHBOARD that carry a stamp. So a
+// lead deleted from the dashboard simply stops being counted — nothing has to
+// be subtracted, and nothing can go out of step (a shared counter would need
+// both). A case that is later moved again still counts where it was SORTED
+// to, which is the question the tile answers.
+//
+// ⚠️ NO FIELD, NO STATS (the "First Opened" rule). The field is created once
+// in GoHighLevel by hand (TEXT, opportunity). Until then sorting works exactly
+// the same and the tile says how to switch the stats on.
+// ═══════════════════════════════════════════════════════════════════════════
+export const SORTED_FIELD = "Sorted From New Leads";
+
+export type SortedKind = "pipeline" | "staffing";
+export interface SortedStamp {
+  at: string;
+  kind: SortedKind;
+  pipelineId: string;
+  userId: string;
+}
+
+export function encodeSorted(s: SortedStamp): string {
+  return [s.at, s.kind, s.pipelineId, s.userId].join("|");
+}
+
+/** Tolerant: anything malformed is "no stamp", never a throw. */
+export function parseSorted(raw: unknown): SortedStamp | null {
+  const text = (Array.isArray(raw) ? raw.join("") : String(raw ?? "")).trim();
+  if (!text) return null;
+  const [at, kind, pipelineId, userId] = text.split("|");
+  if (!at || !Number.isFinite(Date.parse(at))) return null;
+  if (kind !== "pipeline" && kind !== "staffing") return null;
+  if (!pipelineId) return null;
+  return { at, kind, pipelineId, userId: userId || "" };
+}
+
+export interface SortStats {
+  /** Stamped records in the window. */
+  total: number;
+  /** Destination pipeline id → count, sorted to a real stage. */
+  byPipeline: Map<string, number>;
+  /** Sent to Staffing needed straight from New Leads. */
+  staffing: number;
+  /** Records with a stamp whose time is in the window, newest first (ids). */
+  ids: string[];
+}
+
+/**
+ * Count the stamps on the records given (the ones on the dashboard), since
+ * `sinceMs` (0 = all time). The field id is looked up by the caller.
+ */
+export function sortStats(
+  records: { id: string; cf: Record<string, unknown> }[],
+  fieldId: string | null,
+  sinceMs: number,
+): SortStats {
+  const out: SortStats = { total: 0, byPipeline: new Map(), staffing: 0, ids: [] };
+  if (!fieldId) return out;
+  const hits: { id: string; t: number }[] = [];
+  for (const r of records) {
+    const s = parseSorted(r.cf?.[fieldId]);
+    if (!s) continue;
+    const t = Date.parse(s.at);
+    if (sinceMs && t < sinceMs) continue;
+    out.total++;
+    if (s.kind === "staffing") out.staffing++;
+    else out.byPipeline.set(s.pipelineId, (out.byPipeline.get(s.pipelineId) || 0) + 1);
+    hits.push({ id: r.id, t });
+  }
+  out.ids = hits.sort((a, b) => b.t - a.t).map((h) => h.id);
+  return out;
+}
+
+/** The stats window's start, in ms. "today" = since midnight Eastern. */
+export type StatsWindow = "today" | "7d" | "30d" | "all";
+export function windowStart(w: StatsWindow, now: number): number {
+  if (w === "all") return 0;
+  if (w === "7d") return now - 7 * 86_400_000;
+  if (w === "30d") return now - 30 * 86_400_000;
+  // Midnight in New York, whatever the browser's zone.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(new Date(now));
+  const g = (t: string) => Number(parts.find((p) => p.type === t)?.value || 0);
+  return now - ((g("hour") * 60 + g("minute")) * 60 + g("second")) * 1000 - (now % 1000);
+}

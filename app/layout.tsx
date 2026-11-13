@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { uiFontHref, uiFontStack } from "@/lib/font";
 
 export const metadata: Metadata = {
   // Spans several pipelines now — no single division belongs in the tab title.
@@ -25,7 +26,12 @@ export default function RootLayout({
     // `suppressHydrationWarning` because the attribute may differ from what the
     // server sent, which is the point. ⚠️ try/catch: a third-party iframe can
     // have storage blocked, and then the default simply holds.
-    <html lang="en" data-rail="expanded" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-rail="expanded"
+      suppressHydrationWarning
+      style={{ ["--font" as string]: uiFontStack() } as React.CSSProperties}
+    >
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -39,10 +45,8 @@ export default function RootLayout({
           href="https://fonts.gstatic.com"
           crossOrigin="anonymous"
         />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
+        {/* ROUND 198 — the font is chosen in lib/font.ts (one line). */}
+        <link href={uiFontHref()} rel="stylesheet" />
       </head>
       <body>{children}</body>
     </html>

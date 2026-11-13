@@ -5024,6 +5024,45 @@ export const REASSIGN_STAGE_NAME = "REASSIGN";
 // first, which is the single failure this whole mechanism exists to prevent.
 // Nothing else writes to this field: it is hidden from the panel and on the
 // read-only blocklist, so even a direct API call can't corrupt it through us.
+/**
+ * 🔴 ROUND 198 — "a lead left New Leads, and went HERE". One line in the case's
+ * own "Sorted From New Leads" field (format in lib/sorting.ts). BEST-EFFORT:
+ * the sort itself is already written when this runs, so a missing field or a
+ * failed write is logged and never reported as a failed sort.
+ */
+export async function stampSortedFromNewLeads(
+  oppId: string,
+  kind: SortedKind,
+  pipelineId: string,
+  actorUserId: string,
+): Promise<"stamped" | "no field" | "failed"> {
+  try {
+    const def = findDefByName(await getFieldDefinitions(), SORTED_FIELD);
+    if (!def) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[sort] no "${SORTED_FIELD}" field on this account — the New Leads stats can't count this sort. Create it in GoHighLevel (TEXT, opportunity).`,
+      );
+      return "no field";
+    }
+    await putOpportunityVerified(
+      oppId,
+      {
+        customFields: [
+          { id: def.id, value: encodeSorted({ at: new Date().toISOString(), kind, pipelineId, userId: actorUserId }) },
+        ],
+      },
+      "sorted-stamp",
+    );
+    invalidateOpportunity(oppId);
+    return "stamped";
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[sort] stats stamp failed:", await explainGhlError(e));
+    return "failed";
+  }
+}
+
 export const REASSIGN_FOLLOWERS_FIELD = "Reassign Followers";
 
 /** Store the ids WE added. Never the full follower list. */
@@ -5337,6 +5376,11 @@ export async function sortOpportunity(args: {
     `${args.mode === "sort" ? "sorted" : "assigned"}: pipeline+stage${ownerChanged ? " + owner" : ""}${divisionCf.length ? " + Division" : ""}`,
   );
   invalidateOpportunity(args.oppId);
+
+  // ---- ROUND 198 — THE STATS STAMP (sort only, and only when it LEFT New Leads) ----
+  // An unowned re-route that stays at NEW LEAD is still waiting to be sorted.
+  if (args.mode === "sort" && (stages.find((st) => st.id === destStageId)?.name || "").trim().toUpperCase() !== "NEW LEAD")
+    steps.push(`stats: ${await stampSortedFromNewLeads(args.oppId, "pipeline", args.toPipelineId, args.actorUserId)}`);
 
   // ---- FOLLOWERS (assign only) — same rule as the panel's claim ----
   if (args.mode === "assign") {
@@ -6090,6 +6134,7 @@ import {
   encodeStageRow,
 } from "@/lib/stageHistory";
 import { FIRST_OPENED_FIELD, encodeFirstOpened, parseFirstOpened } from "@/lib/newLead";
+import { SORTED_FIELD, encodeSorted, type SortedKind } from "@/lib/sorting";
 
 export interface StageRecordResult {
   recorded: boolean;

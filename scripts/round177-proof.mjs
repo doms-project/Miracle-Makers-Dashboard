@@ -890,6 +890,41 @@ await PA.frame.click('.confirmbox button:has-text("Take it off both")').catch(()
 await PA.page.waitForTimeout(2500);
 const spare = JSON.parse(storedConfig).pipelines[P.spare];
 ok("🔴 R4 — moved to \"none\", it no longer carries sidebar:false", spare.scope === "none" && !("sidebar" in spare), spare);
+
+// ═══ ROUND 198 — TAB NAMES ARE EDITED HERE, ON THE PIPELINES SCREEN ═════════
+const sideName = (id) => PA.frame.evaluate((i) =>
+  document.querySelector(`[aria-labelledby="railhead-clients"] .railpipe[data-pipeline="${i}"] .railpipename`)?.textContent || "", id);
+const labelsNow = () => JSON.parse(storedConfig).labels || {};
+await PA.frame.fill("#pfname-newLeads", "Sort these first");
+await PA.frame.press("#pfname-newLeads", "Enter");
+await PA.page.waitForTimeout(2000);
+ok("ROUND 198 — the New leads tab is renamed from the Pipelines screen (Enter saves)",
+  labelsNow().newLeads === "Sort these first", labelsNow());
+ok("ROUND 198 — …and the sidebar reads it without a reload", (await sideName("newleads")) === "Sort these first", await sideName("newleads"));
+await PA.frame.fill("#pfname-newLeads", "half typed");
+await PA.frame.press("#pfname-newLeads", "Escape");
+ok("ROUND 198 — Esc puts back what is saved, and writes nothing",
+  (await PA.frame.inputValue("#pfname-newLeads")) === "Sort these first" && labelsNow().newLeads === "Sort these first");
+await PA.frame.click('.pfnames .pfname:has(#pfname-newLeads) button:has-text("Use the default")');
+await PA.page.waitForTimeout(2000);
+ok("ROUND 198 — \"Use the default\" clears the name, everywhere",
+  !labelsNow().newLeads && (await sideName("newleads")) === "New Leads (to sort)", { stored: labelsNow(), side: await sideName("newleads") });
+await PA.frame.click(`.pflist .pfrow:has(#pfside-${P.oe}) > summary`).catch(() => {});
+await PA.page.waitForTimeout(300);
+ok("ROUND 198 — a client pipeline's row has \"Name in the sidebar\"; a caregiver one does not",
+  !!(await PA.frame.$(`#pfname-${P.oe}`)) && !(await PA.frame.$(`#pfname-${P.g1}`)));
+await PA.frame.fill(`#pfname-${P.oe}`, "OLTL Enrolment");
+await PA.frame.click(`.pfrow .pfname:has(#pfname-${P.oe}) button:has-text("Save")`);
+await PA.page.waitForTimeout(2000);
+ok("ROUND 198 — renaming a pipeline's tab stores a label, display only",
+  labelsNow()[`pipeline:${P.oe}`] === "OLTL Enrolment", labelsNow());
+ok("ROUND 198 — …the sidebar and the row both read it, with the GoHighLevel name beside",
+  (await sideName(P.oe)) === "OLTL Enrolment" &&
+    (await PA.frame.evaluate((i) => document.querySelector(`.pfrow:has(#pfside-${i}) > summary`)?.textContent || "", P.oe)).includes("OLTL Enrollment in GoHighLevel"),
+  await sideName(P.oe));
+ok("ROUND 198 — double-clicking the sidebar entry opens no rename box",
+  await (async () => { await PA.frame.dblclick(`[aria-labelledby="railhead-clients"] .railpipe[data-pipeline="${P.oe}"]`); await PA.page.waitForTimeout(300);
+    return !(await PA.frame.$(".rail input")); })());
 await PA.ctx.close();
 
 await browser.close();

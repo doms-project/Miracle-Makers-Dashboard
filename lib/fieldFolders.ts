@@ -149,6 +149,9 @@ const HIDDEN_NAMES = [
   // ROUND 181 — `<iso>|<userId>`, machine-written once; the "New lead" label is
   // how people see it.
   "First Opened",
+  // ROUND 198 — `<iso>|pipeline|<id>|<user>`: where a lead was sorted to from
+  // New Leads. Machine-written; read by the New Leads stats tile.
+  "Sorted From New Leads",
 ];
 const HIDDEN_SET = new Set(HIDDEN_NAMES.map((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "")));
 
