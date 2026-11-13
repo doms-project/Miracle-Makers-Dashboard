@@ -513,7 +513,9 @@ e.source.postMessage({message:"REQUEST_USER_DATA_RESPONSE",payload:${JSON.string
 await page.goto(`${base}/__parent`, { waitUntil: "domcontentloaded" });
 const frame = await (await page.waitForSelector("iframe")).contentFrame();
 await frame.waitForSelector(`.railpipe[data-pipeline="${P.oe}"]`, { timeout: 120000 });
-await frame.waitForSelector(".board .col", { timeout: 60000 });
+// 🔴 ROUND 197 — the Clients section now OPENS on "New Leads (to sort)",
+// which replaced All clients; the board appears once a pipeline is picked.
+await frame.waitForSelector(".sorttab", { timeout: 60000 });
 
 // ⚠️ ROUND 177 — NAMES FROM THE NAME SPAN, AND THE CLIENTS GROUP ONLY.
 // Titles now carry the count ("OLTL Transfer — 2", round 177 · Addition 1), and
@@ -573,11 +575,11 @@ console.log("\n6b · THE ENTRIES");
 // here to read names. ROUND 181 reversed that — it starts EXPANDED — so there
 // is nothing to press: names are already on screen. 6e collapses with « as before.
 console.log(`  ${r0.entries.join(" · ")}`);
-ok("All clients first, then the five shown pipelines — no ODP",
-  JSON.stringify(r0.entries) === JSON.stringify(["All clients", "OLTL Enrollment", "OLTL Transfer",
+ok("ROUND 197 — the two sorting tabs first, then the five shown pipelines — no ODP",
+  JSON.stringify(r0.entries) === JSON.stringify(["New Leads (to sort)", "Staffing needed lead", "OLTL Enrollment", "OLTL Transfer",
     "Private Pay", NAMES[P.long], "Lost Pipeline"]), r0.entries);
-ok("exactly one entry is active, and it is All clients",
-  JSON.stringify(r0.active) === '["All clients"]', r0.active);
+ok("exactly one entry is active, and it is New Leads (to sort)",
+  JSON.stringify(r0.active) === '["New Leads (to sort)"]', r0.active);
 const failedRow = await frame.evaluate(() => {
   const b = [...document.querySelectorAll(".rail .railpipe")].find((x) => /Lost/.test(x.title));
   return { count: b?.querySelector(".railpipecount")?.textContent, label: b?.getAttribute("aria-label") };
@@ -591,12 +593,9 @@ const longRow = await frame.evaluate((full) => {
 }, P.long);
 ok("a long name is cut with an ellipsis and carries its full name in title",
   longRow.cut === true && longRow.ell === "ellipsis", longRow);
-const pipeOpts = await frame.evaluate(() =>
-  [...document.querySelectorAll("#pipeSel option")].map((o) => o.textContent));
-ok("🔴 the toolbar dropdown still offers both ODP pipelines",
-  pipeOpts.some((t) => /^ODP Enrollment/.test(t)) && pipeOpts.some((t) => /^ODP Transfer/.test(t)), pipeOpts);
-ok("🔴 …and the board shows ODP records under All clients",
-  r0.cards === allExpected, r0.cards);
+// ROUND 197 — the toolbar (and its dropdown) belong to a PIPELINE tab now.
+ok("ROUND 197 — the New Leads (to sort) tab is what opens",
+  await frame.evaluate(() => !!document.querySelector('.sorttab[data-sorttab="newleads"]')));
 
 console.log("\n6c · CLICKING AN ENTRY");
 await frame.click(`.railpipe[data-pipeline="${P.ot}"]`);
@@ -607,6 +606,11 @@ ok("the board holds its 2 cards", r2.cards === 2, r2.cards);
 ok("exactly one entry is active, the clicked one", JSON.stringify(r2.active) === '["OLTL Transfer"]', r2.active);
 const selVal = await frame.evaluate(() => document.querySelector("#pipeSel")?.value);
 ok("…and the toolbar dropdown follows — one state, not two", selVal === P.ot, selVal);
+// ROUND 197 — moved here: the toolbar lives on a PIPELINE tab now.
+const pipeOpts = await frame.evaluate(() =>
+  [...document.querySelectorAll("#pipeSel option")].map((o) => o.textContent));
+ok("🔴 the toolbar dropdown still offers both ODP pipelines",
+  pipeOpts.some((t) => /^ODP Enrollment/.test(t)) && pipeOpts.some((t) => /^ODP Transfer/.test(t)), pipeOpts);
 
 await frame.click('.railsec:has-text("Master")');
 await page.waitForTimeout(600);
@@ -615,8 +619,12 @@ ok("🔴 on Master, no entry is active", r3.active.length === 0, r3.active);
 await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);
 await page.waitForTimeout(800);
 const r4 = await railState();
-ok("from Master, an entry opens the board on that pipeline",
-  r4.h1 === "OLTL Enrollment" && r4.cards === 5, r4);
+// 🔴 ROUND 197 — this fixture's five OLTL Enrollment cases are all at NEW LEAD,
+// so they are sorted on "New Leads (to sort)" and the pipeline board holds
+// none of them — and says where they are.
+const waitingLine = await frame.evaluate(() => document.querySelector(".sortwaiting")?.textContent || "");
+ok("from Master, an entry opens the board on that pipeline (its NEW LEAD cases are on the sorting tab)",
+  r4.h1 === "OLTL Enrollment" && r4.cards === 0 && /waiting in New Leads \(to sort\)/.test(waitingLine), { r4, waitingLine });
 ok("…with exactly that entry lit", JSON.stringify(r4.active) === '["OLTL Enrollment"]', r4.active);
 
 console.log("\n6d · A SHORT VIEWPORT — THE STAMP IS STILL REACHABLE");
@@ -727,11 +735,11 @@ ok("…control: it WAS on OLTL Transfer just before the untick",
   rememberedBefore === P.ot, rememberedBefore);
 await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);
 await page.waitForTimeout(500);
-await frame.click('.railpipe[data-pipeline="all"]');
+await frame.click('.railpipe[data-pipeline="newleads"]');
 await page.waitForTimeout(500);
 const r6 = await railState();
-ok("…and back on the board, All clients is the one lit entry",
-  JSON.stringify(r6.active) === '["All clients"]', r6.active);
+ok("…and back on New Leads (to sort), it is the one lit entry",
+  JSON.stringify(r6.active) === '["New Leads (to sort)"]', r6.active);
 
 await browser.close();
 cleanup();

@@ -31,7 +31,8 @@ import {
   type Refusal,
 } from "@/lib/transfer";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
-import { isAdminSession } from "@/lib/visibility";
+import { isAdminSession, viewerFor } from "@/lib/visibility";
+import { canPeerTransfer } from "@/lib/sorting";
 import { formatEasternDay } from "@/lib/dates";
 import { withGrants } from "@/lib/withGrants";
 import { emit } from "@/lib/webhooks";
@@ -273,9 +274,14 @@ async function preflight(oppId: string): Promise<
   };
 }
 
-function gate(blob: string | null):
-  | { userId: string; name: string }
-  | NextResponse {
+// 🔴 ROUND 197 — NO LONGER ADMIN-ONLY. An admin, or a user with the
+// "Transfer to …" tick in Access, on a case they OWN or an UNOWNED case in a
+// pipeline they hold. Never a follower's case: following does not let you hand
+// somebody else's work to another company. Checked against the live record.
+async function gate(
+  blob: string | null,
+  oppId: string,
+): Promise<{ userId: string; name: string } | NextResponse> {
   if (!ssoConfigured()) return { userId: "", name: "the dashboard" };
   if (!blob)
     return NextResponse.json(
@@ -283,24 +289,29 @@ function gate(blob: string | null):
       { status: 401 },
     );
   const s = decryptSso(blob);
-  if (!isAdminSession(s.role, s.type))
-    return NextResponse.json(
-      {
-        error: "Only an admin can transfer a record to another company.",
-        detail:
-          "A transfer writes this person into the other company's account and closes the case here. Ask an admin to do it.",
-        refusal: true,
-        status: 403,
-      } as ApiError,
-      { status: 403 },
-    );
-  return { userId: s.userId, name: s.userName || s.email || "an admin" };
+  if (!isAdminSession(s.role, s.type)) {
+    const rec = await getOpportunityById(oppId);
+    const verdict = rec
+      ? canPeerTransfer(rec, viewerFor(s))
+      : { ok: false as const, why: "Opportunity not found." };
+    if (!verdict.ok)
+      return NextResponse.json(
+        {
+          error: "You can't transfer this case to the other company.",
+          detail: verdict.why,
+          refusal: true,
+          status: 403,
+        } as ApiError,
+        { status: 403 },
+      );
+  }
+  return { userId: s.userId, name: s.userName || s.email || "a user" };
 }
 
 async function getHandler(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    const who = gate(request.headers.get("x-ghl-sso-key"));
+    const who = await gate(request.headers.get("x-ghl-sso-key"), id);
     if (who instanceof NextResponse) return who;
 
     const out = await preflight(id);
@@ -326,7 +337,7 @@ async function postHandler(request: Request, ctx: { params: Promise<{ id: string
   try {
     const { id } = await ctx.params;
     const body = (await request.json().catch(() => ({}))) as { ssoKey?: string; confirm?: boolean };
-    const who = gate(body.ssoKey || null);
+    const who = await gate(body.ssoKey || null, id);
     if (who instanceof NextResponse) return who;
 
     const out = await preflight(id);

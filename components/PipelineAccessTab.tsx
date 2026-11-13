@@ -48,6 +48,12 @@ export default function PipelineAccessTab({
   // ITEM 4 — Master view. One more column in the SAME custom value, as agreed:
   // it is a grant, not a role, and it never widens what a person can see.
   const [masterUsers, setMasterUsers] = useState<string[]>([]);
+  // 🔴 ROUND 197 — two more per-user switches in the SAME value and the SAME
+  // grid. Staffing needed: absent = off. The transfer tick is shown only to
+  // users who hold a pipeline — without one they could not see a case to send.
+  const [staffing, setStaffing] = useState<Record<string, "self" | "any">>({});
+  const [peerTransfer, setPeerTransfer] = useState<string[]>([]);
+  const [peerLabel, setPeerLabel] = useState<string>("");
   // ═══ TASK 1 — CASE MANAGERS ═══════════════════════════════════════════
   // repId -> managerId[]. The SAME custom value, a fourth key, one more
   // section — not a new tab. Rendered entirely from the live user list; only
@@ -120,6 +126,9 @@ export default function PipelineAccessTab({
       setMasterUsers(j.masterUsers || []);
       setCaseManagers(j.caseManagers || {});
       setReferralAccess(j.referralAccess || {});
+      setStaffing(j.staffing || {});
+      setPeerTransfer(j.peerTransfer || []);
+      setPeerLabel(j.peer?.configured ? j.peer.label || "the other company" : "");
       setPublicFolderId(j.publicFolderId || "");
       setUsingEnvFallback(!!j.usingEnvFallback);
       setDirty(false);
@@ -173,6 +182,24 @@ export default function PipelineAccessTab({
     setSaveMsg(null);
   };
 
+  const setStaffingFor = (userId: string, level: "off" | "self" | "any") => {
+    setStaffing((prev) => {
+      const next = { ...prev };
+      if (level === "off") delete next[userId];
+      else next[userId] = level;
+      return next;
+    });
+    setDirty(true);
+    setSaveMsg(null);
+  };
+  const togglePeer = (userId: string) => {
+    setPeerTransfer((prev) =>
+      prev.includes(userId) ? prev.filter((x) => x !== userId) : [...prev, userId],
+    );
+    setDirty(true);
+    setSaveMsg(null);
+  };
+
   const save = async () => {
     setSaving(true);
     setSaveMsg(null);
@@ -190,6 +217,8 @@ export default function PipelineAccessTab({
           masterUsers,
           caseManagers,
           referralAccess,
+          staffing,
+          peerTransfer,
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -200,6 +229,8 @@ export default function PipelineAccessTab({
       setMasterUsers(j.masterUsers || []);
       setCaseManagers(j.caseManagers || {});
       setReferralAccess(j.referralAccess || {});
+      setStaffing(j.staffing || {});
+      setPeerTransfer(j.peerTransfer || []);
       setUsingEnvFallback(false);
       setDirty(false);
       setSaveMsg("✓ Saved to GoHighLevel.");
@@ -445,6 +476,20 @@ export default function PipelineAccessTab({
               >
                 Master view
               </th>
+              <th
+                className="pamasterhead"
+                title="Staffing needed lead tab: Off hides it. Take for myself lets them assign waiting cases to themselves. Assign to anyone lets them hand cases to colleagues. Only cases in pipelines ticked on this row."
+              >
+                Staffing needed
+              </th>
+              {peerLabel ? (
+                <th
+                  className="pamasterhead"
+                  title={`Transfer to ${peerLabel}: their own cases, or unowned cases in pipelines ticked on this row. Never a case they only follow.`}
+                >
+                  Transfer to {peerLabel}
+                </th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
@@ -490,6 +535,42 @@ export default function PipelineAccessTab({
                       aria-label={`${u.name} — Master view`}
                     />
                   </td>
+                  <td className="pacell pamastercell">
+                    {admin ? (
+                      <span className="paadmin" title="Admins work Staffing needed by role">
+                        included with admin
+                      </span>
+                    ) : (
+                      <select
+                        value={staffing[u.id] || "off"}
+                        onChange={(e) =>
+                          setStaffingFor(u.id, e.target.value as "off" | "self" | "any")
+                        }
+                        aria-label={`${u.name} — Staffing needed`}
+                        style={{ fontSize: 12 }}
+                      >
+                        <option value="off">Off</option>
+                        <option value="self">Take for myself</option>
+                        <option value="any">Assign to anyone</option>
+                      </select>
+                    )}
+                  </td>
+                  {peerLabel ? (
+                    <td className="pacell pamastercell">
+                      {admin ? (
+                        <span className="paadmin">included with admin</span>
+                      ) : grants[u.id]?.length ? (
+                        <input
+                          type="checkbox"
+                          checked={peerTransfer.includes(u.id)}
+                          onChange={() => togglePeer(u.id)}
+                          aria-label={`${u.name} — Transfer to ${peerLabel}`}
+                        />
+                      ) : (
+                        <span className="muted" title="Give them a pipeline first">—</span>
+                      )}
+                    </td>
+                  ) : null}
                 </tr>
               );
             })}

@@ -91,7 +91,7 @@ const server = http.createServer((req, res) => {
       ] });
     if (path === "/opportunities/pipelines")
       return send(200, { pipelines: [
-        { id: OLTL, name: "OLTL Enrollment", stages: [{ id: "ol_s1", name: "NEW LEAD", position: 0 }] },
+        { id: OLTL, name: "OLTL Enrollment", stages: [{ id: "ol_s1", name: "INTAKE", position: 0 }] },
         { id: PP, name: "Private Pay Clients", stages: [{ id: "pp_s1", name: "NEW ENQUIRY", position: 0 }] },
       ] });
     if (path === `/locations/${LOC}/customValues`)
@@ -178,6 +178,10 @@ const browser = await chromium.launch({
 /** Open the client panel as `who` and open the "Referred by" picker. */
 const openPickerAs = async (who, role = "user") => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+// 🔴 ROUND 197 — this proof is about the CLIENT LIST/BOARD, not sorting: its
+// client cases sit at INTAKE (NEW LEAD is sorted on its own tab since 197) and
+// the page opens on the combined board rather than "New Leads (to sort)".
+await page.addInitScript(() => { try { localStorage.setItem("mm.clientTab", "pipeline"); } catch {} });
   page.on("pageerror", (e) => say(`  [page error] ${e.message}`));
   await page.route(`${base}/__parent`, (route) => route.fulfill({
     status: 200, contentType: "text/html",

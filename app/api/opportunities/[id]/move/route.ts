@@ -3,11 +3,13 @@ import {
   getOpportunityById,
   invalidateOpportunity,
   moveOpportunity,
+  sortOpportunity,
   explainGhlError,
   GhlError,
 } from "@/lib/ghl";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
-import { canEditRecord, canManageFollowers, isAdminSession } from "@/lib/visibility";
+import { canEditRecord, canManageFollowers, isAdminSession, viewerFor } from "@/lib/visibility";
+import { canSort, canAssignStaffing, isNewLeadStage } from "@/lib/sorting";
 import {
   userDivisions,
   getUserHomePipelines,
@@ -112,6 +114,8 @@ async function postHandler(
       reason?: string;
       addSenderAsFollower?: boolean;
       expectedVersion?: string;
+      /** ROUND 197 — "sort" (from New Leads) or "assign" (from Staffing needed). */
+      mode?: "sort" | "assign";
     };
     const blob = body.ssoKey || request.headers.get("x-ghl-sso-key");
 
@@ -144,6 +148,85 @@ async function postHandler(
     // out from under whoever just claimed it.
     const conflict = versionGuard(target, body.expectedVersion, "MOVE");
     if (conflict) return conflict;
+
+    // ═══ ROUND 197 — SORT / ASSIGN: their own gate and their own write path.
+    // Kept entirely apart from the transfer logic below, so nothing about an
+    // ordinary Move (stamps, TRANSFERRED IN, followers) changes.
+    if (body.mode === "sort" || body.mode === "assign") {
+      if (enforce && session) {
+        const v = viewerFor(session);
+        const verdict =
+          body.mode === "sort"
+            ? canSort(target, v, {
+                toPipelineId: body.toPipelineId,
+                newOwnerId: typeof body.newOwnerId === "string" ? body.newOwnerId : undefined,
+              })
+            : canAssignStaffing(target, v, typeof body.newOwnerId === "string" ? body.newOwnerId : "");
+        if (!verdict.ok)
+          return NextResponse.json(
+            { error: "Not permitted.", detail: verdict.why, refusal: true, status: 403 } as ApiError,
+            { status: 403 },
+          );
+      }
+      const actorDivisionSort = await resolveActorDivision(session);
+      const result = await sortOpportunity({
+        mode: body.mode,
+        oppId: id,
+        toPipelineId: body.toPipelineId,
+        toStageId: body.toStageId || undefined,
+        newOwnerId: typeof body.newOwnerId === "string" ? body.newOwnerId : undefined,
+        reason: body.reason,
+        actorUserId: session?.userId || "",
+        actorDivision: actorDivisionSort,
+      });
+      invalidateOpportunity(id);
+      const record = await getOpportunityById(id);
+      await emit(
+        "opportunity.moved",
+        { actor: { userId: session?.userId || "", name: undefined }, opportunityId: id, contactId: target.contactId },
+        {
+          transferred: false,
+          mode: body.mode,
+          fromPipelineId: target.pipelineId,
+          fromPipelineName: target.pipelineName,
+          toPipelineId: body.toPipelineId,
+          fromStage: target.stage,
+          toStage: record?.stage ?? "",
+          fromOwnerId: target.ownerId,
+          toOwnerId: record?.ownerId ?? target.ownerId,
+          reason: body.reason ?? "",
+          actorDivision: actorDivisionSort,
+          steps: result.steps,
+        },
+      );
+      if ((record?.ownerId ?? "") !== (target.ownerId || ""))
+        await emit(
+          "opportunity.assigned",
+          { actor: { userId: session?.userId || "" }, opportunityId: id, contactId: target.contactId },
+          { oldOwnerId: target.ownerId, newOwnerId: record?.ownerId ?? "" },
+        );
+      return NextResponse.json(
+        { ok: true, ...result, actorDivision: actorDivisionSort, record },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    // 🔴 ROUND 197 — NEW LEAD IS THE ARRIVAL STAGE. An ordinary Move may not
+    // put a worked case back into it; leads reach it only by arriving.
+    if (body.toStageId && !isNewLeadStage(target.stage)) {
+      const destPipe = (await listPipelines()).find((p) => p.id === body.toPipelineId);
+      const destStageName = destPipe?.stages?.find((st) => st.id === body.toStageId)?.name || "";
+      if (isNewLeadStage(destStageName))
+        return NextResponse.json(
+          {
+            error: "New lead can't be chosen.",
+            detail: "New lead is where leads arrive. Pick the stage the case is really at.",
+            refusal: true,
+            status: 400,
+          } as ApiError,
+          { status: 400 },
+        );
+    }
 
     // 🔴 THE PERMISSION RULE KEYS OFF WHETHER AN OWNER IS BEING TAKEN AWAY,
     // not off "is this a transfer". Taking a case off its owner is owner-or-admin

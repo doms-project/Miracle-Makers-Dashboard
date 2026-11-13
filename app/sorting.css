@@ -1,0 +1,73 @@
+/* ROUND 197 — its own stylesheet, so spacing.css stays scoped to round 195
+   (round195-proof checks that). */
+/* ═══ ROUND 197 — New Leads (to sort), Staffing needed lead, Sort / Assign ═══
+   One text size (12px) and 28px controls throughout, as agreed. */
+.sorttab{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto;padding:4px 2px 24px;}
+.sorthead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:13px;}
+.sortkey{display:flex;gap:12px;font-size:11px;color:var(--ink-3);flex-wrap:wrap;}
+.sortmuted{color:var(--ink-3);font-weight:400;font-size:11px;}
+.sorttools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.sortsearch{flex:1;min-width:180px;height:30px;border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:12px;background:var(--bg);}
+.sortdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold);flex:0 0 7px;}
+.sortpill{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:6px;white-space:nowrap;color:var(--ink-2);background:var(--bg);}
+.sortname{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12px;min-width:0;}
+.sortname>span:first-child,.sortname>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sortmeta{color:var(--ink-3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sortage.stale{color:var(--gold-ink);background:var(--gold-soft);border-radius:6px;padding:1px 6px;}
+.sortlistview{border:1px solid var(--line);border-radius:12px;background:var(--bg);overflow:hidden;}
+.sortrow{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.1fr) minmax(0,.7fr) 176px;gap:8px;align-items:center;padding:7px 10px;border-top:1px solid var(--line-soft);font-size:12px;cursor:pointer;}
+.sortrow:hover{background:var(--row-hover);}
+.sortrow.head{border-top:0;font-size:11px;color:var(--ink-3);cursor:default;background:transparent;}
+.sortwho{min-width:0;}
+.sortseg{display:flex;border:1px solid var(--plum-line);border-radius:8px;overflow:hidden;min-width:0;}
+.sortseg button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 0 3px;font-size:11px;line-height:1.1;color:var(--ink-2);background:var(--bg);border:0;border-right:1px solid var(--line-soft);cursor:pointer;min-width:0;}
+.sortseg button:last-child{border-right:0;}
+.sortseg button>span{font-size:13px;}
+.sortseg button:hover:not(:disabled){background:var(--plum-soft);color:var(--plum);}
+.sortseg button.soft{color:var(--ink-3);}
+.sortseg button:disabled{opacity:.4;cursor:not-allowed;}
+.sortlanes{display:flex;gap:8px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;}
+.sortlane{background:var(--canvas);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:5px;width:208px;flex:0 0 208px;max-height:72vh;overflow-y:auto;}
+.sortlane.empty{background:transparent;border:1px dashed var(--line);}
+.sortlanehead{display:flex;justify-content:space-between;font-size:12px;font-weight:600;padding:2px 4px;}
+.sortlanehead span{color:var(--ink-3);font-weight:400;}
+.sortlaneempty{padding:10px 4px;text-align:center;}
+.sortcard{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 7px;display:flex;flex-direction:column;gap:4px;cursor:pointer;}
+.sortcard:hover{border-color:var(--plum-line);}
+.sortcard .sortname{justify-content:space-between;}
+.sortmore{font-size:11px;color:var(--ink-3);background:none;border:0;padding:4px;cursor:pointer;}
+.sortempty{padding:28px;text-align:center;color:var(--ink-3);font-size:12px;border:1px dashed var(--line);border-radius:12px;}
+.sortwaiting{font-size:12px;color:var(--ink-2);margin:0 0 8px;}
+.sortwaiting button{background:none;border:0;color:var(--plum);cursor:pointer;font-size:12px;padding:0;text-decoration:underline;}
+@media (max-width:720px){
+  .sortrow{grid-template-columns:minmax(0,1fr);gap:4px;}
+  .sortrow.head{display:none;}
+  .sortlanes{flex-direction:column;}
+  .sortlane{width:100%;flex:1 1 auto;max-height:none;}
+}
+/* the dialog */
+.sortbox,.sortbox input,.sortbox select{font-size:12px;}
+.sortbox .movebody{gap:6px;}
+.sortsub{font-size:11px;color:var(--ink-3);margin-bottom:4px;}
+.sortlbl{display:block;font-size:11px;color:var(--ink-2);margin:6px 0 3px;font-weight:600;}
+.sortbox select,.sortbox input{height:30px;width:100%;border:1px solid var(--line);border-radius:8px;padding:0 8px;background:var(--bg);}
+.sortfixed{height:30px;border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;background:var(--canvas);}
+.sortlist{border:1px solid var(--line);border-radius:8px;overflow:hidden;max-height:220px;overflow-y:auto;}
+.sortgroup{padding:5px 10px;font-size:11px;color:var(--ink-3);background:var(--canvas);border-top:1px solid var(--line-soft);}
+.sortlist>div:first-child .sortgroup{border-top:0;}
+.sortopt{display:flex;justify-content:space-between;width:100%;text-align:left;padding:7px 10px;border:0;border-top:1px solid var(--line-soft);background:var(--bg);font-size:12px;cursor:pointer;}
+.sortopt.on{background:var(--plum-soft);color:var(--plum);font-weight:600;}
+.sortopt:disabled{color:var(--ink-3);cursor:not-allowed;}
+.sortgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.sortnote{font-size:11px;color:var(--ink-3);}
+.sortinfo{background:var(--plum-soft);color:var(--plum);border-radius:8px;padding:7px 9px;font-size:11px;line-height:1.45;margin:6px 0;}
+.sortwarn{background:var(--gold-soft);color:var(--gold-ink);border-radius:8px;padding:7px 9px;font-size:11px;line-height:1.45;margin:6px 0;}
+.sortfoot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;flex-wrap:nowrap;}
+.sortlink{background:none;border:0;color:var(--plum);font-size:12px;cursor:pointer;padding:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sortbtns{display:flex;gap:6px;flex-shrink:0;}
+.sortbtn{height:28px;padding:0 10px;font-size:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink-2);cursor:pointer;}
+.sortbtn.primary{background:var(--plum);border-color:var(--plum);color:#fff;font-weight:600;}
+.sortbtn:disabled{opacity:.5;cursor:not-allowed;}
+/* inline tab rename (admins) */
+.railrename{width:100%;height:24px;font-size:12px;border:1px solid var(--plum-line);border-radius:6px;padding:0 6px;}
+.railrenameerr{font-size:11px;color:var(--blk);padding:2px 8px;}

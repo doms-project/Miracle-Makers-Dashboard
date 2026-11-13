@@ -172,7 +172,13 @@ export default function MoveDialog({
   // and has no picker) and the panel showing a record already AT that stage
   // (disabled, never blank).
   const destStages = rawDestStages.filter(
-    (s2) => s2.name.trim().toUpperCase() !== "REASSIGN",
+    (s2) =>
+      s2.name.trim().toUpperCase() !== "REASSIGN" &&
+      // 🔴 ROUND 197 — NEW LEAD is where leads ARRIVE, never a destination.
+      // Kept only when it is the case's CURRENT stage in its own pipeline, so
+      // the select is never blank (the server refuses a move INTO it anyway).
+      (s2.name.trim().toUpperCase() !== "NEW LEAD" ||
+        (toPipelineId === record.pipelineId && s2.id === record.stageId)),
   );
   const transferredIn = useMemo(
     () =>
@@ -275,7 +281,11 @@ export default function MoveDialog({
               value={toPipelineId}
               onChange={(e) => {
                 setToPipelineId(e.target.value);
-                const first = (stagesByPipeline[e.target.value] || [])[0];
+                // ROUND 197 — the first stage a person may PICK (not NEW LEAD).
+                const first = (stagesByPipeline[e.target.value] || []).find((st) => {
+                  const n = st.name.trim().toUpperCase();
+                  return n !== "NEW LEAD" && n !== "REASSIGN";
+                });
                 setToStageId(first?.id || "");
               }}
             >

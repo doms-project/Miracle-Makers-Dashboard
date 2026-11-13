@@ -35,6 +35,7 @@ import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
 import { BUILD, BUILD_LABEL } from "@/lib/build";
+import { resolveLabels, labelProblem, withLabel, type LabelKey } from "@/lib/sorting";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -356,7 +357,8 @@ interface Body {
     | "create-section"
     | "create-field"
     | "move-field"
-    | "name-folder";
+    | "name-folder"
+    | "rename-tab";
   // create-pipeline
   name?: string;
   stages?: string[];
@@ -374,6 +376,8 @@ interface Body {
   folderId?: string;
   dataType?: string;
   options?: string[];
+  // rename-tab (round 197)
+  key?: string;
 }
 
 export async function POST(request: Request) {
@@ -631,6 +635,8 @@ export async function POST(request: Request) {
           // ⚠️ MERGED, never replaced. The screen does not send folderNames, so
           // writing next.folderNames would erase every name we hold.
           folderNames: { ...current.folderNames, ...next.folderNames },
+          // 🔴 ROUND 197 — carried, never sent by this screen's grid save.
+          labels: current.labels || {},
         });
         return NextResponse.json({ config: saved });
       }
@@ -677,6 +683,47 @@ export async function POST(request: Request) {
             { status: 502 },
           );
         return NextResponse.json({ moved: true });
+      }
+
+      // 🔴 ROUND 197 — RENAME A TAB. Display only (see StoredPipelineConfig.
+      // labels). An empty name resets to the default. Admin-gated like every
+      // action here; duplicates and over-long names are refused server-side,
+      // not only in the browser.
+      case "rename-tab": {
+        const key = String(body.key || "");
+        const okKey =
+          key === "newLeads" || key === "staffingTab" || key === "staffingStage" ||
+          /^pipeline:[A-Za-z0-9_-]{4,64}$/.test(key);
+        if (!okKey)
+          return NextResponse.json(
+            { error: "That tab can't be renamed.", status: 400, refusal: true } as ApiError,
+            { status: 400 },
+          );
+        const name = String(body.name ?? "");
+        const cfg = await getPipelineConfig();
+        const shown = resolveLabels(cfg.labels);
+        let taken: string[] = [];
+        if (key !== "staffingStage") {
+          const pipes = await listPipelines();
+          taken = [
+            ...(key === "newLeads" ? [] : [shown.newLeads]),
+            ...(key === "staffingTab" ? [] : [shown.staffingTab]),
+            ...pipes
+              .filter((p) => `pipeline:${p.id}` !== key)
+              .map((p) => shown.pipelines[p.id] || p.name),
+          ];
+        }
+        const problem = labelProblem(name, taken);
+        if (problem)
+          return NextResponse.json(
+            { error: problem, status: 400, refusal: true } as ApiError,
+            { status: 400 },
+          );
+        const saved = await savePipelineConfig({
+          ...cfg,
+          labels: withLabel(cfg.labels, key as LabelKey, name),
+        });
+        return NextResponse.json({ config: saved, labels: resolveLabels(saved.labels) });
       }
 
       case "name-folder": {

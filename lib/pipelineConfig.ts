@@ -193,6 +193,18 @@ export interface StoredPipelineConfig {
    * admin names an existing folder on the Pipelines screen.
    */
   folderNames: Record<string, string>;
+  /**
+   * 🔴 ROUND 197 — TAB NAMES an admin set by double-clicking a sidebar entry.
+   * Keys: newLeads · staffingTab · staffingStage · pipeline:<id>. DISPLAY ONLY:
+   * no rule anywhere reads these (lib/sorting.ts matches GHL's real stage and
+   * pipeline names), so a rename cannot change what a tab holds.
+   *
+   * ⚠️ REQUIRED in the type ON PURPOSE. Every literal that builds a config —
+   * and one route builds it field by field — must now say what it does with
+   * labels, or the compiler stops it. An optional key here would be erased by
+   * the next save of any other setting, with a 200 and nothing on screen.
+   */
+  labels: Record<string, string>;
 }
 
 export const PIPELINE_CONFIG_CUSTOM_VALUE_NAME = "MM Pipeline Folders";
@@ -231,7 +243,7 @@ export const SEED_FOLDER_NAMES: Record<string, string> = {
 export const SEED_TICKED_ON_CLIENT: string[] = ["1JFUFsjPXNFzMW18dYSe"];
 
 export function emptyPipelineConfig(): StoredPipelineConfig {
-  return { seeded: false, pipelines: {}, folderNames: {} };
+  return { seeded: false, pipelines: {}, folderNames: {}, labels: {} };
 }
 
 /**
@@ -310,7 +322,14 @@ export function parsePipelineConfig(raw: unknown): StoredPipelineConfig | null {
       const n = String(v ?? "").trim();
       if (id && n) folderNames[id] = n;
     }
-  return { seeded: rec.seeded === true, pipelines, folderNames };
+  const labels: Record<string, string> = {};
+  const lb = rec.labels;
+  if (lb && typeof lb === "object" && !Array.isArray(lb))
+    for (const [k, v] of Object.entries(lb as Record<string, unknown>)) {
+      const n = typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "";
+      if (k && n && n.length <= 40) labels[k] = n;
+    }
+  return { seeded: rec.seeded === true, pipelines, folderNames, labels };
 }
 
 /**
@@ -343,6 +362,7 @@ export function serialisePipelineConfig(c: StoredPipelineConfig): string {
     seeded: c.seeded,
     pipelines: c.pipelines,
     folderNames: c.folderNames || {},
+    labels: c.labels || {},
   });
 }
 

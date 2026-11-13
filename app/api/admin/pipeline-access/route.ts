@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { peerConfigured, peerLabel } from "@/lib/peer";
 import {
   listLocationUsers,
   listPipelines,
   fetchAccessGrantsV2,
   saveAccessGrantsV2,
+  asStaffing,
   listMediaFolders,
   getPipelineConfig,
   getEditableFieldDefs,
@@ -188,6 +190,10 @@ export async function GET(request: Request) {
         // renders it from the LIVE user list, so only ids travel here.
         caseManagers: stored?.caseManagers ?? {},
         referralAccess: stored?.referralAccess ?? {},
+        // ROUND 197
+        staffing: stored?.staffing ?? {},
+        peerTransfer: stored?.peerTransfer ?? [],
+        peer: { configured: peerConfigured(), label: peerLabel() },
         publicFolderId: (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim(),
         // true => nothing readable is stored yet, so the env var is what's
         // actually in force until the first save.
@@ -212,6 +218,10 @@ export async function PUT(request: Request) {
       caseManagers?: Record<string, string[]>;
       /** ROUND 161 — user id → their referral-visibility override. */
       referralAccess?: Record<string, unknown>;
+      /** ROUND 197 — user id → "self" | "any". Absent user = off. */
+      staffing?: Record<string, unknown>;
+      /** ROUND 197 — user ids with the cross-account transfer tick. */
+      peerTransfer?: string[];
     };
     const denied = gate(request, body.ssoKey);
     if (denied) return denied;
@@ -282,7 +292,15 @@ export async function PUT(request: Request) {
       ? [...new Set(body.masterUsers.map(String).filter(Boolean))]
       : undefined;
 
-    if (!pipelinesPatch && !foldersPatch && !masterPatch && !caseManagersPatch)
+    const staffingPatch = body.staffing === undefined ? undefined : asStaffing(body.staffing);
+    const peerPatch = Array.isArray(body.peerTransfer)
+      ? [...new Set(body.peerTransfer.map(String).filter(Boolean))]
+      : undefined;
+
+    if (
+      !pipelinesPatch && !foldersPatch && !masterPatch && !caseManagersPatch &&
+      !referralAccessPatch && !staffingPatch && !peerPatch
+    )
       return NextResponse.json(
         {
           error: "Nothing to save.",
@@ -298,6 +316,8 @@ export async function PUT(request: Request) {
       ...(masterPatch ? { master: masterPatch } : {}),
       ...(caseManagersPatch ? { caseManagers: caseManagersPatch } : {}),
       ...(referralAccessPatch ? { referralAccess: referralAccessPatch } : {}),
+      ...(staffingPatch ? { staffing: staffingPatch } : {}),
+      ...(peerPatch ? { peerTransfer: peerPatch } : {}),
     });
     // Echo the MERGED state, not just what was sent — the caller needs to see
     // what is actually stored now, including the scopes it didn't touch.
@@ -311,6 +331,8 @@ export async function PUT(request: Request) {
         masterUsers: saved?.master ?? [],
         caseManagers: saved?.caseManagers ?? {},
         referralAccess: saved?.referralAccess ?? {},
+        staffing: saved?.staffing ?? {},
+        peerTransfer: saved?.peerTransfer ?? [],
       },
       { headers: { "Cache-Control": "no-store" } },
     );

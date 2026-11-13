@@ -3047,7 +3047,23 @@ export interface AccessGrantsV2 {
    * type error instead of an empty screen.
    */
   referralAccess: Record<string, ReferralAccess>;
+  /**
+   * 🔴 ROUND 197 — WHO MAY WORK THE STAFFING NEEDED QUEUE (the REASSIGN stage).
+   * userId → "self" (take a waiting case for themselves) | "any" (assign it to
+   * anyone). ABSENT = off: the tab is hidden and unowned REASSIGN client cases
+   * are not sent to them. Admins never need an entry.
+   */
+  staffing: Record<string, StaffingLevel>;
+  /**
+   * 🔴 ROUND 197 — who may use the cross-account transfer (Transfer to ODP /
+   * Miracle Makers). Was admin-only. A listed user may transfer a case they
+   * OWN or an UNOWNED case in a pipeline they hold — never a follower's.
+   */
+  peerTransfer: string[];
 }
+
+/** ROUND 197 — a user's Staffing needed permission. Absent means off. */
+export type StaffingLevel = "self" | "any";
 
 /** One user's referral-visibility override. See `referralAccess`. */
 export type ReferralAccess =
@@ -3060,6 +3076,8 @@ const emptyV2 = (): AccessGrantsV2 => ({
   master: [],
   caseManagers: {},
   referralAccess: {},
+  staffing: {},
+  peerTransfer: [],
 });
 
 function asIdMap(v: unknown): AccessGrants {
@@ -3104,6 +3122,19 @@ function asReferralAccess(v: unknown): Record<string, ReferralAccess> {
   return out;
 }
 
+/**
+ * ROUND 197 — the Staffing needed map, validated like the others: only the two
+ * known levels survive, anything else (a typo in a hand-edited custom value)
+ * is dropped, which reads as OFF — the safe direction.
+ */
+export function asStaffing(v: unknown): Record<string, StaffingLevel> {
+  const out: Record<string, StaffingLevel> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [userId, raw] of Object.entries(v as Record<string, unknown>))
+    if (userId && (raw === "self" || raw === "any")) out[userId] = raw;
+  return out;
+}
+
 export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   let parsed: unknown;
   try {
@@ -3124,7 +3155,8 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   // exactly the kind of thing that bites once and is never explained.
   if (
     "pipelines" in o || "folders" in o || "master" in o ||
-    "caseManagers" in o || "referralAccess" in o
+    "caseManagers" in o || "referralAccess" in o ||
+    "staffing" in o || "peerTransfer" in o
   ) {
     return {
       pipelines: asIdMap(o.pipelines),
@@ -3135,6 +3167,10 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
       // code would iterate character by character.
       caseManagers: asIdMap(o.caseManagers),
       referralAccess: asReferralAccess(o.referralAccess),
+      staffing: asStaffing(o.staffing),
+      peerTransfer: Array.isArray(o.peerTransfer)
+        ? [...new Set(o.peerTransfer.map(String).filter(Boolean))]
+        : [],
     };
   }
 
@@ -3197,7 +3233,7 @@ export async function saveAccessGrantsV2(
   // `caseManagers` was that key until this commit: storing the map and then
   // ticking one box on the Access tab would have erased it.
   //
-  // ⚠️ IF YOU ADD A SIXTH KEY, ADD IT IN FOUR PLACES — the interface, emptyV2,
+  // ⚠️ IF YOU ADD AN EIGHTH KEY (round 197 added staffing + peerTransfer), ADD IT IN FOUR PLACES — the interface, emptyV2,
   // the parseAccessValue branch AND here — and extend round135-proof.
   const next: AccessGrantsV2 = {
     pipelines: patch.pipelines ?? current.pipelines,
@@ -3205,6 +3241,8 @@ export async function saveAccessGrantsV2(
     master: patch.master ?? current.master,
     caseManagers: patch.caseManagers ?? current.caseManagers,
     referralAccess: patch.referralAccess ?? current.referralAccess,
+    staffing: patch.staffing ?? current.staffing,
+    peerTransfer: patch.peerTransfer ?? current.peerTransfer,
   };
   const body = JSON.stringify(next);
   const existing = await findAccessCustomValue();
@@ -5179,6 +5217,170 @@ export async function divisionCustomField(
     return [];
   }
   return [{ id: def.id, value }];
+}
+
+/**
+ * 🔴 ROUND 197 — SORTING A NEW LEAD, AND ASSIGNING A STAFFING NEEDED CASE.
+ *
+ * WHY NOT moveOpportunity. That function treats ANY owner change — including
+ * "nobody → someone" — as a TRANSFER: it ignores the chosen stage, lands the
+ * case at TRANSFERRED IN and writes the Transferred From/Date stamps. Master
+ * then files the case under "Sent out". Sorting a brand-new lead is not a
+ * hand-over between departments, and neither is the first owner of a case
+ * waiting in Staffing needed, so this path:
+ *
+ *   • writes pipeline + the CHOSEN stage + owner (+ Division) in ONE verified PUT
+ *   • writes NO Transferred From / Transferred Date / Transfer Reason
+ *   • writes a plain note saying what was sorted, by whom, and why
+ *   • from Staffing needed: removes exactly the followers the reassign added
+ *     (the "Reassign Followers" field), as the panel's claim already does
+ *
+ * ⚠️ IT REFUSES ANY OTHER STARTING STAGE. "sort" only from NEW LEAD, "assign"
+ * only from REASSIGN — so this can never become a stamp-free side door for an
+ * ordinary transfer between two worked pipelines.
+ */
+export async function sortOpportunity(args: {
+  mode: "sort" | "assign";
+  oppId: string;
+  toPipelineId: string;
+  /** Empty = stay at NEW LEAD (allowed only for an unowned re-route). */
+  toStageId?: string;
+  /** undefined = keep the current owner; "" = no owner. */
+  newOwnerId?: string;
+  reason?: string;
+  actorUserId: string;
+  actorDivision?: string;
+}): Promise<MoveResult> {
+  const steps: string[] = [];
+  const current = await getOpportunityById(args.oppId);
+  if (!current) throw new GhlError("Opportunity not found.", 404, `id ${args.oppId}`);
+  const fromStage = (current.stage || "").trim().toUpperCase();
+  if (args.mode === "sort" && fromStage !== "NEW LEAD")
+    throw new GhlError(
+      "This case is no longer a new lead.",
+      409,
+      `It is at ${current.stage || "another stage"} now — somebody may have sorted it already. Refresh to see where it is.`,
+    );
+  if (args.mode === "assign" && fromStage !== REASSIGN_STAGE_NAME)
+    throw new GhlError(
+      "This case is no longer waiting in Staffing needed.",
+      409,
+      `It is at ${current.stage || "another stage"} now — somebody may have assigned it already. Refresh to see where it is.`,
+    );
+  if (args.mode === "assign" && current.ownerId)
+    throw new GhlError("This case already has an owner.", 409, "Somebody assigned it a moment ago. Refresh.");
+
+  const pipelines = await getSelectedPipelines();
+  const dest = pipelines.find((p) => p.id === args.toPipelineId);
+  if (!dest)
+    throw new GhlError("Destination pipeline is not available.", 400, `${args.toPipelineId} is not a client pipeline.`);
+  const pipelineChanged = args.toPipelineId !== current.pipelineId;
+  if (args.mode === "assign" && pipelineChanged)
+    throw new GhlError(
+      "Assign keeps the case in its pipeline.",
+      400,
+      "Use Move this case to send it to another pipeline.",
+    );
+
+  const finalOwner = args.newOwnerId === undefined ? current.ownerId || "" : args.newOwnerId;
+  const ownerChanged = finalOwner !== (current.ownerId || "");
+  if (args.mode === "assign" && !finalOwner)
+    throw new GhlError("Pick who will own it.", 400);
+
+  // ---- STAGE (resolved before any write) ----
+  const stages = dest.stages || [];
+  let destStageId = args.toStageId || "";
+  const chosen = destStageId ? stages.find((st) => st.id === destStageId) : undefined;
+  if (destStageId && !chosen)
+    throw new GhlError("Chosen stage does not belong to the destination pipeline.", 400, destStageId);
+  const chosenName = (chosen?.name || "").trim().toUpperCase();
+  if (!destStageId) {
+    if (args.mode === "sort" && !finalOwner && pipelineChanged) {
+      const nl = stages.find((st) => (st.name || "").trim().toUpperCase() === "NEW LEAD");
+      if (!nl)
+        throw new GhlError(
+          `"${dest.name}" has no NEW LEAD stage.`,
+          400,
+          "Add a NEW LEAD stage to that pipeline, or give the lead an owner and a stage.",
+        );
+      destStageId = nl.id;
+    } else {
+      throw new GhlError("Choose a stage.", 400);
+    }
+  } else if (chosenName === "NEW LEAD") {
+    if (finalOwner || !pipelineChanged || args.mode === "assign")
+      throw new GhlError("Choose a stage other than New lead.", 400);
+  } else if (chosenName === REASSIGN_STAGE_NAME) {
+    throw new GhlError("Use Staffing needed for that.", 400);
+  }
+
+  // ---- OWNER (validated before any write) ----
+  if (ownerChanged && finalOwner) {
+    const validUsers = await getLocationUserIds();
+    if (validUsers.size && !validUsers.has(finalOwner))
+      throw new GhlError("New owner is not a user of this location.", 400, finalOwner);
+  }
+  steps.push("preflight");
+
+  const divisionCf = pipelineChanged ? await divisionCustomField(dest.name) : [];
+  await putOpportunityVerified(
+    args.oppId,
+    {
+      pipelineId: args.toPipelineId,
+      pipelineStageId: destStageId,
+      ...(ownerChanged ? { assignedTo: finalOwner || null } : {}),
+      ...(divisionCf.length ? { customFields: divisionCf } : {}),
+    },
+    args.mode,
+  );
+  steps.push(
+    `${args.mode === "sort" ? "sorted" : "assigned"}: pipeline+stage${ownerChanged ? " + owner" : ""}${divisionCf.length ? " + Division" : ""}`,
+  );
+  invalidateOpportunity(args.oppId);
+
+  // ---- FOLLOWERS (assign only) — same rule as the panel's claim ----
+  if (args.mode === "assign") {
+    try {
+      const added = await getReassignFollowers(current);
+      const toRemove = added.filter((u) => u && u !== finalOwner);
+      if (toRemove.length) await removeOpportunityFollowers(args.oppId, toRemove);
+      if (added.length) await clearReassignFollowers(args.oppId);
+      steps.push(`followers cleared: ${toRemove.length}`);
+    } catch (e) {
+      // The assignment itself is written. Saying it failed would be untrue.
+      console.error("[assign] follower cleanup failed:", e);
+      steps.push("followers: cleanup failed (remove by hand)");
+    }
+  }
+
+  // ---- NOTE ----
+  if (current.contactId) {
+    try {
+      const from = pipelines.find((p) => p.id === current.pipelineId)?.name || "—";
+      const stageName = stages.find((st) => st.id === destStageId)?.name || "";
+      const system =
+        args.mode === "sort"
+          ? pipelineChanged
+            ? `Sorted from New leads: ${from} → ${dest.name}${stageName ? ` (${stageName})` : ""}.`
+            : `Sorted from New leads in ${dest.name}${stageName ? ` → ${stageName}` : ""}.`
+          : `Assigned from Staffing needed in ${dest.name}${stageName ? ` → ${stageName}` : ""}.`;
+      await addOpportunityNote(
+        current.contactId,
+        args.oppId,
+        composeNoteBody({
+          division: args.actorDivision || "",
+          isMove: true,
+          system,
+          reason: args.reason?.trim() || "",
+        }),
+        args.actorUserId,
+      );
+      steps.push("note written");
+    } catch (e) {
+      console.error("[sort] note failed:", await explainGhlError(e));
+    }
+  }
+  return { transferred: false, steps };
 }
 
 export async function moveOpportunity(args: {

@@ -1,6 +1,7 @@
 import type { OpportunityRecord } from "./types";
 import type { GhlSession } from "./sso";
-import { getUserHomePipelines } from "./pipelineAccess";
+import { getUserHomePipelines, staffingLevel, canUsePeerTransfer } from "./pipelineAccess";
+import { canTakeUnowned, type Viewer } from "./sorting";
 import { isAdminRole } from "./adminRole";
 
 // Phase 3 permission model — ASSIGNMENT ONLY (shared by the list + save routes).
@@ -66,11 +67,39 @@ export const canEditRecord = canSeeRecord;
  * answer different questions and should be free to diverge later.
  */
 export function canChangeOwner(
-  rec: Pick<OpportunityRecord, "ownerId">,
+  rec: Pick<OpportunityRecord, "ownerId"> & Partial<Pick<OpportunityRecord, "pipelineId" | "stage">>,
   session: Pick<GhlSession, "userId" | "role" | "type">,
+  newOwnerId?: string,
 ): boolean {
   if (isAdminSession(session.role, session.type)) return true;
-  return rec.ownerId === session.userId;
+  if (rec.ownerId) return rec.ownerId === session.userId;
+  // 🔴 ROUND 197 — AN UNOWNED CASE COULD NOT BE PICKED UP BY ANYONE BUT AN
+  // ADMIN. `rec.ownerId === session.userId` is unsatisfiable when ownerId is
+  // empty, so a rep saw "Unassigned — you can pick it up" and was refused when
+  // they tried. Now: an unowned case in a pipeline they hold may be given an
+  // owner; one waiting in Staffing needed follows their Staffing setting.
+  // Callers that do not pass the pipeline keep the old (stricter) answer.
+  if (!rec.pipelineId || newOwnerId === undefined) return false;
+  return canTakeUnowned(
+    { ownerId: "", pipelineId: rec.pipelineId, stage: rec.stage || "" },
+    viewerFor(session),
+    newOwnerId,
+  ).ok;
+}
+
+/**
+ * ROUND 197 — the request's viewer as the pure rules in lib/sorting.ts want
+ * it. Read from the grants installed by withGrants for THIS request.
+ */
+export function viewerFor(session: Pick<GhlSession, "userId" | "role" | "type">): Viewer {
+  const isAdmin = isAdminSession(session.role, session.type);
+  return {
+    userId: session.userId,
+    isAdmin,
+    home: getUserHomePipelines(session.userId),
+    staffing: staffingLevel(session.userId, isAdmin),
+    peerTransfer: canUsePeerTransfer(session.userId, isAdmin),
+  };
 }
 
 /**

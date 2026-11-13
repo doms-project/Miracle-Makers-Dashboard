@@ -25,6 +25,7 @@ export default function ReassignDialog({
   ssoBlob,
   onClose,
   onDone,
+  stageLabel = "Staffing needed",
 }: {
   record: OpportunityRecord;
   /** The CURRENT owner's display name, or "" when the record is unowned. */
@@ -32,6 +33,8 @@ export default function ReassignDialog({
   ssoBlob: string | null;
   onDone: (rec: OpportunityRecord) => void;
   onClose: () => void;
+  /** ROUND 197 — what the REASSIGN stage is called on this dashboard. */
+  stageLabel?: string;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -83,7 +86,7 @@ export default function ReassignDialog({
         aria-modal="true"
       >
         <div className="previewhead">
-          <span className="previewname">Send this to Reassign?</span>
+          <span className="previewname">Send this to {stageLabel}?</span>
           <button
             className="x"
             type="button"
@@ -108,8 +111,8 @@ export default function ReassignDialog({
             ) : (
               <> will be moved to</>
             )}{" "}
-            <b>Reassign in {record.pipelineName}</b>, where another department
-            can pick it up. It will leave your board.
+            <b>{stageLabel} in {record.pipelineName}</b> with no owner, where
+            someone else can pick it up. It will leave your board.
           </div>
 
           <div
@@ -145,7 +148,7 @@ export default function ReassignDialog({
               disabled={busy || !reason.trim()}
               onClick={submit}
             >
-              {busy ? "Sending…" : "Send to Reassign"}
+              {busy ? "Sending…" : `Send to ${stageLabel}`}
             </button>
           </div>
         </div>

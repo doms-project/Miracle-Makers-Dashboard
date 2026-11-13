@@ -59,6 +59,22 @@ import {
   hasValue,
 } from "@/lib/fieldFolders";
 import MoveDialog from "@/components/MoveDialog";
+import SortDialog from "@/components/SortDialog";
+import SortingTab, { type SortAction } from "@/components/SortingTab";
+import {
+  isNewLeadStage,
+  isStaffingStage,
+  isPickableStage,
+  resolveLabels,
+  labelProblem,
+  stageDisplay,
+  DEFAULT_LABELS,
+  canSort as canSortRule,
+  canAssignStaffing,
+  canSendToStaffing,
+  canPeerTransfer as canPeerTransferRule,
+  type Viewer as SortViewer,
+} from "@/lib/sorting";
 import RecordFooter from "@/components/RecordFooter";
 import TransferDialog from "@/components/TransferDialog";
 import ReassignDialog from "@/components/ReassignDialog";
@@ -88,6 +104,7 @@ import { byLatestActivity } from "@/lib/activity";
 import "./filterbar.css";
 // ROUND 195 — spacing of the stat tiles and the Moves tables.
 import "./spacing.css";
+import "./sorting.css";
 import {
   parseQuery,
   indexRecord,
@@ -1819,7 +1836,7 @@ function MasterCard({
       </div>
       <div className="cm">{r.rep || "Unassigned"}</div>
       <div className="mstage" title="Current stage">
-        {r.stage || "—"}
+        {stageDisplay(r.stage || "—", DEFAULT_LABELS)}
         {/* ⬜ Days-in-stage. Rendered ONLY when GoHighLevel actually sent a
             timestamp — "0 days" on a record whose history we don't have would
             be a confident lie, and this view exists to surface exactly the
@@ -1859,7 +1876,7 @@ function MasterCard({
           className={`mfrom${wasReassigned(r) ? " reassigned" : ""}`}
           title={
             wasReassigned(r)
-              ? `Reassigned from ${from} — given up by that division, then claimed here. Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps the tag.`
+              ? `Came through Staffing needed (Reassign) from ${from} — given up by that division, then assigned here. Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps the tag.`
               : `Transferred from ${from} — handed straight to a new owner.`
           }
         >
@@ -1903,11 +1920,14 @@ function MasterColumn({
   count,
   droppable,
   children,
+  staffingLabel,
 }: {
   cat: MasterCatId;
   count: number;
   droppable: boolean;
   children: ReactNode;
+  /** ROUND 197 — REASSIGN is shown as "Staffing needed" (or the admin's name). */
+  staffingLabel?: string;
 }) {
   // Registered as a drop target even when it can't RECEIVE one.
   //
@@ -1926,7 +1946,7 @@ function MasterColumn({
       className={`col mcol${isOver && droppable ? " dropover" : ""}`}
     >
       <div className="colhead" title={def?.hint}>
-        <span>{def?.label ?? cat}</span>
+        <span>{cat === "reassign" && staffingLabel ? staffingLabel : def?.label ?? cat}</span>
         {/* The client asked to see "how many were transferred, how many are
             in…" — so the count is part of the header, not a hover. */}
         <span className="pill">{count}</span>
@@ -1977,6 +1997,13 @@ function honestAuthError(
       "reload once, and if it persists it needs to be reported.",
   };
 }
+
+/**
+ * 🔴 ROUND 197 — "All clients" was replaced by "New Leads (to sort)" and
+ * "Staffing needed lead". Its sidebar entry is kept, switched off, so bringing
+ * it back is this one line rather than a rewrite.
+ */
+const SHOW_ALL_CLIENTS = false;
 
 export default function Dashboard() {
   // Phase 3 (Step 0): GHL SSO handshake. `sso` is the decrypted viewer session
@@ -2190,6 +2217,24 @@ export default function Dashboard() {
   } | null>(null);
   // ITEM 4 — the Master view GRANT, decided server-side (admins always).
   const [canSeeMaster, setCanSeeMaster] = useState(false);
+  // ═══ ROUND 197 — New Leads (to sort) · Staffing needed lead ═════════════
+  // `sortTab` is a SEPARATE state from `adminPipeline` on purpose: every
+  // filter, guard and remembered-choice rule in this file reads adminPipeline
+  // as "a pipeline id or all", and teaching all of them two new values is how
+  // one of them would be missed. While a sorting tab is open adminPipeline is
+  // simply left alone.
+  const [sortTab, setSortTab] = useState<"newleads" | "staffing" | null>("newleads");
+  const [viewerStaffing, setViewerStaffing] = useState<"admin" | "any" | "self" | "off">("off");
+  const [viewerPeer, setViewerPeer] = useState(false);
+  const [tabLabelsRaw, setTabLabelsRaw] = useState<Record<string, string>>({});
+  const [sortTargets, setSortTargets] = useState<{ id: string; name: string }[]>([]);
+  const [sortReq, setSortReq] = useState<{
+    record: OpportunityRecord;
+    mode: "sort" | "assign";
+    target?: "enroll" | "transfer";
+  } | null>(null);
+  const [staffRec, setStaffRec] = useState<OpportunityRecord | null>(null);
+  const [renaming, setRenaming] = useState<{ key: string; value: string; err: string | null; busy: boolean } | null>(null);
   // Pipelines whose fetch failed on the last load. Their records are missing —
   // said out loud, because an absent pipeline looks exactly like an empty one.
   const [failedPipelines, setFailedPipelines] = useState<
@@ -2462,6 +2507,10 @@ export default function Dashboard() {
       if (body.viewer?.homePipelineIds)
         setHomePipelineIds(body.viewer.homePipelineIds);
       setCanSeeMaster(!!body.viewer?.canSeeMaster);
+      setViewerStaffing(body.viewer?.staffing ?? (body.viewer?.isAdmin ? "admin" : "off"));
+      setViewerPeer(!!body.viewer?.canPeerTransfer);
+      if (body.tabLabels) setTabLabelsRaw(body.tabLabels);
+      if (body.sortTargets) setSortTargets(body.sortTargets);
       setFailedPipelines(body.failedPipelines || []);
       // ⚠️ SET UNCONDITIONALLY. Absent means the config read failed, and the
       // sidebar then shows every pipeline rather than keeping a stale answer.
@@ -3104,6 +3153,23 @@ export default function Dashboard() {
   const viewerId = sso.status === "ready" ? sso.session.userId : null;
   const followsNotOwns = (r: OpportunityRecord) =>
     !!viewerId && r.ownerId !== viewerId && r.followerIds.includes(viewerId);
+
+  // ═══ ROUND 197 — names and permissions for the two sorting tabs ══════════
+  // Labels are DISPLAY ONLY (see lib/sorting.ts). The permission helpers are
+  // the server's own rules run here only to decide which buttons to draw.
+  const tabLabels = useMemo(() => resolveLabels(tabLabelsRaw), [tabLabelsRaw]);
+  const sortViewer: SortViewer = useMemo(
+    () => ({
+      userId: viewerId || "",
+      isAdmin: isAdminViewer,
+      home: homePipelineIds,
+      staffing: isAdminViewer ? "admin" : viewerStaffing,
+      peerTransfer: isAdminViewer || viewerPeer,
+    }),
+    [viewerId, isAdminViewer, homePipelineIds, viewerStaffing, viewerPeer],
+  );
+  const showStaffingTab = isAdminViewer || viewerStaffing === "any" || viewerStaffing === "self";
+  const pipeDisplay = (id: string, fallback: string) => tabLabels.pipelines[id] || fallback;
   // Same permission rule as the edit panel / save route: admins edit all; others
   // only records they own or follow. Used to gate Kanban dragging client-side
   // (the save route's 403 is the server-side backstop).
@@ -3369,6 +3435,10 @@ export default function Dashboard() {
         // reassigned record showed as an ordinary list row a rep could open and
         // treat as their work. Master reads `data` directly and is unaffected.
         !isReassignRec(r) &&
+        // 🔴 ROUND 197 — NEW LEAD lives in "New Leads (to sort)" only. Every
+        // case at it — owned by the rotation or not — is sorted there, so no
+        // pipeline tab shows it (list rows, board, chips and tiles alike).
+        !isNewLeadStage(r.stage) &&
         (office === "all" || r.office === office) &&
         (scope === "all" ||
           (scope === "shared"
@@ -3395,6 +3465,7 @@ export default function Dashboard() {
       dataByActivity.filter(
         (r) =>
           !isReassignRec(r) &&
+          !isNewLeadStage(r.stage) &&
           (office === "all" || r.office === office) &&
           (scope === "all" ||
             (scope === "shared" ? r.shared : !r.shared && divisionLabel(r.pipelineName) === scope)) &&
@@ -3471,6 +3542,7 @@ export default function Dashboard() {
           // ITEM 5a — reassigned records are not part of the pipeline total the
           // list reports against; they live only in Master.
           !isReassignRec(r) &&
+          !isNewLeadStage(r.stage) &&
           (adminPipeline === "all" || r.pipelineId === adminPipeline) &&
           (scope === "all" ||
             (scope === "shared"
@@ -4090,7 +4162,7 @@ export default function Dashboard() {
             ) : null}
           </div>
         </td>
-        <td>{r.stage || "—"}</td>
+        <td>{stageDisplay(r.stage || "—", tabLabels)}</td>
         <td>{age == null ? "—" : `${age} day${age === 1 ? "" : "s"}`}</td>
         <td>{r.rep || <span className="muted">Unassigned</span>}</td>
         <td>{r.pipelineName || "—"}</td>
@@ -4161,7 +4233,7 @@ export default function Dashboard() {
               className={`fromtag${wasReassigned(r) ? " reassigned" : ""}`}
               title={
                 wasReassigned(r)
-                  ? `Reassigned from ${transferredFrom(r)} — given up by that division and claimed here. (Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps it.)`
+                  ? `Came through Staffing needed (Reassign) from ${transferredFrom(r)} — given up by that division and assigned here. (Route read from the contact's reassign tag; tags are contact-scoped, so a contact reassigned once keeps it.)`
                   : `Transferred from ${transferredFrom(r)} — handed directly to a new owner.`
               }
             >
@@ -4190,7 +4262,7 @@ export default function Dashboard() {
       </td>
       <td>
         {r.stage ? (
-          <span className="pill stage">{r.stage}</span>
+          <span className="pill stage">{stageDisplay(r.stage, tabLabels)}</span>
         ) : (
           <span className="muted">—</span>
         )}
@@ -4698,10 +4770,10 @@ export default function Dashboard() {
   const stageName = useCallback(
     (id: string): string => {
       for (const list of Object.values(stagesByPipeline))
-        for (const s of list) if (s.id === id) return s.name;
+        for (const s of list) if (s.id === id) return stageDisplay(s.name, tabLabels);
       return id;
     },
-    [stagesByPipeline],
+    [stagesByPipeline, tabLabels],
   );
   // ═══ ROUND 174 — THE FILTERS, APPLIED ONCE ════════════════════════════════
   //
@@ -6201,7 +6273,8 @@ export default function Dashboard() {
     // also removes it as a DROP TARGET, which is the point: dragging a card
     // there from a pipeline view would put it in the holding state without the
     // followers, the note or the stamps, bypassing the whole flow.
-    return names.filter((n) => !isReassignStage(n));
+    // ROUND 197 — and no NEW LEAD column: it is sorted on its own tab.
+    return names.filter((n) => !isReassignStage(n) && !isNewLeadStage(n));
   }, [
     adminPipeline,
     homePipelineIds,
@@ -6633,6 +6706,8 @@ export default function Dashboard() {
     view === "master"
       ? view
       : "clients";
+  /** ROUND 197 — a sorting tab is on screen (it replaces the list/board). */
+  const sortingOn = railWhere === "clients" && (view === "list" || view === "board") && !!sortTab;
 
   // ═════════════════════════════════════════════════════════════════════════
   // 🔴 AN ERROR OVER LOADED DATA IS A STRIP, NOT A WALL.
@@ -6670,7 +6745,8 @@ export default function Dashboard() {
         records: data,
         hidden: pipelineSidebarHidden,
         failed: failedPipelines,
-        isExcluded: isReassignRec,
+        // ROUND 197 — the tab counts what the tab shows: no NEW LEAD either.
+        isExcluded: (r: OpportunityRecord) => isReassignRec(r) || isNewLeadStage(r.stage),
       }),
     [selectablePipelines, data, pipelineSidebarHidden, failedPipelines],
   );
@@ -6909,11 +6985,122 @@ export default function Dashboard() {
       setOffice(n.office);
       setClientFocus(n.clientFocus);
       if (n.closeRecord) setSelId(null);
+      setSortTab(null); // ROUND 197 — a pipeline tab, not a sorting tab
     },
     [view, adminPipeline, scope, stage, srcF, office, clientFocus, q, selected, data],
   );
   /** Exactly one lit entry, and only while the client section is on screen. */
-  const entryActive = (id: string) => railWhere === "clients" && adminPipeline === id;
+  const entryActive = (id: string) =>
+    railWhere === "clients" && !sortTab && adminPipeline === id;
+
+  // ═══ ROUND 197 — the two sorting tabs in the sidebar ═════════════════════
+  const sortCounts = useMemo(
+    () => ({
+      newleads: data.filter((r) => isNewLeadStage(r.stage)).length,
+      staffing: data.filter((r) => isStaffingStage(r.stage) && !r.ownerId).length,
+    }),
+    [data],
+  );
+  const sortEntryActive = (kind: "newleads" | "staffing") =>
+    railWhere === "clients" && sortTab === kind;
+  const pickSortTab = useCallback(
+    (kind: "newleads" | "staffing") => {
+      setSortTab(kind);
+      setView((v) => (v === "list" || v === "board" ? v : "list"));
+      // A record from somewhere else stays open only if it belongs here.
+      setSelId((id) => {
+        const r = id ? data.find((x) => x.id === id) : undefined;
+        if (!r) return null;
+        const here = kind === "newleads" ? isNewLeadStage(r.stage) : isStaffingStage(r.stage) && !r.ownerId;
+        return here ? id : null;
+      });
+    },
+    [data],
+  );
+  // If the Staffing setting is taken away while that tab is open, fall back.
+  useEffect(() => {
+    if (sortTab === "staffing" && !showStaffingTab && sso.status === "ready") setSortTab("newleads");
+  }, [sortTab, showStaffingTab, sso.status]);
+  // Remember the last tab per browser, like the pipeline entry already is.
+  const SORT_TAB_KEY = "mm.clientTab";
+  const restoredSortTab = useRef(false);
+  useEffect(() => {
+    if (restoredSortTab.current || pipelines.length === 0) return;
+    restoredSortTab.current = true;
+    try {
+      const v = window.localStorage.getItem(SORT_TAB_KEY);
+      if (v === "pipeline") setSortTab(null);
+      else if (v === "staffing" || v === "newleads") setSortTab(v);
+    } catch {
+      /* storage blocked — New Leads */
+    }
+  }, [pipelines.length]);
+  useEffect(() => {
+    if (!restoredSortTab.current) return;
+    try {
+      window.localStorage.setItem(SORT_TAB_KEY, sortTab || "pipeline");
+    } catch {
+      /* not fatal */
+    }
+  }, [sortTab]);
+
+  // ═══ ROUND 197 — rename a tab (admins, double-click) ═════════════════════
+  const startRename = (key: string, current: string) =>
+    setRenaming({ key, value: current, err: null, busy: false });
+  const saveRename = async (key: string, value: string) => {
+    const taken = [
+      ...(key === "newLeads" ? [] : [tabLabels.newLeads]),
+      ...(key === "staffingTab" ? [] : [tabLabels.staffingTab]),
+      ...sidebar.entries
+        .filter((e) => `pipeline:${e.id}` !== key)
+        .map((e) => pipeDisplay(e.id, e.name)),
+    ];
+    const problem = labelProblem(value, taken);
+    if (problem) {
+      setRenaming((r) => (r ? { ...r, err: problem } : r));
+      return;
+    }
+    setRenaming((r) => (r ? { ...r, busy: true, err: null } : r));
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(sso.blob ? { "x-ghl-sso-key": sso.blob } : {}),
+        },
+        body: JSON.stringify({ ssoKey: sso.blob ?? undefined, action: "rename-tab", key, name: value }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw apiError(res, j);
+      if (j.config?.labels) setTabLabelsRaw(j.config.labels);
+      setRenaming(null);
+    } catch (e) {
+      setRenaming((r) => (r ? { ...r, busy: false, err: e instanceof Error ? e.message : String(e) } : r));
+    }
+  };
+  const renameBox = (key: string, current: string) => (
+    <div className="railpipe" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      <input
+        className="railrename"
+        autoFocus
+        maxLength={40}
+        defaultValue={current}
+        disabled={renaming?.busy}
+        aria-label="New tab name (empty resets to the default)"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setRenaming(null);
+          if (e.key === "Enter") void saveRename(key, (e.target as HTMLInputElement).value);
+        }}
+        onBlur={(e) => {
+          if (!renaming?.busy && (e.target as HTMLInputElement).value.trim() === current.trim()) setRenaming(null);
+        }}
+      />
+      {renaming?.err ? <div className="railrenameerr">{renaming.err}</div> : null}
+      <div className="railrenameerr" style={{ color: "var(--ink-3)" }}>
+        Enter to save · Esc to cancel · empty = default
+      </div>
+    </div>
+  );
   /**
    * pipelineId → records held in this tab, across BOTH families.
    *
@@ -7011,61 +7198,102 @@ export default function Dashboard() {
           <h2 id="railhead-clients" className="railhead">
             Clients
           </h2>
+          {/* 🔴 ROUND 197 — "All clients" is replaced by the two sorting tabs.
+              The old entry's code is kept behind SHOW_ALL_CLIENTS (top of this
+              component) so it can return with one line if it is ever wanted. */}
+          {([
+            ["newleads", "newLeads", tabLabels.newLeads, sortCounts.newleads, "NL"],
+            ...(showStaffingTab
+              ? ([["staffing", "staffingTab", tabLabels.staffingTab, sortCounts.staffing, "SN"]] as const)
+              : []),
+          ] as const).map(([kind, key, name, count, ini]) =>
+            renaming?.key === key ? (
+              <div key={kind}>{renameBox(key, name)}</div>
+            ) : (
+              <button
+                key={kind}
+                type="button"
+                className={sortEntryActive(kind) ? "railpipe active" : "railpipe"}
+                data-pipeline={kind}
+                aria-current={sortEntryActive(kind) ? "page" : undefined}
+                title={
+                  (sidebarLoading ? name : `${name} — ${count}`) +
+                  (isAdminViewer ? " · double-click to rename" : "")
+                }
+                aria-label={sidebarLoading ? name : `${name} (${count})`}
+                onClick={() => pickSortTab(kind)}
+                onDoubleClick={isAdminViewer ? () => startRename(key, name) : undefined}
+              >
+                <span className="railpipeini" aria-hidden="true">
+                  {ini}
+                </span>
+                <span className="railpipename">{name}</span>
+                <span className="railpipecount">{sidebarLoading ? "" : count}</span>
+              </button>
+            ),
+          )}
+          {SHOW_ALL_CLIENTS ? (
+          <>
           <button
-            type="button"
-            className={entryActive("all") ? "railpipe active" : "railpipe"}
-            // ROUND 177 — a stable hook by id: titles carry counts now.
-            data-pipeline="all"
-            aria-current={entryActive("all") ? "page" : undefined}
-            // 🔴 ROUND 177 · ADDITION 1 — COLLAPSED (now the default) hides the
-            // count and the notes, so the title carries them: hover still
-            // answers "how many, and why is All bigger than the tabs".
-            // R3 — and no "(0)" while nothing has loaded.
-            title={
-              sidebarLoading
-                ? "All clients"
-                : [
-                    `All clients — ${sidebar.all.count}`,
-                    sidebar.all.inHidden > 0
-                      ? `includes ${sidebar.all.inHidden} in pipelines hidden from the sidebar`
-                      : "",
-                    sidebar.all.shared > 0 ? `includes ${sidebar.all.shared} shared` : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-            }
-            aria-label={
-              sidebarLoading
-                ? "All clients"
-                : `All clients (${sidebar.all.count}${
-                    sidebar.all.inHidden > 0
-                      ? `, ${sidebar.all.inHidden} in hidden pipelines`
-                      : ""
-                  }${sidebar.all.shared > 0 ? `, ${sidebar.all.shared} shared` : ""})`
-            }
-            onClick={() => pickEntry("all")}
-          >
-            <span className="railpipeini" aria-hidden="true">
-              All
-            </span>
-            <span className="railpipename">All clients</span>
-            <span className="railpipecount">{sidebarLoading ? "" : sidebar.all.count}</span>
-          </button>
-          {/* D3 — "All clients" can be more than the entries add up to. Say
-              how much of that is records shared with you from elsewhere. */}
-          {sidebar.all.shared > 0 ? (
-            <div className="railpipenote">includes {sidebar.all.shared} shared</div>
-          ) : null}
-          {/* 🔴 ROUND 177 · R2 — an admin has no shared records, so on main the
-              gap left by the hidden ODP pipelines had no explanation at all. */}
-          {sidebar.all.inHidden > 0 ? (
-            <div className="railpipenote">
-              includes {sidebar.all.inHidden} in pipelines hidden from the sidebar
-            </div>
+              type="button"
+              className={entryActive("all") ? "railpipe active" : "railpipe"}
+              // ROUND 177 — a stable hook by id: titles carry counts now.
+              data-pipeline="all"
+              aria-current={entryActive("all") ? "page" : undefined}
+              // 🔴 ROUND 177 · ADDITION 1 — COLLAPSED (now the default) hides the
+              // count and the notes, so the title carries them: hover still
+              // answers "how many, and why is All bigger than the tabs".
+              // R3 — and no "(0)" while nothing has loaded.
+              title={
+                sidebarLoading
+                  ? "All clients"
+                  : [
+                      `All clients — ${sidebar.all.count}`,
+                      sidebar.all.inHidden > 0
+                        ? `includes ${sidebar.all.inHidden} in pipelines hidden from the sidebar`
+                        : "",
+                      sidebar.all.shared > 0 ? `includes ${sidebar.all.shared} shared` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+              }
+              aria-label={
+                sidebarLoading
+                  ? "All clients"
+                  : `All clients (${sidebar.all.count}${
+                      sidebar.all.inHidden > 0
+                        ? `, ${sidebar.all.inHidden} in hidden pipelines`
+                        : ""
+                    }${sidebar.all.shared > 0 ? `, ${sidebar.all.shared} shared` : ""})`
+              }
+              onClick={() => pickEntry("all")}
+            >
+              <span className="railpipeini" aria-hidden="true">
+                All
+              </span>
+              <span className="railpipename">All clients</span>
+              <span className="railpipecount">{sidebarLoading ? "" : sidebar.all.count}</span>
+            </button>
+            {/* D3 — "All clients" can be more than the entries add up to. Say
+                how much of that is records shared with you from elsewhere. */}
+            {sidebar.all.shared > 0 ? (
+              <div className="railpipenote">includes {sidebar.all.shared} shared</div>
+            ) : null}
+            {/* 🔴 ROUND 177 · R2 — an admin has no shared records, so on main the
+                gap left by the hidden ODP pipelines had no explanation at all. */}
+            {sidebar.all.inHidden > 0 ? (
+              <div className="railpipenote">
+                includes {sidebar.all.inHidden} in pipelines hidden from the sidebar
+              </div>
+            ) : null}
+          </>
           ) : null}
           {sidebarLoading
             ? [0, 1, 2].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
-            : sidebar.entries.map((e) => (
+            : sidebar.entries.map((e) =>
+                renaming?.key === `pipeline:${e.id}` ? (
+                  <div key={e.id}>{renameBox(`pipeline:${e.id}`, pipeDisplay(e.id, e.name))}</div>
+                ) : (
                 <button
                   key={e.id}
                   type="button"
@@ -7080,11 +7308,14 @@ export default function Dashboard() {
                     e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
                   }
                   onClick={() => pickEntry(e.id)}
+                  onDoubleClick={
+                    isAdminViewer ? () => startRename(`pipeline:${e.id}`, pipeDisplay(e.id, e.name)) : undefined
+                  }
                 >
                   <span className="railpipeini" aria-hidden="true">
                     {e.initials}
                   </span>
-                  <span className="railpipename">{e.name}</span>
+                  <span className="railpipename">{pipeDisplay(e.id, e.name)}</span>
                   {/* D4 — a failed pipeline is not an empty one. */}
                   <span className="railpipecount">{e.failed ? "—" : e.count}</span>
                 </button>
@@ -7613,8 +7844,26 @@ export default function Dashboard() {
             doesn't describe and a stat line that disagrees with what's on
             screen. Master renders the two filters that do apply — search and
             office — in its own toolbar below. */}
-        {(view === "list" || view === "board") && (
+        {(view === "list" || view === "board") && !sortingOn && (
         <>
+        {/* 🔴 ROUND 197 — NEW LEAD and unowned Staffing needed cases are not on
+            this tab any more. Say where they went, so nobody concludes they
+            vanished. */}
+        {sortCounts.newleads || (showStaffingTab && sortCounts.staffing) ? (
+          <div className="sortwaiting">
+            {sortCounts.newleads ? (
+              <button type="button" onClick={() => pickSortTab("newleads")}>
+                {sortCounts.newleads} waiting in {tabLabels.newLeads}
+              </button>
+            ) : null}
+            {sortCounts.newleads && showStaffingTab && sortCounts.staffing ? " · " : null}
+            {showStaffingTab && sortCounts.staffing ? (
+              <button type="button" onClick={() => pickSortTab("staffing")}>
+                {sortCounts.staffing} in {tabLabels.staffingTab}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {/* A pipeline that failed to load is NOT an empty pipeline, and the
             difference matters: a rep seeing their division empty concludes
             there is no work. Named, with a way to retry. */}
@@ -7774,6 +8023,26 @@ export default function Dashboard() {
             <div className="k">Checked this week</div>
             <div className="v">{stats.checked}</div>
             <div className="sub">{stats.auth} at authorization</div>
+          </button>
+          {/* 🔴 ROUND 197 — UNASSIGNED. A case that lost its owner by accident is
+              visible to everyone in the pipeline, but one tag among hundreds of
+              cards is easy to miss. Same focus the "By rep" tile uses for
+              "unassigned" (rep + empty value), so banner and reset already work. */}
+          <button
+            type="button"
+            className={`stat statbtn${clientF("rep", "") ? " on" : ""}`}
+            data-tile="unassigned"
+            onClick={() => setClientF("rep", "")}
+            disabled={filtered.filter((r) => !r.ownerId).length === 0}
+            title={
+              clientF("rep", "")
+                ? "Showing unassigned only — click to clear"
+                : "Show only cases with no owner"
+            }
+          >
+            <div className="k">Unassigned</div>
+            <div className="v">{filtered.filter((r) => !r.ownerId).length}</div>
+            <div className="sub">no owner · anyone here can take one</div>
           </button>
         </div>
 
@@ -9590,6 +9859,7 @@ export default function Dashboard() {
                       cat={c.id}
                       count={c.records.length}
                       droppable={c.droppable}
+                      staffingLabel={tabLabels.staffingStage}
                     >
                       {c.records.length ? (
                         c.records.map((r) => (
@@ -9626,7 +9896,7 @@ export default function Dashboard() {
                           {r.oppName || `${r.first} ${r.last}`.trim() || "—"}
                         </div>
                         <div className="cm">{r.rep || "Unassigned"}</div>
-                        <div className="mstage">{r.stage || "—"}</div>
+                        <div className="mstage">{stageDisplay(r.stage || "—", tabLabels)}</div>
                       </div>
                     ) : null;
                   })()}
@@ -9681,6 +9951,33 @@ export default function Dashboard() {
               </button>
             </div>
           </div>
+        ) : sortingOn ? (
+          <SortingTab
+            key={sortTab || "x"}
+            kind={sortTab === "staffing" ? "staffing" : "newleads"}
+            records={
+              sortTab === "staffing"
+                ? data.filter((r) => isStaffingStage(r.stage) && !r.ownerId)
+                : data.filter((r) => isNewLeadStage(r.stage))
+            }
+            view={view === "board" ? "board" : "list"}
+            pipelines={(isAdminViewer ? pipelines : pipelines.filter((p) => homePipelineIds.includes(p.id) || data.some((r) => r.pipelineId === p.id)))}
+            labels={tabLabels}
+            privatePayId={PRIVATE_PAY_PIPELINE_ID}
+            can={(r, a) => {
+              if (a === "assign") return canAssignStaffing(r, sortViewer, viewerId || "x").ok;
+              if (a === "staffing") return canSendToStaffing(r, sortViewer).ok;
+              // Enroll / Transfer: open the dialog when ANY sort is possible —
+              // at minimum a no-owner send, which the dialog then enforces.
+              return canSortRule(r, sortViewer, { toPipelineId: r.pipelineId, newOwnerId: "" }).ok;
+            }}
+            onOpen={(r) => setSelId(r.id)}
+            onAction={(r, a: SortAction) => {
+              if (a === "staffing") setStaffRec(r);
+              else if (a === "assign") setSortReq({ record: r, mode: "assign" });
+              else setSortReq({ record: r, mode: "sort", target: a });
+            }}
+          />
         ) : view === "list" ? (
           <div className="scroll">
             <table>
@@ -9900,6 +10197,53 @@ export default function Dashboard() {
       </div>
 
       {/* Move dialog (Task 6) */}
+      {/* ═══ ROUND 197 — Sort / Assign, and Send to Staffing needed ═══ */}
+      {sortReq ? (
+        <SortDialog
+          key={`sort-${sortReq.record.id}-${sortReq.mode}-${sortReq.target || ""}`}
+          mode={sortReq.mode}
+          target={sortReq.target}
+          record={sortReq.record}
+          targets={sortTargets.length ? sortTargets : pipelines}
+          homeIds={homePipelineIds}
+          isAdmin={isAdminViewer}
+          viewerId={viewerId || ""}
+          staffing={isAdminViewer ? "admin" : viewerStaffing}
+          stagesByPipeline={stagesByPipeline}
+          users={users}
+          labels={tabLabels}
+          ssoBlob={sso.blob}
+          peerLabel={
+            peerInfo?.configured && canPeerTransferRule(sortReq.record, sortViewer).ok
+              ? peerInfo.label
+              : null
+          }
+          onPeerTransfer={() => {
+            setTransferRec(sortReq.record);
+            setSortReq(null);
+          }}
+          onClose={() => setSortReq(null)}
+          onDone={(rec) => {
+            // The write response is the truth (round's ITEM 4: no re-fetch).
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+          }}
+        />
+      ) : null}
+      {staffRec ? (
+        <ReassignDialog
+          key={`staff-${staffRec.id}`}
+          record={staffRec}
+          ownerName={staffRec.ownerId ? staffRec.rep || userLabel(staffRec.ownerId).split(" — ")[0] : ""}
+          ssoBlob={sso.blob}
+          stageLabel={tabLabels.staffingStage}
+          onClose={() => setStaffRec(null)}
+          onDone={(rec) => {
+            setData((prev) => prev.map((r) => (r.id === rec.id ? rec : r)));
+            setStaffRec(null);
+          }}
+        />
+      ) : null}
+
       {selected && moveOpen ? (
         <MoveDialog
           key={selected.id}
@@ -9982,6 +10326,7 @@ export default function Dashboard() {
         <ReassignDialog
           key={`ra-${masterDrop.record.id}`}
           record={masterDrop.record}
+          stageLabel={tabLabels.staffingStage}
           ownerName={
             masterDrop.record.ownerId
               ? masterDrop.record.rep ||
@@ -10031,7 +10376,7 @@ export default function Dashboard() {
                   {masterDrop.record.oppName ||
                     `${masterDrop.record.first} ${masterDrop.record.last}`.trim()}
                 </b>{" "}
-                over out of <b>Reassign</b>. Choose the <b>pipeline</b>, the{" "}
+                over out of <b>{tabLabels.staffingStage}</b>. Choose the <b>pipeline</b>, the{" "}
                 <b>owner</b> who will work it, and the <b>stage</b> — all three
                 are required. The followers this dashboard added while it waited
                 are removed once it&apos;s claimed.
@@ -10600,6 +10945,34 @@ export default function Dashboard() {
                     ⇄ Move this case
                   </button>
                   )}
+                  {/* 🔴 ROUND 197 — SEND TO STAFFING NEEDED from the panel. Until
+                      now the only ways in were Master's drag (managers) and Move
+                      → Owner "Unassigned", which nobody would guess. Same rule
+                      as the move route: own case, unowned case in your
+                      pipeline, or admin. Not on applicants, not when already
+                      waiting there (Assign shows instead). */}
+                  {!cgData.some((r) => r.id === selected.id) &&
+                  canSendToStaffing(selected, sortViewer).ok ? (
+                    <button
+                      type="button"
+                      className="movebtn"
+                      onClick={() => setStaffRec(selected)}
+                      title="No owner — someone else picks it up"
+                    >
+                      👥 Send to {tabLabels.staffingStage}
+                    </button>
+                  ) : null}
+                  {!cgData.some((r) => r.id === selected.id) &&
+                  isStaffingStage(selected.stage) && !selected.ownerId &&
+                  canAssignStaffing(selected, sortViewer, viewerId || "x").ok ? (
+                    <button
+                      type="button"
+                      className="movebtn"
+                      onClick={() => setSortReq({ record: selected, mode: "assign" })}
+                    >
+                      ✓ Assign
+                    </button>
+                  ) : null}
                   {/* MESSAGE — opens the contact's Conversations thread in GHL.
                       All pipelines, clients and caregivers alike.
 
@@ -10669,20 +11042,25 @@ export default function Dashboard() {
                       // BLANK, reads as "this record has no stage", and would
                       // silently rewrite the stage on the next save. So the
                       // record's current stage is always kept, and disabled.
+                      // 🔴 ROUND 197 — NEW LEAD gets the same treatment: it is
+                      // where leads ARRIVE, so it is never a choice. A case
+                      // that is AT it still shows it (disabled), for the same
+                      // blank-select reason as REASSIGN above.
                       .filter(
-                        (s) =>
-                          !isReassignStage(s.name) || s.id === selected.stageId,
+                        (s) => isPickableStage(s.name) || s.id === selected.stageId,
                       )
                       .map((s) => (
                         <option
                           key={s.id}
                           value={s.id}
-                          disabled={isReassignStage(s.name)}
+                          disabled={!isPickableStage(s.name)}
                         >
-                          {s.name}
+                          {stageDisplay(s.name, tabLabels)}
                           {isReassignStage(s.name)
-                            ? " — waiting to be claimed"
-                            : ""}
+                            ? " — waiting to be assigned"
+                            : isNewLeadStage(s.name)
+                              ? ` — sort it from ${tabLabels.newLeads}`
+                              : ""}
                         </option>
                       ))}
                   </select>
@@ -11565,7 +11943,9 @@ export default function Dashboard() {
                     no link to the other account" teaches people to ignore
                     buttons. `peer.configured` is a flag off the payload — the
                     token itself never leaves the server. */}
-                {peerInfo?.configured ? (
+                {/* ROUND 197 — admins, or the Access tick on a case you own / an
+                    unowned case in your pipeline. The server re-checks. */}
+                {peerInfo?.configured && canPeerTransferRule(selected, sortViewer).ok ? (
                   <button
                     type="button"
                     className="pfdangerbtn"
@@ -11588,6 +11968,20 @@ export default function Dashboard() {
                   <IconExternal />
                   Open in GoHighLevel
                 </a>
+              </div>
+            ) : peerInfo?.configured && canPeerTransferRule(selected, sortViewer).ok ? (
+              // 🔴 ROUND 197 — a NON-admin with the Access tick gets the
+              // transfer button ONLY. The rest of this footer (delete, the
+              // GoHighLevel link) stays admin-only, exactly as round 124 set it.
+              <div className="panelfoot">
+                <button
+                  type="button"
+                  className="pfdangerbtn"
+                  onClick={() => setTransferRec(selected)}
+                  title={`Recreates this person and case on ${peerInfo.label}, then closes this one. Nothing is deleted.`}
+                >
+                  Transfer to {peerInfo.label}
+                </button>
               </div>
             ) : null}
           </>

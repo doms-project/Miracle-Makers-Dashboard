@@ -14,6 +14,8 @@ import {
   userDivisions,
   getUserHomePipelines,
   hasMasterView,
+  staffingLevel,
+  canUsePeerTransfer,
 } from "@/lib/pipelineAccess";
 import { withGrants } from "@/lib/withGrants";
 import { peerConfigured, peerLabel } from "@/lib/peer";
@@ -111,8 +113,10 @@ async function buildResponse(
   // empty the sidebar. ⚠️ AND IT FILTERS NOTHING HERE: `records` and
   // `pipelines` are exactly what they were before the setting existed.
   let pipelineSidebarHidden: Record<string, true> | undefined;
+  let tabLabels: Record<string, string> | undefined;
   try {
     const cfg = await getPipelineConfig();
+    tabLabels = cfg.labels || {};
     pipelineFolders = Object.fromEntries(
       Object.entries(cfg.pipelines).map(([id, e]) => [id, e.folders]),
     );
@@ -144,6 +148,7 @@ async function buildResponse(
     pipelineExclusions = undefined;
     pipelineGroups = undefined;
     pipelineSidebarHidden = undefined;
+    tabLabels = undefined; // the browser falls back to the default names
   }
 
   const meta = {
@@ -167,6 +172,7 @@ async function buildResponse(
     // ⚠️ THE FLAG ONLY. `PEER_PIT` is server-side and never leaves the server —
     // this says whether a token is configured, never what it is.
     peer: { configured: peerConfigured(), label: peerLabel() },
+    tabLabels,
   };
 
   // SSO is enforced only once a Shared Secret is configured. Before that
@@ -186,6 +192,8 @@ async function buildResponse(
         // Open/setup mode behaves like an admin: every selected pipeline is home.
         homePipelineIds: pipelines.map((p) => p.id),
         canSeeMaster: true,
+        staffing: "admin",
+        canPeerTransfer: true,
       },
       ...meta,
     };
@@ -207,7 +215,12 @@ async function buildResponse(
   const session = decryptSso(blob); // throws SsoError on bad secret/blob
   const admin = isAdminSession(session.role, session.type);
   // Division scoping + per-viewer `shared` tagging.
-  const visible = applyAccess(records, { userId: session.userId, isAdmin: admin });
+  // 🔴 ROUND 197 — the Staffing needed gate rides the CLIENT board only.
+  const visible = applyAccess(
+    records,
+    { userId: session.userId, isAdmin: admin },
+    { staffingGate: scope === "client" },
+  );
 
   // ═══ ROUND 155 — THE PIPELINE NAMES ARE SCOPED AT THE PAYLOAD ═════════════
   //
@@ -251,12 +264,24 @@ async function buildResponse(
         Object.entries(stagesByPipeline).filter(([id]) => allowedPipelineIds.has(id)),
       );
 
+  // 🔴 ROUND 197 — WHERE A LEAD MAY BE SENT. A rep may send an unowned lead
+  // to another division's pipeline with no owner (that team sorts it), so the
+  // Sort dialog needs those pipelines' NAMES — and nothing else: no stages, no
+  // records. Only on the client board, and only to someone who holds at least
+  // one pipeline, so a seat with no grants still learns no pipeline names
+  // (round 155's rule).
+  const homeNow = getUserHomePipelines(session.userId);
+  const sortTargets =
+    scope === "client" && (admin || homeNow.size)
+      ? pipelines.map((p) => ({ id: p.id, name: p.name }))
+      : [];
   const body: OpportunitiesResponse = {
     // 🔴 `...meta` FIRST, AND THE SCOPED VALUES AFTER IT. It carries the
     // UNSCOPED `pipelines` and `stagesByPipeline`, so spreading it last — which
     // is what this did — silently overwrote the narrowing below and made the
     // whole change a no-op that would have shipped green.
     ...meta,
+    sortTargets,
     pipelines: scopedPipelines,
     stagesByPipeline: scopedStages,
     pipelinesWithheld,
@@ -283,6 +308,8 @@ async function buildResponse(
       // the carve-out cleanly: someone sees reassigned-out records because they
       // were GRANTED the view, not through an exception in the access rule.
       canSeeMaster: hasMasterView(session.userId, admin),
+      staffing: staffingLevel(session.userId, admin),
+      canPeerTransfer: canUsePeerTransfer(session.userId, admin),
     },
   };
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });

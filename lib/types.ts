@@ -183,6 +183,10 @@ export interface Viewer {
   // ITEM 4 — Master view grant. Not a role: it changes the LAYOUT of records the
   // viewer can already see, never which records those are.
   canSeeMaster?: boolean;
+  /** ROUND 197 — the Staffing needed setting ("admin" for admins). */
+  staffing?: "admin" | "any" | "self" | "off";
+  /** ROUND 197 — may use Transfer to ODP / Miracle Makers (the Access tick). */
+  canPeerTransfer?: boolean;
 }
 
 export interface OpportunitiesResponse {
@@ -251,6 +255,14 @@ export interface OpportunitiesResponse {
    * absent rather than present-and-always-failing.
    */
   peer?: { configured: boolean; label: string };
+  /**
+   * 🔴 ROUND 197 — the STORED tab names (keys as in StoredPipelineConfig.labels).
+   * Raw, so the browser can tell "renamed" from "default" for Reset; it
+   * resolves them through lib/sorting.ts resolveLabels().
+   */
+  tabLabels?: Record<string, string>;
+  /** ROUND 197 — every client pipeline's id + name, for the Sort dialog only. */
+  sortTargets?: { id: string; name: string }[];
 }
 
 export interface ApiError {

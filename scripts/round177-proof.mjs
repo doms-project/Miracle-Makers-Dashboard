@@ -77,8 +77,13 @@ const blob = (userId, role = "user") =>
   }), SECRET).toString();
 
 let n = 0;
+// 🔴 ROUND 197 — CLIENT cases sit at INTAKE here. Since 197, NEW LEAD is sorted
+// on "New Leads (to sort)" and hidden from every client board, and this proof
+// is about the board, the rail and the dropdown — not about sorting (that is
+// round197-proof). Applicants keep NEW LEAD: Recruiting is unchanged.
 const opp = (pipelineId, extra = {}) => ({
-  id: `o${++n}`, name: `Case ${n}`, pipelineId, pipelineStageId: "s1", status: "open",
+  id: `o${++n}`, name: `Case ${n}`, pipelineId,
+  pipelineStageId: CLIENT_IDS.includes(pipelineId) ? "s2" : "s1", status: "open",
   assignedTo: "", followers: [], createdAt: new Date(Date.now() - n * 3600000).toISOString(),
   contact: { id: `c${n}`, firstName: "Case", lastName: `N${n}` }, ...extra,
 });
@@ -387,6 +392,9 @@ const openAs = async (userId, role, { width = W, height = H, failCg = false, hol
   // it; `ctl.mid` records the Refresh button's state half-way through a hold.
   const ctl = { hold: { ...hold }, mid: [] };
   const ctx = await browser.newContext({ viewport: { width, height } });
+  // 🔴 ROUND 197 — open on the BOARD (the combined client view the toolbar's
+  // "All" still gives), not on the New Leads tab the Clients section now starts on.
+  await ctx.addInitScript(() => { try { localStorage.setItem("mm.clientTab", "pipeline"); } catch {} });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log(`  [page error] ${e.message}`));
   // 🔴 EVERY FRAME'S RAIL WIDTH, FROM THE FIRST ANIMATION FRAME — before the
@@ -491,13 +499,23 @@ ok("🔴 …and the client board's cards were already drawn — it was not delay
 
 console.log("\n5c · 🔴 ADDITION 1 — COLLAPSED (THE DEFAULT) HIDES NOTHING THAT MATTERS");
 const marks = await frame.evaluate((p) => {
+  // ⚠️ ROUND 197 — this section reads the COLLAPSED marks, but round 181 made
+  // the rail start EXPANDED and the gold marks are collapsed-only CSS
+  // (globals.css: html:not([data-rail="expanded"])). It failed on v196 for
+  // that reason, unrelated to any later round. Read them in the collapsed
+  // state they are written for, then put the attribute back.
+  const was = document.documentElement.getAttribute("data-rail");
+  document.documentElement.setAttribute("data-rail", "collapsed");
   const q = (id) => document.querySelector(`.railpipe[data-pipeline="${id}"]`);
   const fl = (b) => b && {
     title: b.title, ini: getComputedStyle(b.querySelector(".railpipeini")).color,
     dot: getComputedStyle(b, "::after").content,
   };
-  return { cf: fl(q(p.cf)), gf: fl(q(p.gf)), g1: q(p.g1)?.title, oe: q(p.oe)?.title,
+  const out = { cf: fl(q(p.cf)), gf: fl(q(p.gf)), g1: q(p.g1)?.title, oe: q(p.oe)?.title,
     all: document.querySelector('.railpipe[data-pipeline="all"]')?.title };
+  if (was === null) document.documentElement.removeAttribute("data-rail");
+  else document.documentElement.setAttribute("data-rail", was);
+  return out;
 }, P);
 const GOLD = "rgb(232, 154, 60)";
 ok("🔴 a failed CLIENT pipeline is marked: gold initials and a dot",
@@ -505,7 +523,11 @@ ok("🔴 a failed CLIENT pipeline is marked: gold initials and a dot",
 ok("🔴 a failed CAREGIVER pipeline is marked the same", marks.gf?.ini === GOLD && marks.gf?.dot !== "none", marks.gf);
 ok("…and both titles say \"didn't load\"", /didn't load/.test(marks.cf?.title) && /didn't load/.test(marks.gf?.title), marks);
 ok("🔴 each entry's title carries its count", marks.g1 === "PP Caregiver Applicants — 4" && marks.oe === "OLTL Enrollment — 3", marks);
-ok("🔴 All clients' title carries the hidden-pipelines note (R2)", /includes 4 in pipelines hidden/.test(marks.all || ""), marks.all);
+// ROUND 197 — the All clients ENTRY is gone (replaced by the two sorting tabs),
+// so R2's note has no entry to sit on. R1 below still proves the combined view
+// counts the hidden pipelines ("All (9)").
+ok("ROUND 197 — no All clients entry; New Leads (to sort) is first", marks.all === undefined &&
+  await frame.evaluate(() => document.querySelector('[aria-labelledby="railhead-clients"] .railpipe')?.dataset.pipeline === "newleads"), marks.all);
 
 console.log("\n5d · THE ENTRIES ON SCREEN, AND ONE LIT");
 const onScreen = await frame.evaluate(({ RG }) => ({
@@ -527,8 +549,9 @@ ok("🔴 R1 — the client dropdown shows the sidebar's numbers: hidden ODP 4, O
   clientOpts.includes("ODP Enrollment (4)") && clientOpts.includes("OLTL Enrollment (3)") &&
     clientOpts.includes("All (9)"), clientOpts);
 ok("🔴 …and the failed one reads \"didn't load\", never 0", clientOpts.includes("Lost Clients (didn't load)"), clientOpts);
-ok("🔴 on Clients, exactly one entry is lit across the whole rail — All clients",
-  JSON.stringify(await lit(frame)) === '["all"]', await lit(frame));
+// ROUND 197 — the combined view has no sidebar entry any more, so none is lit.
+ok("🔴 on the combined client board, no entry is lit (it has no entry since round 197)",
+  JSON.stringify(await lit(frame)) === "[]", await lit(frame));
 
 console.log("\n5d2 · ROUND 178 · ITEM 4 — THE CREATED LINE ON CLIENT CARDS");
 /** Every card on the board: its contact id, its created line (or null), whether it shows. */
@@ -695,7 +718,8 @@ ok("ROUND 178 · during a Refresh the H banner's Try again is disabled too",
 ok("🔴 on Recruiting: exactly 2 requests — recruiting first, then clients",
   pressed.length === 2 && pressed[0].cg && !pressed[1].cg, pressed.map((e) => e.cg));
 ok("🔴 …the second started after the first was in", pressed[1]?.start >= (pressed[0]?.end || Infinity), pressed);
-await frame.click(`${CG} .railpipe[data-pipeline="all"]`);
+// ROUND 197 — the Clients section's first entry is now New Leads (to sort).
+await frame.click(`${CG} .railpipe[data-pipeline="newleads"]`);
 await page.waitForTimeout(800);
 mark = A.log.length;
 pressed = await pressAndCheck("on Clients", "cg");

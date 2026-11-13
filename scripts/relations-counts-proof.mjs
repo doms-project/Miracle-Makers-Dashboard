@@ -81,7 +81,7 @@ const fake = http.createServer((req, res) => {
       return send(200, { users: [{ id: "u1", name: "Chris Tester" }] });
     if (u.startsWith("/opportunities/pipelines"))
       return send(200, { pipelines: [{ id: PIPE, name: "OLTL Enrollment",
-        stages: [{ id: "s1", name: "NEW LEAD", position: 0 }] }] });
+        stages: [{ id: "s1", name: "INTAKE", position: 0 }] }] });
     if (u.startsWith(`/locations/${LOC}/customValues`))
       return send(200, { customValues: [{ id: "cv1", name: "MM Pipeline Folders",
         value: JSON.stringify({ seeded: true,
@@ -172,6 +172,10 @@ const browser = await chromium.launch({
   args: ["--no-proxy-server", "--no-sandbox"],
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+// 🔴 ROUND 197 — this proof is about the CLIENT LIST/BOARD, not sorting: its
+// client cases sit at INTAKE (NEW LEAD is sorted on its own tab since 197) and
+// the page opens on the combined board rather than "New Leads (to sort)".
+await page.addInitScript(() => { try { localStorage.setItem("mm.clientTab", "pipeline"); } catch {} });
 page.on("pageerror", (e) => console.log(`  [page error] ${e.message}`));
 
 /** 🔴 THE MEASUREMENT: every batch the browser posted, and what it asked for. */

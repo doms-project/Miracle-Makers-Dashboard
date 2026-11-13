@@ -6,7 +6,7 @@
 //   2. TypeScript                     (npx tsc --noEmit)
 //   3. the production build           (npx next build)
 //   4. the loader sweep
-//   5. the newest round proofs        (183 to 196)
+//   5. the newest round proofs        (183 to 197)
 //   6. the standing regression set    (scripts/regression.txt)
 //
 // Run:   node scripts/predeploy-check.mjs
@@ -177,7 +177,7 @@ const proof = async (name, timeoutMs = 120_000) => {
   );
 };
 
-for (const n of ["round183", "round184", "round185", "round186", "round187", "round188", "round189", "round190", "round191", "round192", "round193", "round194", "round195", "round196"]) await proof(n);
+for (const n of ["round183", "round184", "round185", "round186", "round187", "round188", "round189", "round190", "round191", "round192", "round193", "round194", "round195", "round196", "round197"]) await proof(n);
 
 if (!QUICK) {
   const names = readFileSync("scripts/regression.txt", "utf8")

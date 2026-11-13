@@ -10,6 +10,7 @@ import {
   runWithExtraGrants,
   runWithCaseManagers,
   runWithReferralAccess,
+  runWithStaffing,
 } from "./pipelineAccess";
 
 // Loads the pipeline-access grants ONCE for this request and runs the handler
@@ -39,6 +40,9 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   let caseManagers: Record<string, string[]> = {};
   /** 🔴 ROUND 161 — rides the same single read, for the reason above. */
   let referralAccess: Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }> = {};
+  /** 🔴 ROUND 197 — same single read: Staffing needed levels + transfer ticks. */
+  let staffing: Record<string, "self" | "any"> = {};
+  let peerTransfer: string[] = [];
   let userIds: Set<string> | undefined;
   let pipelineIds: Set<string> | undefined;
 
@@ -49,6 +53,8 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
     masterUsers = v2?.master ?? [];
     caseManagers = v2?.caseManagers ?? {};
     referralAccess = v2?.referralAccess ?? {};
+    staffing = v2?.staffing ?? {};
+    peerTransfer = v2?.peerTransfer ?? [];
   } catch (e) {
     // ITEM 2 root-cause trail. This was a bare `catch {}`: when the custom-value
     // read failed, the request fell back to the env var with NOTHING said. If
@@ -132,6 +138,7 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
         // ⚠️ NOT `buildIdMap` — that builds Map<string, Set<string>> for id
         // lists. These values are objects, so the Map is built directly and the
         // three states survive: absent key, {divisions:[]}, {agency}.
-        runWithReferralAccess(new Map(Object.entries(referralAccess)), fn))),
+        runWithReferralAccess(new Map(Object.entries(referralAccess)), () =>
+          runWithStaffing(new Map(Object.entries(staffing)), new Set(peerTransfer), fn)))),
   );
 }

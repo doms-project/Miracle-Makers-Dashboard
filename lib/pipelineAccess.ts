@@ -1,6 +1,7 @@
 import type { OpportunityRecord } from "./types";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { divisionLabel } from "./division";
+import { staffingGateHides } from "./sorting";
 
 // Task 3 — pipeline access (division scoping).
 //
@@ -128,15 +129,23 @@ export function userDivisions(
 export function applyAccess(
   records: OpportunityRecord[],
   viewer: { userId: string; isAdmin: boolean },
+  // 🔴 ROUND 197 — OPT-IN, and only the CLIENT board passes it. Applicant
+  // pipelines have a REASSIGN stage too (WF-06 creates applicants unowned), and
+  // gating those would empty Recruiting for every recruiter on deploy day.
+  opts?: { staffingGate?: boolean },
 ): OpportunityRecord[] {
   if (viewer.isAdmin) return records.map((r) => ({ ...r, shared: false }));
   const home = getUserHomePipelines(viewer.userId);
+  const level = opts?.staffingGate ? staffingLevel(viewer.userId, false) : "any";
   const out: OpportunityRecord[] = [];
   for (const r of records) {
     const owned =
       r.ownerId === viewer.userId || r.followerIds.includes(viewer.userId);
     const isHome = home.has(r.pipelineId);
     const unassigned = !r.ownerId;
+    // Staffing needed OFF: an unowned REASSIGN case reaches this person only if
+    // they follow it (managers are added as followers while it waits).
+    if (!owned && staffingGateHides(r, { isAdmin: false, staffing: level })) continue;
     if (isHome && (owned || unassigned)) {
       out.push({ ...r, shared: false });
     } else if (owned) {
@@ -202,6 +211,42 @@ export function hasMasterView(userId: string, isAdmin: boolean): boolean {
 // the queue" must union admins the same way, not rely on this array alone.
 export function getMasterUsers(): string[] {
   return [...(masterStore.getStore() ?? [])];
+}
+
+// ═══ ROUND 197 — STAFFING NEEDED + CROSS-ACCOUNT TRANSFER ══════════════════
+//
+// Two more per-user settings from the SAME custom value, held request-scoped
+// exactly like master: never a module variable, never a cached failure. Both
+// are NARROWING-or-granting switches on top of pipeline access — neither can
+// show a record from a pipeline the user does not hold.
+//
+//   staffing      userId → "self" | "any"; absent = off
+//   peerTransfer  userIds allowed to use Transfer to ODP / Miracle Makers
+const staffingStore = new AsyncLocalStorage<{
+  staffing: Map<string, "self" | "any">;
+  peer: Set<string>;
+}>();
+
+export function runWithStaffing<T>(
+  staffing: Map<string, "self" | "any">,
+  peer: Set<string>,
+  fn: () => T,
+): T {
+  return staffingStore.run({ staffing, peer }, fn);
+}
+
+/** "admin" | "any" | "self" | "off" — admins hold it by role, never by entry. */
+export function staffingLevel(
+  userId: string,
+  isAdmin: boolean,
+): "admin" | "any" | "self" | "off" {
+  if (isAdmin) return "admin";
+  return staffingStore.getStore()?.staffing.get(userId) ?? "off";
+}
+
+export function canUsePeerTransfer(userId: string, isAdmin: boolean): boolean {
+  if (isAdmin) return true;
+  return staffingStore.getStore()?.peer.has(userId) ?? false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

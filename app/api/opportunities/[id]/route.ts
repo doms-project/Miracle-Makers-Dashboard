@@ -11,7 +11,9 @@ import {
   explainGhlError,
   toGhlDate,
   GhlError,
+  listPipelines,
 } from "@/lib/ghl";
+import { isNewLeadStage } from "@/lib/sorting";
 import { decryptSso, SsoError, ssoConfigured } from "@/lib/sso";
 import { isAdminSession, canEditRecord, canChangeOwner } from "@/lib/visibility";
 import type { ApiError, EditableFieldDef } from "@/lib/types";
@@ -119,7 +121,7 @@ async function patchHandler(
       session &&
       "assignedTo" in body &&
       (body.assignedTo || "") !== (target.ownerId || "") &&
-      !canChangeOwner(target, session)
+      !canChangeOwner(target, session, body.assignedTo || "")
     ) {
       return NextResponse.json(
         {
@@ -158,6 +160,29 @@ async function patchHandler(
     if (renamedTo) put.name = renamedTo;
     if (typeof body.stageId === "string" && body.stageId)
       put.pipelineStageId = body.stageId;
+    // 🔴 ROUND 197 — NEW LEAD IS THE ARRIVAL STAGE, NOT ONE YOU PICK. The
+    // panel no longer offers it; this holds against a direct PATCH. A case
+    // already AT New lead may be saved with its own stage id (an unchanged
+    // dropdown), which is why the check is "into", not "at".
+    if (
+      typeof body.stageId === "string" &&
+      body.stageId &&
+      body.stageId !== target.stageId &&
+      !isNewLeadStage(target.stage)
+    ) {
+      const dest = (await listPipelines()).find((p) => p.id === target.pipelineId);
+      const name = dest?.stages?.find((st) => st.id === body.stageId)?.name || "";
+      if (isNewLeadStage(name))
+        return NextResponse.json(
+          {
+            error: "New lead can't be chosen.",
+            detail: "New lead is where leads arrive. Pick the stage the case is really at. Nothing has been changed.",
+            refusal: true,
+            status: 400,
+          } as ApiError,
+          { status: 400 },
+        );
+    }
     if ("assignedTo" in body)
       put.assignedTo = body.assignedTo ? body.assignedTo : null;
     if (typeof body.status === "string" && body.status) put.status = body.status;
