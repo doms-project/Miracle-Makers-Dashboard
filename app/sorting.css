@@ -171,3 +171,14 @@
 .pfghlname{font-size:11.5px;color:var(--ink-3);}
 .pfrow .pfname{padding:8px 0 4px;}
 @media (max-width:720px){.pfname label{flex-basis:100%;}.pfname .ihint{margin-left:0;}}
+/* ROUND 198 — renaming in the sidebar (admins, double-click): the sidebar's
+   own colours, white text and a white blinking caret. */
+.railrenamebox{display:flex;flex-direction:column;gap:3px;padding:2px 0 4px;}
+.rail .railrename{width:100%;height:32px;box-sizing:border-box;font:inherit;font-size:12.5px;font-weight:600;
+  color:#fff;caret-color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.45);
+  border-radius:9px;padding:0 10px;outline:0;}
+.rail .railrename:focus{background:rgba(255,255,255,.18);border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.18);}
+.rail .railrename::selection{background:rgba(255,255,255,.35);color:#fff;}
+.rail .railrename:disabled{opacity:.6;}
+.rail .railrenamehint{font-size:10.5px;line-height:1.35;color:rgba(255,255,255,.72);padding:0 4px;}
+.rail .railrenameerr{font-size:11px;line-height:1.35;color:#ffd7a8;padding:0 4px;}

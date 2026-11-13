@@ -2248,6 +2248,7 @@ export default function Dashboard() {
   // one of them would be missed. While a sorting tab is open adminPipeline is
   // simply left alone.
   const [sortTab, setSortTab] = useState<"newleads" | "staffing" | null>("newleads");
+  const [renaming, setRenaming] = useState<{ key: string; value: string; err: string | null; busy: boolean } | null>(null);
   // 🔴 ROUND 198 — THE SORTING TABS HAVE THEIR OWN List / Kanban, AND IT STARTS
   // ON LIST. Sharing `view` with the pipeline boards meant a board chosen on a
   // pipeline tab opened New Leads as a board too. Remembered per browser under
@@ -2270,7 +2271,14 @@ export default function Dashboard() {
   }, []);
   const [viewerStaffing, setViewerStaffing] = useState<"admin" | "any" | "self" | "off">("off");
   const [viewerPeer, setViewerPeer] = useState(false);
-  const [tabLabelsRaw, setTabLabelsRaw] = useState<Record<string, string>>({});
+  const [tabLabelsRaw, setTabLabelsRawState] = useState<Record<string, string>>({});
+  // ROUND 198 — whether the names above came from the server yet; until they
+  // have, the Pipelines screen keeps its own copy instead of an empty one.
+  const [tabLabelsKnown, setTabLabelsKnown] = useState(false);
+  const setTabLabelsRaw = (l: Record<string, string>) => {
+    setTabLabelsRawState(l);
+    setTabLabelsKnown(true);
+  };
   const [sortTargets, setSortTargets] = useState<{ id: string; name: string }[]>([]);
   const [sortReq, setSortReq] = useState<{
     record: OpportunityRecord;
@@ -7095,11 +7103,95 @@ export default function Dashboard() {
     }
   }, [sortTab]);
 
-  // 🔴 ROUND 198 — TABS ARE RENAMED ON THE PIPELINES SCREEN, not by
-  // double-clicking the sidebar (round 197). The owner asked for it there,
-  // beside the pipeline it names; components/PipelineAdmin.tsx saves through
-  // the same admin-only "rename-tab" action and hands the result back via
-  // onLabelsSaved below, so the sidebar updates without a reload.
+  // 🔴 ROUND 198 — TWO WAYS TO RENAME, ONE STORED NAME. Double-click a Clients
+  // entry in the sidebar (admins) — the only way to reach "New Leads", which is
+  // not a pipeline — or use the Pipelines screen (components/PipelineAdmin.tsx).
+  // Both save through the same admin-only "rename-tab" action and both read
+  // `tabLabelsRaw`, so a name changed in one shows in the other at once.
+  // ═══ ROUND 197 — rename a tab (admins, double-click) ═════════════════════
+  const startRename = (key: string, current: string) =>
+    setRenaming({ key, value: current, err: null, busy: false });
+  const saveRename = async (key: string, value: string) => {
+    const taken = [
+      ...(key === "newLeads" ? [] : [tabLabels.newLeads]),
+      ...(key === "staffingTab" ? [] : [tabLabels.staffingTab]),
+      ...sidebar.entries
+        .filter((e) => `pipeline:${e.id}` !== key)
+        .map((e) => pipeDisplay(e.id, e.name)),
+    ];
+    const problem = labelProblem(value, taken);
+    if (problem) {
+      setRenaming((r) => (r ? { ...r, err: problem } : r));
+      return;
+    }
+    setRenaming((r) => (r ? { ...r, busy: true, err: null } : r));
+    try {
+      const res = await fetch("/api/admin/pipelines", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(sso.blob ? { "x-ghl-sso-key": sso.blob } : {}),
+        },
+        body: JSON.stringify({ ssoKey: sso.blob ?? undefined, action: "rename-tab", key, name: value }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw apiError(res, j);
+      if (j.config?.labels) setTabLabelsRaw(j.config.labels);
+      setRenaming(null);
+    } catch (e) {
+      setRenaming((r) => (r ? { ...r, busy: false, err: e instanceof Error ? e.message : String(e) } : r));
+    }
+  };
+  // Esc ALWAYS CANCELS, wherever the focus is: after a double-click the focus
+  // can still be on the entry underneath, and a listener on the box alone then
+  // never hears it. A capture listener on the document, live only while a
+  // name is being edited, answers first and keeps the press from closing the
+  // record panel too.
+  useEffect(() => {
+    if (!renaming) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      setRenaming(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [renaming]);
+  const renameBox = (key: string, current: string) => (
+    <div className="railrenamebox">
+      <input
+        className="railrename"
+        // Focus AND select on open — autoFocus alone lost the race with the
+        // double-click that opened it.
+        ref={(el) => {
+          if (el && !el.dataset.focused) {
+            el.dataset.focused = "1";
+            requestAnimationFrame(() => {
+              el.focus();
+              el.select();
+            });
+          }
+        }}
+        maxLength={40}
+        defaultValue={current}
+        disabled={renaming?.busy}
+        spellCheck={false}
+        aria-label="New tab name (empty resets to the default)"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void saveRename(key, (e.target as HTMLInputElement).value);
+          }
+        }}
+        onBlur={(e) => {
+          if (!renaming?.busy && (e.target as HTMLInputElement).value.trim() === current.trim()) setRenaming(null);
+        }}
+      />
+      {renaming?.err ? <div className="railrenameerr">{renaming.err}</div> : null}
+      <div className="railrenamehint">Enter saves · Esc cancels · empty = default name</div>
+    </div>
+  );
   /**
    * pipelineId → records held in this tab, across BOTH families.
    *
@@ -7206,16 +7298,22 @@ export default function Dashboard() {
               ? ([["staffing", "staffingTab", tabLabels.staffingTab, sortCounts.staffing, "SN"]] as const)
               : []),
           ] as const).map(([kind, key, name, count, ini]) =>
-            (
+            renaming?.key === key ? (
+              <div key={kind}>{renameBox(key, name)}</div>
+            ) : (
               <button
                 key={kind}
                 type="button"
                 className={sortEntryActive(kind) ? "railpipe active" : "railpipe"}
                 data-pipeline={kind}
                 aria-current={sortEntryActive(kind) ? "page" : undefined}
-                title={sidebarLoading ? name : `${name} — ${count}`}
+                title={
+                  (sidebarLoading ? name : `${name} — ${count}`) +
+                  (isAdminViewer ? " · double-click to rename" : "")
+                }
                 aria-label={sidebarLoading ? name : `${name} (${count})`}
                 onClick={() => pickSortTab(kind)}
+                onDoubleClick={isAdminViewer ? () => startRename(key, name) : undefined}
               >
                 <span className="railpipeini" aria-hidden="true">
                   {ini}
@@ -7284,7 +7382,9 @@ export default function Dashboard() {
           {sidebarLoading
             ? [0, 1, 2].map((i) => <div key={i} className="railskel" aria-hidden="true" />)
             : sidebar.entries.map((e) =>
-                (
+                renaming?.key === `pipeline:${e.id}` ? (
+                  <div key={e.id}>{renameBox(`pipeline:${e.id}`, pipeDisplay(e.id, e.name))}</div>
+                ) : (
                 <button
                   key={e.id}
                   type="button"
@@ -7299,6 +7399,9 @@ export default function Dashboard() {
                     e.failed ? `${e.name} (didn't load)` : `${e.name} (${e.count})`
                   }
                   onClick={() => pickEntry(e.id)}
+                  onDoubleClick={
+                    isAdminViewer ? () => startRename(`pipeline:${e.id}`, pipeDisplay(e.id, e.name)) : undefined
+                  }
                 >
                   <span className="railpipeini" aria-hidden="true">
                     {e.initials}
@@ -8994,6 +9097,7 @@ export default function Dashboard() {
                 // ITEM S, now carrying item Q's exclusions too — a tick and an
                 // untick both have to reach the record panel without a reload.
                 // ROUND 198 — tab names are edited on this screen now.
+                labels={tabLabelsKnown ? tabLabelsRaw : undefined}
                 onLabelsSaved={(labels) => setTabLabelsRaw(labels)}
                 onConfigSaved={(folders, exclusions, sidebarHidden) => {
                   setPipelineFolders(folders);

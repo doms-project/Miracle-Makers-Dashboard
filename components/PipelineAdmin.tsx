@@ -213,6 +213,7 @@ export default function PipelineAdmin({
   countFieldValues,
   onConfigSaved,
   onLabelsSaved,
+  labels: liveLabels,
 }: {
   ssoBlob: string | null;
   /**
@@ -226,6 +227,8 @@ export default function PipelineAdmin({
   recordCounts: Record<string, number>;
   /** ROUND 198 — a tab name changed here; the sidebar takes it without a reload. */
   onLabelsSaved?: (labels: Record<string, string>) => void;
+  /** ROUND 198 — the names the page holds now (a sidebar double-click changes them too). */
+  labels?: Record<string, string>;
   /**
    * 🔴 ITEM S — TELL THE REST OF THE APP. Ticking a section saved correctly but
    * the record panel's "+ Add a section (N available)" stayed stale until a
@@ -1444,7 +1447,7 @@ export default function PipelineAdmin({
         <NameEditor
           id="pfname-newLeads"
           label="New leads tab"
-          saved={data.config.labels?.newLeads || ""}
+          saved={(liveLabels ?? data.config.labels)?.newLeads || ""}
           fallback={DEFAULT_LABELS.newLeads}
           busy={busy}
           onSave={(n) => renameTab("newLeads", n, "sorting-tabs")}
@@ -1453,7 +1456,7 @@ export default function PipelineAdmin({
         <NameEditor
           id="pfname-staffingTab"
           label="Staffing tab"
-          saved={data.config.labels?.staffingTab || ""}
+          saved={(liveLabels ?? data.config.labels)?.staffingTab || ""}
           fallback={DEFAULT_LABELS.staffingTab}
           busy={busy}
           onSave={(n) => renameTab("staffingTab", n, "sorting-tabs")}
@@ -1462,7 +1465,7 @@ export default function PipelineAdmin({
         <NameEditor
           id="pfname-staffingStage"
           label="REASSIGN stage shows as"
-          saved={data.config.labels?.staffingStage || ""}
+          saved={(liveLabels ?? data.config.labels)?.staffingStage || ""}
           fallback={DEFAULT_LABELS.staffingStage}
           busy={busy}
           onSave={(n) => renameTab("staffingStage", n, "sorting-tabs")}
@@ -1487,8 +1490,8 @@ export default function PipelineAdmin({
               }}
             >
               <summary>
-                <b>{data.config.labels?.[`pipeline:${p.id}`] || p.name}</b>
-                {data.config.labels?.[`pipeline:${p.id}`] ? (
+                <b>{(liveLabels ?? data.config.labels)?.[`pipeline:${p.id}`] || p.name}</b>
+                {(liveLabels ?? data.config.labels)?.[`pipeline:${p.id}`] ? (
                   <span className="pfghlname" title="Its name in GoHighLevel — unchanged">
                     {p.name} in GoHighLevel
                   </span>
@@ -1671,7 +1674,7 @@ export default function PipelineAdmin({
                   <NameEditor
                     id={`pfname-${p.id}`}
                     label="Name in the sidebar"
-                    saved={data.config.labels?.[`pipeline:${p.id}`] || ""}
+                    saved={(liveLabels ?? data.config.labels)?.[`pipeline:${p.id}`] || ""}
                     fallback={p.name}
                     busy={busy}
                     onSave={(n) => renameTab(`pipeline:${p.id}`, n, p.id)}

@@ -776,11 +776,24 @@ const r6 = await railState();
 ok("…and back on New Leads (to sort), it is the one lit entry",
   JSON.stringify(r6.active) === '["New Leads (to sort)"]', r6.active);
 
-// ═══ ROUND 198 — TABS ARE RENAMED ON THE PIPELINES SCREEN, NOT HERE ══════
+// ═══ ROUND 198 — RENAME IN THE SIDEBAR: focused, dark box, white caret, Esc ═══
 await frame.dblclick('.railpipe[data-pipeline="newleads"]');
-await page.waitForTimeout(300);
-ok("ROUND 198 — double-clicking a sidebar tab no longer opens a rename box",
-  await frame.evaluate(() => !document.querySelector(".rail input") && !!document.querySelector('.railpipe[data-pipeline="newleads"]')));
+await page.waitForTimeout(400);
+const rn = await frame.evaluate(() => {
+  const el = document.querySelector(".rail .railrename");
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  return { focused: document.activeElement === el, caret: cs.caretColor, color: cs.color, bg: cs.backgroundColor,
+    selected: el.selectionStart === 0 && el.selectionEnd === el.value.length };
+});
+ok("ROUND 198 — double-click opens the box WITH the focus, text selected", !!rn && rn.focused && rn.selected, rn);
+ok("ROUND 198 — white text and a white caret on the sidebar's colour (not a white box)",
+  !!rn && rn.caret === "rgb(255, 255, 255)" && rn.color === "rgb(255, 255, 255)" && rn.bg !== "rgb(255, 255, 255)", rn);
+await frame.evaluate(() => document.activeElement?.blur());
+await page.keyboard.press("Escape");
+await page.waitForTimeout(250);
+ok("ROUND 198 — Esc cancels even when the box has lost focus",
+  await frame.evaluate(() => !document.querySelector(".rail .railrename") && !!document.querySelector('.railpipe[data-pipeline="newleads"]')));
 
 // ═══ ROUND 198 — A PIPELINE TAB WITH NOTHING ON IT, AND THE WAITING PILL ══
 await frame.click(`.railpipe[data-pipeline="${P.oe}"]`);

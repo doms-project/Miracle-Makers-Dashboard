@@ -101,15 +101,21 @@ ok("no + Add Lead on Staffing needed lead", /!\(sortingOn && sortTab === "staffi
 ok("an empty pipeline board: one message, no columns", /!boardFocused\.length \? \(\s*<div className="board boardempty">/.test(page));
 ok("waiting leads: a pill with a pulsing dot", /className="sortwait new"/.test(page) && /<i className="pulse"/.test(page));
 
-console.log("6b · Tab names are edited on the Pipelines screen, not in the sidebar");
+console.log("6b · Tab names: double-click in the sidebar AND the Pipelines screen");
 const pa = read("../components/PipelineAdmin.tsx");
-ok("🔴 the sidebar has no double-click rename any more", !/onDoubleClick/.test(page) && !/renameBox|startRename|saveRename/.test(page));
+ok("double-click renames a sidebar tab (admins only) — the only way to reach New Leads from the sidebar",
+  (page.match(/onDoubleClick=\{\s*isAdminViewer \?/g) || []).length === 2 && /startRename\(key, name\)/.test(page));
+ok("rename: Esc cancels from anywhere (document, capture phase, only while renaming)",
+  /if \(!renaming\) return;[\s\S]{0,260}document\.addEventListener\("keydown", onKey, true\)/.test(page));
+ok("rename: focus and select on open", /el\.focus\(\);\s*el\.select\(\);/.test(page));
+ok("one stored name: the Pipelines screen reads the page's names once they are known",
+  /labels=\{tabLabelsKnown \? tabLabelsRaw : undefined\}/.test(page) && /\(liveLabels \?\? data\.config\.labels\)/.test(pa));
 ok("the Pipelines screen names the two sorting tabs and the stage label",
   ['"newLeads"', '"staffingTab"', '"staffingStage"'].every((k) => pa.includes(`renameTab(${k}`)));
 ok("each CLIENT pipeline's row has \"Name in the sidebar\"",
   /entry\?\.scope === "client" \? \(\s*<NameEditor[\s\S]{0,120}label="Name in the sidebar"/.test(pa) && /renameTab\(`pipeline:\$\{p\.id\}`, n, p\.id\)/.test(pa));
 ok("the row shows the sidebar name, and the GoHighLevel name beside it when renamed",
-  /<b>\{data\.config\.labels\?\.\[`pipeline:\$\{p\.id\}`\] \|\| p\.name\}<\/b>/.test(pa) && /in GoHighLevel/.test(pa));
+  /<b>\{\(liveLabels \?\? data\.config\.labels\)\?\.\[`pipeline:\$\{p\.id\}`\] \|\| p\.name\}<\/b>/.test(pa) && /in GoHighLevel/.test(pa));
 ok("Enter saves, Esc puts back what is saved, typing the default clears the override",
   /e\.key === "Enter"[\s\S]{0,80}void save\(\)/.test(pa) && /e\.key === "Escape"[\s\S]{0,120}setV\(current\)/.test(pa) && /v\.trim\(\) === fallback\.trim\(\) \? "" : v/.test(pa));
 ok("saved through the same admin-only action, and handed to the sidebar without a reload",
@@ -123,6 +129,7 @@ const gcss = read("../app/globals.css");
 ok("Kanban column = every other board's (.col 264px)", /\.col\{flex:0 0 264px/.test(gcss) && /\.sortlane\{flex:0 0 264px;width:264px/.test(css));
 ok("the search box is a normal width (340px basis)", /\.sortsearchwrap\{flex:0 1 340px/.test(css));
 ok("the name fields on the Pipelines screen are styled (.pfname)", /\.pfname input\{/.test(css));
+ok("sidebar rename box: the sidebar's colours, white text and a white caret", /\.rail \.railrename\{[^}]*color:#fff;caret-color:#fff/.test(css));
 ok("bigger labels: title 16px, body 13px", /\.sorttitle h2\{[^}]*font-size:16px/.test(css) && /\.sortrow\{[^}]*font-size:13px/.test(css));
 ok("the pulse respects reduced motion", /prefers-reduced-motion:reduce\)\{\.sortwait \.pulse::after\{animation:none;\}/.test(css));
 const font = read("../lib/font.ts");

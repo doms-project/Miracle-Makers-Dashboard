@@ -922,9 +922,19 @@ ok("ROUND 198 — …the sidebar and the row both read it, with the GoHighLevel 
   (await sideName(P.oe)) === "OLTL Enrolment" &&
     (await PA.frame.evaluate((i) => document.querySelector(`.pfrow:has(#pfside-${i}) > summary`)?.textContent || "", P.oe)).includes("OLTL Enrollment in GoHighLevel"),
   await sideName(P.oe));
-ok("ROUND 198 — double-clicking the sidebar entry opens no rename box",
-  await (async () => { await PA.frame.dblclick(`[aria-labelledby="railhead-clients"] .railpipe[data-pipeline="${P.oe}"]`); await PA.page.waitForTimeout(300);
-    return !(await PA.frame.$(".rail input")); })());
+await PA.frame.dblclick(`[aria-labelledby="railhead-clients"] .railpipe[data-pipeline="newleads"]`);
+await PA.page.waitForTimeout(400);
+ok("ROUND 198 — double-clicking New Leads in the sidebar opens its rename box (it is not a pipeline row)",
+  !!(await PA.frame.$(".rail .railrename")));
+await PA.frame.fill(".rail .railrename", "Leads to sort");
+await PA.frame.press(".rail .railrename", "Enter");
+await PA.page.waitForTimeout(2000);
+// (A double-click's first click opens New Leads, so go back to the screen.)
+await PA.frame.click('.railsec:has-text("Pipelines")');
+await PA.frame.waitForSelector("#pfname-newLeads", { timeout: 30000 });
+ok("ROUND 198 — a sidebar rename is stored and shows on the Pipelines screen",
+  labelsNow().newLeads === "Leads to sort" && (await PA.frame.inputValue("#pfname-newLeads")) === "Leads to sort",
+  { stored: labelsNow().newLeads, field: await PA.frame.inputValue("#pfname-newLeads") });
 await PA.ctx.close();
 
 await browser.close();
