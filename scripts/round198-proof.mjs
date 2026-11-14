@@ -127,6 +127,8 @@ console.log("7 · Styles and font");
 const css = read("../app/sorting.css");
 const gcss = read("../app/globals.css");
 ok("Kanban column = every other board's (.col 264px)", /\.col\{flex:0 0 264px/.test(gcss) && /\.sortlane\{flex:0 0 264px;width:264px/.test(css));
+ok("🔴 the tab takes the remaining height and owns the scrollbar; its parts never shrink (the list was clipped)",
+  /\.sorttab\{flex:1 1 auto;[^}]*min-height:0;overflow-y:auto/.test(css) && /\.sorttab > \*\{flex-shrink:0;\}/.test(css));
 ok("the search box is a normal width (340px basis)", /\.sortsearchwrap\{flex:0 1 340px/.test(css));
 ok("the name fields on the Pipelines screen are styled (.pfname)", /\.pfname input\{/.test(css));
 ok("sidebar rename box: the sidebar's colours, white text and a white caret", /\.rail \.railrename\{[^}]*color:#fff;caret-color:#fff/.test(css));

@@ -6,7 +6,13 @@
    Bigger, plainer labels (13px body, 15px title); lighter weights (500/600,
    no 800s); a search box of normal width; columns the width of every other
    board's (.col = 264px). */
-.sorttab{display:flex;flex-direction:column;gap:14px;min-height:0;overflow:auto;padding:18px 22px 28px;}
+/* 🔴 ROUND 198 — IT MUST SCROLL. .main is a flex column with overflow:hidden,
+   so the tab has to TAKE the remaining height (flex:1 + min-height:0) to own a
+   scrollbar; and its children must not shrink — the list box has
+   overflow:hidden (for its rounded corners), so a shrinking list was clipped
+   to the screen and the rows below simply disappeared. */
+.sorttab{flex:1 1 auto;display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 22px 28px;}
+.sorttab > *{flex-shrink:0;}
 .sorthead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px 24px;flex-wrap:wrap;}
 .sorttitle h2{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em;color:var(--ink);}
 .sorttitle p{margin:4px 0 0;font-size:13px;line-height:1.5;color:var(--ink-2);max-width:620px;}

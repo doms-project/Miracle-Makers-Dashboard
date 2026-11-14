@@ -776,6 +776,28 @@ const r6 = await railState();
 ok("…and back on New Leads (to sort), it is the one lit entry",
   JSON.stringify(r6.active) === '["New Leads (to sort)"]', r6.active);
 
+// ═══ ROUND 198 — THE NEW LEADS LIST SCROLLS (on a short screen too) ══════════
+await page.setViewportSize({ width: W, height: 560 });
+await frame.click('.railpipe[data-pipeline="newleads"]');
+await page.waitForTimeout(500);
+const sc = await frame.evaluate(async () => {
+  const tab = document.querySelector(".sorttab");
+  const rows = [...document.querySelectorAll(".sorttab .sortrow:not(.head)")];
+  const last = rows[rows.length - 1];
+  const before = { scrollH: tab.scrollHeight, clientH: tab.clientHeight, listH: document.querySelector(".sortlistview")?.getBoundingClientRect().height };
+  tab.scrollTop = tab.scrollHeight;
+  await new Promise((r) => setTimeout(r, 150));
+  const tb = tab.getBoundingClientRect(), lb = last.getBoundingClientRect();
+  return { ...before, rows: rows.length, scrolled: tab.scrollTop, lastVisible: lb.bottom <= tb.bottom + 1 && lb.top >= tb.top - 1,
+    listFull: Math.round(document.querySelector(".sortlistview").scrollHeight) <= Math.round(document.querySelector(".sortlistview").getBoundingClientRect().height) + 1 };
+});
+ok("ROUND 198 — on a short screen the New Leads tab owns a scrollbar (taller than it shows)", sc.scrollH > sc.clientH && sc.scrolled > 0, sc);
+ok("ROUND 198 — …the list is never squashed and clipped (all its rows are in it)", sc.listFull, sc);
+ok("ROUND 198 — …and scrolling reaches the LAST lead", sc.lastVisible && sc.rows > 5, sc);
+await frame.evaluate(() => { document.querySelector(".sorttab").scrollTop = 0; });
+await page.setViewportSize({ width: W, height: H });
+await page.waitForTimeout(300);
+
 // ═══ ROUND 198 — RENAME IN THE SIDEBAR: focused, dark box, white caret, Esc ═══
 await frame.dblclick('.railpipe[data-pipeline="newleads"]');
 await page.waitForTimeout(400);
