@@ -8,14 +8,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Vercel serverless functions reject request bodies larger than ~4.5 MB. We cap
-// below that so uploads fail fast with a clear message instead of a platform
-// 413. Bump MAX_UPLOAD_MB only if the deployment target allows larger bodies.
 const MAX_UPLOAD_MB = 4;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
-// Admin-only. Reps must not be able to call this even though the button is
-// hidden for them — the gate is here, server-side.
 export async function POST(request: Request) {
   try {
     if (ssoConfigured()) {
@@ -54,11 +49,6 @@ export async function POST(request: Request) {
         { status: 413 },
       );
 
-    // ITEM 6c — the destination folder, sent by the picker beside the button.
-    // It is VALIDATED against the live folder list rather than passed straight
-    // through as `parentId`: an unchecked value would let any id at all become
-    // the upload target, including a folder belonging to another part of the
-    // shared media library. An empty value keeps the legacy env-folder path.
     const folderId = String(form?.get("folderId") || "").trim();
     if (folderId) {
       const known = await listMediaFolders();

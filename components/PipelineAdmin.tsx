@@ -15,12 +15,6 @@ import type {
 import { withExclusion } from "@/lib/pipelineConfig";
 import { resolveLabels, DEFAULT_LABELS, LABEL_MAX } from "@/lib/sorting";
 
-/**
- * 🔴 ROUND 198 — ONE NAME, EDITED IN PLACE. Used for the two sorting tabs, the
- * "Staffing needed" stage label and every client pipeline's sidebar name.
- * Enter or Save writes it; Esc puts back what is saved; "Use the default"
- * clears the override. Display only — nothing is renamed in GoHighLevel.
- */
 function NameEditor({
   id,
   label,
@@ -32,9 +26,9 @@ function NameEditor({
 }: {
   id: string;
   label: string;
-  /** The override stored now ("" = none). */
+
   saved: string;
-  /** What shows when there is no override. */
+
   fallback: string;
   busy: boolean;
   onSave: (name: string) => Promise<boolean>;
@@ -46,7 +40,7 @@ function NameEditor({
   const dirty = v.trim() !== current.trim();
   const save = async () => {
     if (!dirty || busy) return;
-    // Typing the default back is the same as clearing the override.
+
     await onSave(v.trim() === fallback.trim() ? "" : v);
   };
   return (
@@ -84,19 +78,6 @@ function NameEditor({
   );
 }
 
-/**
- * 🔴 ITEM K — SCOPE IS "WHICH PICKER LISTS THIS PIPELINE", AND THE SCREEN NOW
- * SAYS SO.
- *
- * It read "Scope · Decides which section its records appear in", which is the
- * thing it is NOT: 115b established that `groupFieldsForPipeline` never consults
- * scope, so records render identically either way. What it decides is whether
- * the Clients board's picker or the Caregivers board's picker offers it.
- *
- * ⚠️ AND "neither" IS NOT A THIRD BOARD. It is an absence — for a pipeline read
- * by its own section, like Events, which the Referrals screen resolves by name
- * and nothing else ever browses.
- */
 const SCOPE_CHOICES: { value: PipelineScope; label: string; hint: string }[] = [
   {
     value: "client",
@@ -119,9 +100,9 @@ interface Section {
   key: string;
   id: string;
   label: string;
-  /** False when the label is a guess — the row then shows the id too. */
+
   named: boolean;
-  /** `dataType` is what the expanded panel renders beside each name. */
+
   fields: { id: string; name: string; dataType?: string }[];
 }
 interface PipelineRow {
@@ -144,11 +125,11 @@ interface Payload {
   known: KnownField[];
   sharedKey: string;
   unconfiguredFolders: Unconfigured[];
-  /** Folders withheld from the checklist because ticking them does nothing. */
+
   inertSections?: Unconfigured[];
-  /** ITEM O — the contact-side table, read-only, with BOTH names. */
+
   contactSections?: {
-    /** The id in use on THIS account — "" when the section resolves to nothing. */
+
     resolvedId?: string;
     id: string;
     ghlName: string;
@@ -157,37 +138,21 @@ interface Payload {
     renamed: boolean;
     fields: { id: string; name: string; dataType?: string }[];
   }[];
-  /** ITEM O — contact folders GoHighLevel has that this app has never heard of. */
+
   unknownContactFolders?: { id: string; fields: { id: string; name: string }[] }[];
-  /** 🔴 ROUND 130 — this code's folder ids describe a different account. */
+
   builtInFoldersForeign?: boolean;
 }
 
-/** What `countFieldValues` gives back. null means "I could not count". */
 interface ValueCount {
   perField: Record<string, number>;
-  /** DISTINCT records holding a value in at least one of the fields asked for. */
+
   records: number;
   scanned: number;
 }
 
-// ⚠️ SUGGEST TWO, DO NOT IMPOSE. Every pipeline on this account starts with an
-// intake stage and ends in a terminal one, but OLTL Enrollment has 13 stages and
-// PP Caregiver Applicants has 7. There is no standard shape, so the form opens
-// with two rows and an Add button rather than a template.
 const SUGGESTED_STAGES = ["NEW LEAD", "LOST"];
 
-/**
- * 🔴 ONE VOCABULARY FOR ONE THING — round 115b, item I.
- *
- * The expanded section panel and the create-field form both name a field's
- * type, and they must not name it two ways. "Choose one" vs "Dropdown — pick
- * one" is exactly how a screen ends up describing the same control twice, and
- * the create form's wording is the one a person has already read.
- *
- * ⚠️ An unknown key is returned AS GoHighLevel SENT IT rather than mapped to
- * "Other": a type this app has never met is something to notice, not to hide.
- */
 export function typeLabel(dataType?: string): string {
   const k = String(dataType || "").toUpperCase();
   return DATA_TYPES.find((d) => d.key === k)?.label || dataType || "—";
@@ -199,8 +164,7 @@ const DATA_TYPES = [
   { key: "NUMERICAL", label: "Number" },
   { key: "MONETORY", label: "Money" },
   { key: "DATE", label: "Date" },
-  // ⚠️ NAME THE CONTROL, NOT THE ABSTRACTION. "Choose one" / "Choose several"
-  // describe a rule; they do not tell an admin what will appear on the record.
+
   { key: "SINGLE_OPTIONS", label: "Dropdown — pick one" },
   { key: "MULTIPLE_OPTIONS", label: "Dropdown — pick several" },
   { key: "CHECKBOX", label: "Tickbox — yes or no" },
@@ -216,63 +180,31 @@ export default function PipelineAdmin({
   labels: liveLabels,
 }: {
   ssoBlob: string | null;
-  /**
-   * pipelineId → records currently loaded for it.
-   *
-   * 🔴 FROM THE BROWSER'S OWN PAYLOAD, not a new request. The admin route would
-   * need one opportunity search per pipeline to answer this, which is six calls
-   * against a 100-per-10-seconds budget to render a sentence. page.tsx already
-   * has the records.
-   */
+
   recordCounts: Record<string, number>;
-  /** ROUND 198 — a tab name changed here; the sidebar takes it without a reload. */
+
   onLabelsSaved?: (labels: Record<string, string>) => void;
-  /** ROUND 198 — the names the page holds now (a sidebar double-click changes them too). */
+
   labels?: Record<string, string>;
-  /**
-   * 🔴 ITEM S — TELL THE REST OF THE APP. Ticking a section saved correctly but
-   * the record panel's "+ Add a section (N available)" stayed stale until a
-   * page reload, because the panel reads `pipelineFolders` from the
-   * /api/opportunities payload and nothing told it the config had changed.
-   * The save already returns the new config; this just hands it over, so no
-   * extra request is made to learn what we were just told.
-   */
+
   onConfigSaved?: (
     folders: Record<string, string[]>,
     exclusions: Record<string, string[]>,
-    /** ROUND 176 — the pipelines with no Clients-sidebar tab, built like the payload's map. */
+
     sidebarHidden: Record<string, true>,
   ) => void;
-  /**
-   * 🔴 ITEM T — how many records in this pipeline hold a value in these fields.
-   *
-   * ⚠️ CALLED ON DEMAND, NEVER ON LOAD. Expanding a section asks; opening an
-   * untick confirmation asks. Nothing sweeps 596 records to render a screen
-   * nobody has interacted with.
-   *
-   * ⚠️ AND null MEANS "I CANNOT SAY", not zero — same contract as
-   * `countsComplete` above, for the same lazily-loaded applicant payload.
-   */
+
   countFieldValues?: (pipelineId: string, fieldIds: string[]) => ValueCount | null;
-  /**
-   * ⚠️ FALSE MEANS "I CANNOT SAY", NOT "ZERO". The applicant payload loads
-   * lazily, so before the Caregivers section has been opened a caregiver
-   * pipeline's count is unknown — and a confirm dialog that says "0 records
-   * move" when it means "I did not look" is worse than one that says nothing.
-   */
+
   countsComplete: boolean;
 }) {
-  /** The pipeline whose scope change is awaiting confirmation. */
+
   const [scopeAsk, setScopeAsk] = useState<{
     p: PipelineRow;
     entry: StoredPipelineEntry;
     next: PipelineScope;
   } | null>(null);
-  /**
-   * 🔴 ITEM T — an untick that would hide filled-in data, awaiting an answer.
-   * `field` for one field, `section` for a whole folder. Held with the count
-   * already taken, so the dialog never recomputes while it is open.
-   */
+
   const [hideAsk, setHideAsk] = useState<{
     p: PipelineRow;
     entry: StoredPipelineEntry;
@@ -281,63 +213,29 @@ export default function PipelineAdmin({
     count: ValueCount | null;
     apply: () => void;
   } | null>(null);
-  /** ITEM L — the pipeline awaiting a delete confirmation. */
+
   const [deleteAsk, setDeleteAsk] = useState<PipelineRow | null>(null);
-  /**
-   * 🔴 ITEM L — COUNTS ASKED OF THE SERVER, pipelineId → number | null.
-   *
-   * ⚠️ `recordCounts` CANNOT ANSWER THIS AND IT TOOK A MEASUREMENT TO SEE IT.
-   * It is built by counting the records in the loaded payloads, so a pipeline
-   * with NO records is simply absent from it — and absent already means "not
-   * loaded". The two pipelines item L exists to remove are unconfigured, in no
-   * board's payload, so the browser will never hold a count for either.
-   *
-   * `null` is a recorded "I could not count", and is NOT retried on every
-   * render — a value being present is what stops the request repeating.
-   */
+
   const [serverCounts, setServerCounts] = useState<Record<string, number | null>>({});
   const counting = useRef<Set<string>>(new Set());
   const [data, setData] = useState<Payload | null>(null);
   const [loadErr, setLoadErr] = useState<unknown>(null);
-  /** Which load() is current — see the sequence guard inside it. */
+
   const loadSeq = useRef(0);
   const [busy, setBusy] = useState(false);
-  /**
-   * 🔴 WHICH ACTION IS IN FLIGHT — round 115c, item 1.
-   *
-   * `busy` is shared by every write on this screen, and the Create button read
-   * it directly: `{busy ? "Creating…" : "Create pipeline"}`. So ticking a
-   * section on an ALREADY CONFIGURED pipeline relabelled the create button and
-   * put its outcome in the create form's status line — an action reporting
-   * itself in the wrong half of the screen.
-   */
+
   const [busyAction, setBusyAction] = useState("");
   const [saveErr, setSaveErr] = useState<unknown>(null);
   const [saved, setSaved] = useState("");
-  /**
-   * 🔴 AND A PER-ROW OUTCOME — round 115c, item 1, and round 94 item 8 before
-   * it. "It flashed and cleared" is an error nobody can read. A tick's result
-   * now appears IN ITS OWN ROW and stays there until the next action on that
-   * row, so a failure can be read, quoted, and reported.
-   */
+
   const [rowMsg, setRowMsg] = useState<{
     id: string;
     err?: unknown;
     ok?: string;
-    /**
-     * 🔴 A REFUSAL — round 119, item 3. The app declined ON PURPOSE and the
-     * message IS the instruction, so it is shown directly, in amber, with no
-     * "Something went wrong" and no details toggle. A FAULT keeps the
-     * ErrorMessage wrapper, which is right for something unexpected.
-     */
+
     refusal?: string;
   } | null>(null);
-  /**
-   * 🔴 WHICH ROW IS WRITING — round 119, item 4. `busy` is global, so nothing
-   * on screen said WHERE the work was happening, and a tick was silent while it
-   * saved. An admin then clicks again — which is a second write, and the
-   * read-back compares against whichever landed last.
-   */
+
   const [busyRow, setBusyRow] = useState("");
 
   const ssoHeader = useCallback(
@@ -346,9 +244,7 @@ export default function PipelineAdmin({
   );
 
   const load = useCallback(async () => {
-    // 🔴 SEQUENCED — round 111, same reason as PipelineAccessTab: `ssoHeader`
-    // depends on `ssoBlob`, so the arrival of the blob re-fires this with the
-    // credential-less first attempt still open, and the loser used to win.
+
     const seq = ++loadSeq.current;
     const isCurrent = () => seq === loadSeq.current;
 
@@ -373,13 +269,6 @@ export default function PipelineAdmin({
     void load();
   }, [load]);
 
-  /**
-   * @param rowId when given, the outcome is reported IN THAT PIPELINE'S ROW
-   *              rather than in the create form's status line.
-   */
-  // 🔴 ROUND 198 — RENAME A CLIENTS TAB, here rather than in the sidebar.
-  // Same admin-only action the sidebar used in 197; the server refuses a
-  // duplicate or an over-long name, and the refusal shows in the row.
   const renameTab = async (key: string, name: string, rowId: string): Promise<boolean> => {
     const j = await post({ action: "rename-tab", key, name }, rowId);
     if (!j?.config || !data) return false;
@@ -402,9 +291,7 @@ export default function PipelineAdmin({
       const res = await fetch("/api/admin/pipelines", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...ssoHeader() },
-        // 🔴 ROUND 176 — save-config is a whole-map replace, and the server
-        // refuses one sent by a page from another build (a stale tab would
-        // write every entry back without the keys it never knew).
+
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
           ...payload,
@@ -415,10 +302,7 @@ export default function PipelineAdmin({
       if (!res.ok) throw apiError(res, j);
       return j;
     } catch (e) {
-      // ⚠️ A REFUSAL THE SERVER MARKED travels as one to the screen. The route
-      // is the only thing that knows whether a 409 was a deliberate decline or
-      // GoHighLevel objecting, so it says so rather than leaving this to infer
-      // it from the status code.
+
       const refusal =
         e && typeof e === "object" && (e as { refusal?: boolean }).refusal
           ? String((e as { message?: string }).message || "")
@@ -433,33 +317,18 @@ export default function PipelineAdmin({
     }
   };
 
-  // ── CREATE FORM STATE ──────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [scope, setScope] = useState<"client" | "caregiver" | "">("");
   const [stages, setStages] = useState<string[]>([...SUGGESTED_STAGES]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // ITEM 3 — 🔴 TICK GENEROUSLY. Every section for the chosen scope is ticked
-  // by default.
-  //
-  // ⚠️ SAFE ONLY BECAUSE OF ITEM 1. An empty section is not drawn, so the
-  // all-twelve problem cannot come back: a record shows what it answered and
-  // nothing else.
-  //
-  // 🔴 AND IT REMOVES THE ACCESS BOTTLENECK. A rep only has to ask an admin
-  // when the admin ticked too few. Ticking everything means they never do —
-  // they pull in what they need with "+ Add a section" themselves.
   useEffect(() => {
     if (!data || !scope) return;
     setPicked(new Set(data.sections.map((x) => x.key)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.sections, scope]);
 
-  // ⚠️ THE DERIVED DIVISION, LIVE. divisionLabel() strips a trailing
-  // Enrollment/Transfer/Clients/Applicants, so "Events Clients" and "Events"
-  // both become "Events" and silently merge into one division. Showing the
-  // result before the pipeline exists is the only way that is visible.
   const division = useMemo(() => divisionLabel(name.trim()), [name]);
   const divisionClash = useMemo(() => {
     if (!division || !data) return null;
@@ -495,7 +364,6 @@ export default function PipelineAdmin({
   const canCreate =
     !!name.trim() && !!scope && stages.some((s) => s.trim()) && picked.size > 0 && !busy;
 
-  /** Hand a freshly saved config to whoever renders record panels. */
   const announce = useCallback(
     (cfg: StoredPipelineConfig) => {
       if (!onConfigSaved) return;
@@ -518,31 +386,9 @@ export default function PipelineAdmin({
     [onConfigSaved],
   );
 
-  // ── PER-PIPELINE FOLDER EDITING ────────────────────────────────────────
-  /**
-   * 🔴 A STORED FOLDER MAY BE A KEY *OR* A RAW ID — round 113, item J.
-   *
-   * `StoredPipelineEntry.folders` is documented as hybrid (pipelineConfig.ts:47):
-   * a folder created in code has a key like "shared", one created at runtime has
-   * only its GoHighLevel id. The checkbox asked `folders.includes(s.key)` and
-   * `s.key` is "the code key when there is one, the raw id otherwise" — so an
-   * entry written by an API SCRIPT, which knows only ids, ticks nothing at all.
-   *
-   * ⚠️ REPRODUCED, NOT REASONED. scripts/section-grid-proof.mjs renders three
-   * rows — screen-written, script-written, unconfigured — and the middle one
-   * showed `3 section(s)` in its header with ZERO boxes ticked, which is exactly
-   * what Events does live.
-   *
-   * Accepting both spellings is the read fix; `normaliseFolders` below is the
-   * write fix, so an edited entry stops being ambiguous.
-   */
   const isTicked = (entry: StoredPipelineEntry | undefined, s: Section) =>
     !!entry && (entry.folders.includes(s.key) || entry.folders.includes(s.id));
 
-  /**
-   * Toggle one section, writing back in the KEY spelling and dropping the id
-   * spelling of the same folder so the entry converges on one form.
-   */
   const normaliseFolders = (
     entry: StoredPipelineEntry | undefined,
     s: Section,
@@ -550,28 +396,18 @@ export default function PipelineAdmin({
   ): string[] => {
     const on = isTicked(entry, s);
     const keep = (entry?.folders ?? []).filter((tok) => {
-      // Drop BOTH spellings of the folder being toggled…
+
       if (tok === s.key || tok === s.id) return false;
       return true;
     });
-    // …and rewrite every other token to its key spelling where one exists, so
-    // the whole entry is migrated by any single edit rather than half of it.
+
     const byId = new Map(sections.map((x) => [x.id, x.key]));
     const migrated = keep.map((tok) => byId.get(tok) ?? tok);
     return on ? migrated : [...migrated, s.key];
   };
 
-  /**
-   * 🔴 ITEM Q — IS THIS FIELD EXCLUDED ON THIS PIPELINE?
-   *
-   * ⚠️ DEFAULT IS ALL-IN. An empty (or absent) `exclude` means every field of
-   * every ticked folder shows — which is what makes "a field added in GHL
-   * tomorrow appears by itself" true. Read the direction carefully: this returns
-   * TRUE for the exception.
-   */
   const isExcluded = (entry: StoredPipelineEntry | undefined, fieldId: string) =>
     !!entry?.exclude?.includes(fieldId);
-
 
   const saveEntry = async (pipelineId: string, entry: StoredPipelineEntry) => {
     if (!data) return;
@@ -587,19 +423,7 @@ export default function PipelineAdmin({
       announce(j.config);
     }
   };
-  /**
-   * 🔴 ROUND 124 · ITEM 2 — THE EVENTS ROLE, AND IT IS EXCLUSIVE.
-   *
-   * ⚠️ NOT `saveEntry`. One entry at a time cannot express "at most one
-   * pipeline holds this": ticking a second would leave two, and nothing
-   * reading the config could say which is the Events pipeline. So the write
-   * strips the role from EVERY entry and then sets it on the chosen one — one
-   * save, one consistent state, and no window in which two exist.
-   *
-   * ⚠️ AND A PIPELINE WITH NO STORED ENTRY CANNOT HOLD A ROLE, because an
-   * entry needs a scope and guessing one is what pipelineConfig.ts:60 forbids.
-   * The control is offered only on a configured row and says so.
-   */
+
   const setEventsRole = async (pipelineId: string, on: boolean) => {
     if (!data) return;
     const pipelines: Record<string, StoredPipelineEntry> = {};
@@ -638,21 +462,6 @@ export default function PipelineAdmin({
     }
   };
 
-  /**
-   * 🔴 ITEM T — WARN BEFORE HIDING SOMETHING THAT HOLDS DATA.
-   *
-   * Unticking hides a field from every record in the pipeline. THE DATA IS NOT
-   * DELETED — it stays in GoHighLevel — but a rep who filled it in yesterday
-   * finds it gone today and assumes it was lost. So say so first, with the
-   * number, because "43 records" is what makes it a decision.
-   *
-   * ⚠️ NO DIALOG WHEN THE COUNT IS ZERO. A field nobody has filled is a free
-   * untick, and a confirmation on every one of them is how people learn to click
-   * through the ones that matter.
-   *
-   * ⚠️ AND NEVER ON THE WAY BACK. Ticking a field SHOWS it — nothing can be lost
-   * by that, so it saves immediately.
-   */
   const askThenHide = (
     p: PipelineRow,
     entry: StoredPipelineEntry,
@@ -662,10 +471,7 @@ export default function PipelineAdmin({
     apply: () => void,
   ) => {
     const count = countFieldValues ? countFieldValues(p.id, fieldIds) : null;
-    // 🔴 A REAL ZERO SKIPS THE DIALOG. A null does NOT — "I could not count" is
-    // exactly when an admin should be asked, not when they should be waved
-    // through. This is the same distinction round 115b drew for the scope
-    // dialog, in the direction that costs a click rather than data.
+
     if (count && count.records === 0) {
       apply();
       return;
@@ -682,21 +488,12 @@ export default function PipelineAdmin({
     const hiding = !isExcluded(entry, f.id);
     const apply = () => void saveEntry(p.id, withExclusion(entry, f.id, hiding));
     if (!hiding) {
-      apply(); // showing it again — nothing to warn about
+      apply();
       return;
     }
     askThenHide(p, entry, "field", f.name, [f.id], apply);
   };
 
-  /**
-   * The count this screen trusts for one pipeline, or undefined for "not known
-   * yet". The browser's payload wins when it has one — it is free and current —
-   * and the server answers for everything else.
-   *
-   * ⚠️ THE CAREGIVER CAVEAT STILL APPLIES to the browser half: before the
-   * applicant payload has loaded, a caregiver pipeline's absence from
-   * `recordCounts` means nothing, so it falls through to the server.
-   */
   const countFor = (p: PipelineRow): number | null | undefined => {
     const entry = data?.config.pipelines[p.id];
     const local = recordCounts[p.id];
@@ -704,11 +501,6 @@ export default function PipelineAdmin({
     return serverCounts[p.id];
   };
 
-  /**
-   * 🔴 ONE REQUEST, WHEN THE ROW IS OPENED — not on load, not for all ten.
-   * Ten pipelines counted on load is ten searches against a 100-per-10-seconds
-   * budget to render a screen nobody has interacted with yet.
-   */
   const ensureCount = async (p: PipelineRow) => {
     if (countFor(p) !== undefined) return;
     if (counting.current.has(p.id)) return;
@@ -724,9 +516,7 @@ export default function PipelineAdmin({
         }),
       });
       const j = await res.json().catch(() => ({}));
-      // ⚠️ A FAILED COUNT IS RECORDED AS null, NOT LEFT UNSET. Unset would
-      // re-fire on the next render; null is "asked, and could not be told",
-      // which is what the row then says.
+
       setServerCounts((s) => ({
         ...s,
         [p.id]: res.ok && typeof j.count === "number" ? j.count : null,
@@ -738,27 +528,10 @@ export default function PipelineAdmin({
     }
   };
 
-  /**
-   * 🔴 ROUND 124 · ITEM 5 — `runAttribution` AND ITS STEP LOG ARE DELETED.
-   *
-   * ⚠️ REMOVED, NOT LEFT UNREACHABLE. A finished one-time migration sitting in
-   * the file with no caller is the same hazard as the button was, one layer
-   * down: the next person to read it cannot tell it is spent, and the obvious
-   * thing to do with an unused function is wire it back up. The route's
-   * `attribution-folder` action goes with it for the same reason.
-   *
-   * What the migration DID is recorded where it matters — as the note on this
-   * screen explaining why the two attribution fields have a folder of their
-   * own, and in report 121b, which has the live run.
-   */
-
-  /** ITEM L — delete in GoHighLevel and drop the stored entry, in one call. */
   const deletePipelineRow = async (p: PipelineRow) => {
     const j = await post({ action: "delete-pipeline", pipelineId: p.id }, p.id);
     if (!j || !data) return;
-    // ⚠️ REMOVED FROM THE LIST HERE, not by a reload. `load()` would work, but it
-    // re-fetches every field definition to redraw a list we can correct in place
-    // — and the route has already told us the new config.
+
     setData({
       ...data,
       pipelines: data.pipelines.filter((x) => x.id !== p.id),
@@ -769,13 +542,8 @@ export default function PipelineAdmin({
     setSaved(`Deleted “${p.name}”.`);
   };
 
-  // ── NEW FIELD ──────────────────────────────────────────────────────────
   const [fieldOpen, setFieldOpen] = useState(false);
-  // 🔴 OFF BY DEFAULT. It was on, prefilled from the pipeline name, and
-  // offered BEFORE the section was chosen — so it suggested "RPM - " before
-  // anything was known about where the field would land, which reads as the
-  // app having decided something it could not have decided. A prefix is a
-  // convention worth offering, not a default worth imposing.
+
   const [fPrefixOn, setFPrefixOn] = useState(false);
   const [fPrefix, setFPrefix] = useState("");
   const [fName, setFName] = useState("");
@@ -804,13 +572,12 @@ export default function PipelineAdmin({
     setSecName("");
     setSectionOpen(false);
     await load();
-    // Select what was just made, so the field being created lands in it.
+
     setFParent(j.folder.id);
   };
 
   useEffect(() => {
-    // ⚠️ FROM THE DIVISION, NOT THE FOLDER NAME — "More Details - Office" is
-    // meaningless, while "CG - " and "APP - " are instantly identifiable.
+
     if (division) setFPrefix(suggestPrefix(division));
   }, [division]);
 
@@ -843,9 +610,6 @@ export default function PipelineAdmin({
     await load();
   };
 
-  // ⚠️ Only when there is nothing else to show. A failed RELOAD over a loaded
-  // screen is a strip below (see the `loadErr` banner inside the return), not a
-  // replacement for the screen.
   if (loadErr && !data)
     return (
       <div className="isec">
@@ -856,12 +620,6 @@ export default function PipelineAdmin({
 
   const inert = data.inertSections || [];
 
-  /**
-   * @param per when given, the expanded panel becomes an EXCLUSION editor for
-   *            that pipeline. Absent in the create form, deliberately: there is
-   *            no pipeline yet to exclude a field on, and offering the control
-   *            there would imply the exceptions travel with the template.
-   */
   const sectionRow = (
     s: Section,
     checked: boolean,
@@ -879,40 +637,13 @@ export default function PipelineAdmin({
       key={s.key}
     >
       <label className="pfseclab">
-        {/* 🔴 ITEM 4 — DISABLED IS THE IMPORTANT HALF. Every other write control
-            on this screen already carried `disabled={busy}`; this one, the most
-            clicked of them all, did not. A second click during the first
-            request is a second write, and the read-back then compares against
-            whichever landed last — which is where item 2's false "truncated"
-            and 115c's "fails once, works the second time" both live. */}
+
         <input type="checkbox" checked={checked} disabled={busy} onChange={onToggle} />
-        {/* 🔴 A NAME AND A DIAGNOSIS ARE NOT THE SAME THING, so they are not
-            styled the same.
 
-            A NAMED section's label is one or two words and reads as an
-            identity — unchanged, at the card's own size.
-
-            An UNNAMED section's label is a SENTENCE: the words "Unnamed
-            section" plus a list of what is inside it. Rendered at the same
-            weight and size as "Milestones" it READS AS A NAME, which invites
-            an admin to tick it as though they know what it is. The whole
-            reason the fields are listed is to say WE DO NOT KNOW, so the
-            styling has to say that too: the marker small and in the warning
-            colour already used by .pfunconf and .pfsecid, the field list
-            smaller again and quieter, as supporting detail. */}
         {s.named ? (
           <span className="pfsecname">{s.label}</span>
         ) : (
-          // 🔴 ONE LINE, LIKE EVERY OTHER ROW. This used to be a marker, a field
-          // list AND an id on its own line — three lines each, four of them on a
-          // screen of sixteen, so the rows that say "we do not know what this is"
-          // took more space than the twelve that are fine.
-          //
-          // ⚠️ THE FIELD NAMES DID NOT GO MISSING, THEY WENT WHERE THEY BELONG.
-          // Every row already has a chevron that reveals its fields; an unnamed
-          // row needed no second mechanism for the same information, and showing
-          // two of them with an ellipsis was never enough to recognise a folder
-          // by anyway. Expanded, it shows ALL of them.
+
           <span className="pfsecunk" title="GoHighLevel does not share folder names with this dashboard">
             <span className="pfsecunk-w" aria-hidden="true">
               ⚠
@@ -921,10 +652,7 @@ export default function PipelineAdmin({
           </span>
         )}
       </label>
-      {/* 🔴 ITEM Q — THE COUNT SAYS WHAT IS SHOWING, NOT WHAT EXISTS. A folder
-          of six with two excluded reads "4 of 6", because "6" beside a panel
-          drawing four is the kind of quiet disagreement round 115b's item I was
-          about. Unmodified folders are unchanged: a bare number. */}
+
       <span
         className="pfseccount"
         title={
@@ -951,36 +679,11 @@ export default function PipelineAdmin({
       >
         {expanded.has(s.key) ? "▴" : "▾"}
       </button>
-      {/* ⚠️ EXPANDING LISTS THE FIELDS. Ticking a name alone is a guess —
-          "More Details" and "Client Details" mean nothing until you see
-          inside. The defs are already cached, so this costs no call.
 
-          🔴 AND FOR AN UNNAMED FOLDER THE ID COMES WITH THEM. It was on the
-          face of the collapsed row, in a code block, on its own line — a
-          debugging aid dressed as a heading. It is the thing you paste into
-          GoHighLevel to find the folder, so it belongs beside the fields you
-          are reading to recognise it, not above them. */}
       {expanded.has(s.key) ? (
-        /* 🔴 ONE FIELD PER LINE, WITH ITS TYPE — round 115b, item I.
-           This joined every name with " · " into a block as narrow as the chip,
-           so names broke mid-word and the separator landed at the start of a
-           line as often as the end. Seven fields read as eight — the count and
-           the list both come from `s.fields`, so they never disagreed; the
-           rendering simply made them uncountable.
-           ⚠️ AND THE TYPE IS THE POINT OF EXPANDING. A name alone does not say
-           whether "Submitted At" is a date you can sort on or a string somebody
-           typed, and `dataType` is already on every definition. */
+
         <div className="pfsecfields">
-          {/* 🔴 ITEM Q — PER-FIELD EXCLUSIONS, INSIDE THE FOLDER TICK.
-              Shared holds six fields and NONE of them describes an applicant:
-              Road Blocker is an enrolment concept, Case Manager and Sales Rep
-              Assistant are client roles, County means the CLIENT's county. So
-              ticking Shared onto a caregiver pipeline put six client fields on
-              an applicant card — and unticking it lost Office too, which a
-              recruiter legitimately wants.
-              ⚠️ THE TICK IS "SHOW", THE STORED VALUE IS "EXCLUDE". Ticked is the
-              default, so a field created in GoHighLevel tomorrow is in nobody's
-              exclusion list and appears by itself — fieldFolders.ts:8. */}
+
           <ol className="pffieldlist">
             {s.fields.map((f) => {
               const off = per ? isExcluded(per.entry, f.id) : false;
@@ -991,9 +694,7 @@ export default function PipelineAdmin({
                       type="checkbox"
                       className="pffbox"
                       checked={!off}
-                      // ⚠️ A FOLDER THAT IS NOT TICKED HAS NOTHING TO EXCLUDE
-                      // FROM. Leaving these live would let an admin curate a
-                      // panel that is not being drawn, and then wonder why.
+
                       disabled={busy || !checked || !per.entry}
                       title={
                         !checked
@@ -1013,8 +714,7 @@ export default function PipelineAdmin({
           </ol>
           {per && checked ? (
             <div className="ihint pffnote">
-              {/* ⚠️ SAY WHERE THE DATA WENT. "Hidden" and "deleted" are the same
-                  word to somebody who filled the field in yesterday. */}
+
               Unticking a field hides it from this pipeline&apos;s panel. The values
               stay in GoHighLevel and come back if you tick it again. A field added
               in GoHighLevel later is not on this list, so it appears by itself.
@@ -1045,21 +745,7 @@ export default function PipelineAdmin({
           <ErrorMessage error={loadErr} className="savemsg err" />
         </div>
       ) : null}
-      {/* ITEM 6 — 🔴 A FOLDER MADE IN GHL, FIXED IN ONE ACTION.
-          We cannot read its name — GoHighLevel returns parentName empty and
-          refuses the folder endpoint — so it cannot be mapped silently. The
-          admin supplies the one thing we cannot obtain, and the ticking happens
-          in the same action. */}
-      {/* 🔴 THIS BANNER USED TO ASK THE WRONG QUESTION.
-          "Unnamed section … [ Name it ]" says the folder has no name and the
-          admin is inventing one. IT HAS A NAME. GoHighLevel simply will not
-          share it — verified live, twice: `parentName` is empty on every field
-          (lib/fieldFolders.ts:491, round 55), and
-          GET /custom-fields/object-key/opportunity answers 400 "Api does not
-          support objectKey of type contact or opportunity".
-          So the admin is not naming anything. They are TELLING THIS DASHBOARD
-          WHAT GOHIGHLEVEL ALREADY CALLS IT — a different, much easier question,
-          and one they can answer by looking rather than by deciding. */}
+
       {(data.unconfiguredFolders || []).length ? (
         <div className="pfunknown">
           <b>
@@ -1076,11 +762,7 @@ export default function PipelineAdmin({
           {data.unconfiguredFolders.map((u) => (
             <div className="pfunknownrow" key={u.id}>
               <div className="pfunknownwhat">
-                {/* ⚠️ ALL OF THEM, NEVER "two and an ellipsis". These names are
-                    the ONLY way to recognise which folder this is — the whole
-                    point of listing them. Truncating the evidence and then
-                    asking the question is asking a question that cannot be
-                    answered. */}
+
                 <div className="pfunknownlbl">
                   Fields in it ({u.fields.length})
                 </div>
@@ -1120,8 +802,6 @@ export default function PipelineAdmin({
         </div>
       ) : null}
 
-      {/* ⚠️ WITHHELD, NOT MISSING. A folder that vanishes with no explanation is
-          the same class of problem as one that appears with no name. */}
       {inert.length ? (
         <div className="pfinert">
           {inert.length} section
@@ -1138,7 +818,6 @@ export default function PipelineAdmin({
         </div>
       ) : null}
 
-      {/* ⚠️ WHY ALL FOUR CONTROLS ARE HERE. */}
       <div className="pfwhy">
         GoHighLevel has no way to say &ldquo;this section belongs to that
         pipeline&rdquo;: a folder made there arrives unmapped and its fields show
@@ -1175,8 +854,7 @@ export default function PipelineAdmin({
           <option value="client">Clients</option>
           <option value="caregiver">Caregiver / DSP applicants</option>
         </select>
-        {/* 🔴 REQUIRED, NEVER GUESSED. The two lists being separate is what
-            stops an applicant reaching a client caller. */}
+
         <div className="ihint">
           Caregiver pipelines never appear on the client board, the client kanban or the
           master view. It can be changed later under Configured pipelines below.
@@ -1196,7 +874,7 @@ export default function PipelineAdmin({
                   setStages((arr) => arr.map((x, j) => (j === i ? e.target.value : x)))
                 }
               />
-              {/* Position comes from LIST ORDER, never typed. */}
+
               <button type="button" disabled={i === 0} onClick={() =>
                 setStages((a) => { const n=[...a]; [n[i-1],n[i]]=[n[i],n[i-1]]; return n; })}>↑</button>
               <button type="button" disabled={i === stages.length - 1} onClick={() =>
@@ -1218,15 +896,7 @@ export default function PipelineAdmin({
       </div>
 
       <div className="istep">3 · Sections its records can show</div>
-      {/* 🔴 SAY WHAT TICKING DOES, AND WHY THE SCREEN EXISTS — round 115b,
-          items N and R. Fourteen checkboxes under a four-word label left an
-          admin to infer the rest, and an admin who does not know the reason
-          ticks everything — which is the exact failure the screen was built to
-          prevent.
-          ⚠️ `.pfgovern`, NOT `.pfwhy` — that class already belongs to the
-          screen-level note further up, and reusing it gave the page two
-          elements with one class and one name for two different explanations.
-          Caught by loader-sweep rule 7 within a minute of writing it. */}
+
       <div className="pfgovern">
         <p>
           <b>Ticking a section makes its fields available on every record in
@@ -1242,12 +912,7 @@ export default function PipelineAdmin({
           pipeline is what lets an OLTL enrolment show enrolment fields while a
           caregiver applicant never sees Client SSN.
         </p>
-        {/* 🔴 ITEM N — and it is verified, not assumed: the route reads
-            getEditableFieldDefs("opportunity") at :167, :306 and :337 and never
-            touches contact fields. The names collide, too — "Client" is an
-            opportunity folder and the contact side has one of its own — so an
-            admin hunting for "Caregiver Application" here would wrongly
-            conclude it does not exist. */}
+
         <p>
           <b>These are sections on the CASE, not on the person.</b> Sections
           about a person — caregiver compliance, availability, the application
@@ -1272,16 +937,7 @@ export default function PipelineAdmin({
 
       {fieldOpen ? (
         <div className="pfnew">
-          {/* 🔴 ITS OWN GRID, NOT `.irow`. This borrowed the Destination row's
-              flex layout, where `.irow input` carries min-width:150px and the
-              label another 150 — four controls on one wrapping line, inside a
-              container that was itself being clipped. The result was an input
-              that could not be reached or typed into. A two-column grid with
-              explicit widths cannot collapse that way. */}
-          {/* 🔴 SECTION FIRST. The form asked for the name and a prefix before
-              the section, so the prefix was suggested before anything was known
-              about where the field would land. Choose the destination, then
-              name the thing going into it. */}
+
           <div className="pffield">
             <label htmlFor="pf-section">Section</label>
             <div className="pffield-sec">
@@ -1308,10 +964,6 @@ export default function PipelineAdmin({
               </button>
             </div>
 
-            {/* ⚠️ WIRED UP AT LAST. The route has had a `create-section` action
-                since round 90 and nothing on screen ever called it, so
-                "everything for this pipeline stays together" was an intention
-                with no control behind it. */}
             {sectionOpen ? (
               <>
                 <label htmlFor="pf-secname">New section name</label>
@@ -1386,9 +1038,6 @@ export default function PipelineAdmin({
             </div>
           ) : null}
 
-          {/* 🔴 BLOCK a normalised clash. ⚠️ WARN, never block, on a similar
-              name or an identical picklist — a false positive that stops
-              someone working is worse than a duplicate they can merge. */}
           {verdict.kind !== "ok" ? (
             <div className={verdict.kind === "blocked" ? "pfblock" : "pfwarn"}>
               <b>{verdict.kind === "blocked" ? "🔴" : "⚠️"} {verdict.message}</b>
@@ -1431,8 +1080,6 @@ export default function PipelineAdmin({
       {saveErr ? <ErrorMessage error={saveErr} className="savemsg err" /> : null}
       {saved ? <div className="savemsg ok">{saved}</div> : null}
 
-      {/* ── EXISTING PIPELINES ─────────────────────────────────────────── */}
-      {/* ── ROUND 198 — THE CLIENTS SIDEBAR'S OWN TABS ───────────────────── */}
       <div className="istep" style={{ marginTop: 20 }}>Clients sidebar — the sorting tabs</div>
       <div className="pfnames">
         {rowMsg && rowMsg.id === "sorting-tabs" ? (
@@ -1482,9 +1129,7 @@ export default function PipelineAdmin({
             <details
               className="pfrow"
               key={p.id}
-              // 🔴 COUNT WHEN IT OPENS. `onToggle` fires for open AND close;
-              // `ensureCount` is idempotent and returns immediately once a count
-              // (or a recorded null) exists, so closing costs nothing.
+
               onToggle={(e) => {
                 if ((e.currentTarget as HTMLDetailsElement).open) void ensureCount(p);
               }}
@@ -1497,15 +1142,7 @@ export default function PipelineAdmin({
                   </span>
                 ) : null}
                 <span className="pfscope">
-                  {/* ⚠️ "none" IS NOT A WORD ON A SCREEN. It is a stored token;
-                      what an admin needs to read is what it does. */}
-                  {/* 🔴 ROUND 121b — "caregiver" WAS AMBIGUOUS ON THIS ROW.
-                      The header showed the SCOPE as a bare word, and the
-                      Recruiting group below it is a DIFFERENT setting that also
-                      defaults to caregiver. Two settings, one word, one row —
-                      an admin cannot tell which the header means. Naming the
-                      BOARD is what separates them: scope is which board picker
-                      lists it, the group is which half of Recruiting. */}
+
                   {!entry
                     ? "not configured"
                     : entry.scope === "none"
@@ -1522,30 +1159,15 @@ export default function PipelineAdmin({
                       } hidden`
                     : ""}
                 </span>
-                {/* ⚠️ THE RECORD COUNT ON THE FACE OF THE ROW — item L. It is
-                    what decides whether Delete is offered, so reading it should
-                    not require opening the row and reading a refusal. */}
+
                 <span className="pfreccount">
                   {count != null ? `${count} record${count === 1 ? "" : "s"}` : ""}
                 </span>
               </summary>
-              {/* 🔴 SCOPE IS EDITABLE AFTER ALL — round 112, item 9.
-                  The create form says "This cannot be changed afterwards from
-                  here", and that was true of the SCREEN, not of the data: the
-                  `save-config` action writes the whole stored entry, scope
-                  included, and this editor was already re-sending it on every
-                  folder tick. So the only thing missing was a control.
-                  ⚠️ IT MOVES A WHOLE PIPELINE between the client and applicant
-                  sections, which is why it asks first and says so. Nothing is
-                  written to GoHighLevel's pipeline itself — this is the stored
-                  MM Pipeline Folders value, and it is reversible here. */}
-              {/* 🔴 THE OUTCOME, IN THE ROW THAT CAUSED IT — round 115c.
-                  It used to land in the create form's status line at the top of
-                  the screen, where it flashed past unread. It stays here until
-                  the next action on this row. */}
+
               {rowMsg && rowMsg.id === p.id ? (
                 rowMsg.refusal ? (
-                  // 🔴 AMBER, DIRECT, NO TOGGLE. The message is the instruction.
+
                   <div className="savemsg warn pfrowmsg">{rowMsg.refusal}</div>
                 ) : rowMsg.err ? (
                   <ErrorMessage error={rowMsg.err} className="savemsg err pfrowmsg" />
@@ -1553,7 +1175,7 @@ export default function PipelineAdmin({
                   <div className="savemsg ok pfrowmsg">{rowMsg.ok}</div>
                 )
               ) : null}
-              {/* ITEM 4 — the row says it is working, where the work is. */}
+
               {busy && busyRow === p.id ? (
                 <div className="pfrowbusy pfrowmsg">
                   <span className="pfspin" aria-hidden="true" />
@@ -1561,13 +1183,7 @@ export default function PipelineAdmin({
                 </div>
               ) : null}
               <div className="pfscopeedit">
-                {/* 🔴 ITEM K — THE LABEL WAS WRONG, NOT JUST SHORT. "Decides
-                    which section its records appear in" describes something
-                    this setting does not do: 115b established that
-                    groupFieldsForPipeline never consults scope, so records draw
-                    identically either way. What it decides is which BOARD
-                    PICKER lists the pipeline — and the pipeline dropdown is the
-                    only place anyone selects one. */}
+
                 <label htmlFor={`pfscope-${p.id}`}>Show this pipeline in</label>
                 <select
                   id={`pfscope-${p.id}`}
@@ -1576,13 +1192,9 @@ export default function PipelineAdmin({
                   onChange={(e) => {
                     const next = e.target.value as PipelineScope | "";
                     if (!next) return;
-                    // 🔴 THE APP'S OWN DIALOG — round 115b, item M. A native
-                    // confirm() cannot be styled, carries the vercel.app URL,
-                    // and reads as a browser warning rather than part of the
-                    // app. Every other consequential action here already uses
-                    // ConfirmDialog; this was the one that did not.
+
                     if (entry && next !== entry.scope) {
-                      e.target.value = entry.scope; // until the answer comes back
+                      e.target.value = entry.scope;
                       setScopeAsk({ p, entry, next });
                       return;
                     }
@@ -1599,11 +1211,7 @@ export default function PipelineAdmin({
                     </option>
                   ))}
                 </select>
-                {/* 🔴 ROUND 120 · ITEM 1 — WHICH RECRUITING GROUP.
-                    ⚠️ ONLY FOR A CAREGIVER PIPELINE. All five applicant
-                    pipelines are caregiver-scope, so scope cannot tell the two
-                    families apart and this is the second axis. A client
-                    pipeline has no recruiting group and is not asked. */}
+
                 {entry?.scope === "caregiver" ? (
                   <div className="pfgroupedit">
                     <label htmlFor={`pfgroup-${p.id}`}>Recruiting group</label>
@@ -1622,23 +1230,13 @@ export default function PipelineAdmin({
                       <option value="staff">Staff — hires</option>
                     </select>
                     <span className="ihint">
-                      {/* ⚠️ SAY WHAT THE DEFAULT IS. An unset pipeline reads as
-                          Caregivers, which is a decision this screen made on
-                          the admin's behalf and should therefore admit to. */}
+
                       Which half of the Recruiting section lists it. Unset reads
                       as Caregivers.
                     </span>
                   </div>
                 ) : null}
-                {/* 🔴 ROUND 124 · ITEM 2 — THE ROLE, AND IT IS OFFERED ON EVERY
-                    SCOPE. The Events pipeline was found by matching the NAME
-                    "Events" across the client and "none" pickers, so a rename
-                    or a scope change emptied the Events tab with nothing on
-                    screen to say why. This records the ID instead — the same
-                    shape as Recruiting group, and the last string-matched
-                    pipeline lookup in the app.
-                    ⚠️ ONLY ON A CONFIGURED ROW. A role needs an entry, and an
-                    entry needs a scope. */}
+
                 {entry ? (
                   <div className="pfgroupedit">
                     <label htmlFor={`pfrole-${p.id}`}>Role</label>
@@ -1660,16 +1258,7 @@ export default function PipelineAdmin({
                     </span>
                   </div>
                 ) : null}
-                {/* 🔴 ROUND 176 — THE CLIENTS-SIDEBAR TAB. Client pipelines
-                    only: the sidebar lists client pipelines and nothing else.
-                    ⚠️ THE SAVE TOUCHES THIS ONE KEY. Scope, folders, exclusions,
-                    group and role go back exactly as they were. */}
-                {/* 🔴 ROUND 177 · D7 — CAREGIVER PIPELINES TOO: Recruiting has
-                    sidebar entries now, on the same stored `sidebar: false`.
-                    Never on "none", which is on no board and has no entry. */}
-                {/* 🔴 ROUND 198 — THE NAME IT SHOWS UNDER. Client pipelines: the
-                    Clients sidebar, its board header and the pickers read it.
-                    Display only — GoHighLevel keeps the pipeline's own name. */}
+
                 {entry?.scope === "client" ? (
                   <NameEditor
                     id={`pfname-${p.id}`}
@@ -1708,37 +1297,23 @@ export default function PipelineAdmin({
                   </div>
                 ) : null}
                 <span className="ihint">
-                  {/* 🔴 THE RULE, IN ONE SENTENCE: hide from BROWSING surfaces,
-                      never from ADMIN ones. Verified in the code, not assumed —
-                      every board reads getSelectedPipelines(scope) and every
-                      admin surface reads listPipelines(): the import wizard
-                      (api/import/meta), the access grid
-                      (api/admin/pipeline-access) and this screen. */}
+
                   Which board&apos;s pipeline picker offers it. The import wizard,
                   Admin → Access and this screen always list every pipeline.
                   Reversible.
                 </span>
-                {/* 🔴 ITEM L — DELETE, GATED ON THE RECORD COUNT.
-                    There was deliberately no delete action because "the
-                    opportunities in a stage have to go somewhere". That holds
-                    for a pipeline WITH records. It does not hold for an empty
-                    one — and two empty, never-configured probe pipelines have
-                    been in this list for twenty-five rounds with no way to
-                    remove them. */}
+
                 <div className="pfdelete">
                   {count === undefined ? (
                     <span className="ihint">Counting the records in this pipeline…</span>
                   ) : count === null ? (
-                    // ⚠️ THE SAME "I CANNOT SAY" AS THE SCOPE DIALOG, and no
-                    // delete offered in that state. A refusal to guess is not a
-                    // reason to offer the irreversible action anyway.
+
                     <span className="ihint">
                       I could not count the records in this pipeline, so Delete is
                       not offered. Close and reopen this row to try again.
                     </span>
                   ) : count > 0 ? (
-                    // 🔴 SAY THE NUMBER. That is what makes the refusal
-                    // understandable rather than arbitrary.
+
                     <span className="ihint">
                       <b>
                         {count} record{count === 1 ? " is" : "s are"}
@@ -1761,21 +1336,9 @@ export default function PipelineAdmin({
               <div className="pfseclist">
                 {data.sections.map((s) =>
                   sectionRow(s, isTicked(entry, s), () => {
-                    // 🔴 DO NOT INVENT A SCOPE — round 112, item 9.
-                    // This was `entry?.scope ?? "client"`, so ticking a single
-                    // section on a pipeline that had NO stored entry silently
-                    // stamped it `client`. That is almost certainly how "Events"
-                    // became client-scoped: it was created by an API script
-                    // rather than through this screen, so it had no entry, and
-                    // the first folder tick chose for everybody. A scope is a
-                    // decision; it is now asked for rather than assumed.
+
                     if (!entry) {
-                      // 🔴 ROUND 119 · ITEM 3 — A REFUSAL, SHOWN DIRECTLY.
-                      // This was `err: new Error(...)`, so round 112's guard —
-                      // a deliberate decision, with the instruction in it —
-                      // rendered as "✗ Something went wrong. The details below
-                      // will help us fix it." with the sentence hidden behind a
-                      // disclosure triangle. Nothing went wrong.
+
                       setRowMsg({
                         id: p.id,
                         refusal:
@@ -1783,7 +1346,7 @@ export default function PipelineAdmin({
                           `before ticking sections — picking one for you is how a ` +
                           `pipeline ends up in the wrong section.`,
                       });
-                      // ⚠️ AND POINT AT THE FIX. The dropdown is on this row.
+
                       document.getElementById(`pfscope-${p.id}`)?.focus();
                       return;
                     }
@@ -1792,10 +1355,7 @@ export default function PipelineAdmin({
                       folders: normaliseFolders(entry, s, data.sections),
                     };
                     const apply = () => void saveEntry(p.id, next);
-                    // 🔴 ITEM T, FOR A WHOLE FOLDER — sum across its fields.
-                    // "Shared holds values on 61 records in this pipeline."
-                    // ⚠️ Only on the way OUT. Ticking a section shows fields;
-                    // nothing can be lost by that.
+
                     if (!isTicked(entry, s)) {
                       apply();
                       return;
@@ -1805,10 +1365,7 @@ export default function PipelineAdmin({
                       entry,
                       "section",
                       s.named ? s.label : "This section",
-                      // ⚠️ EXCLUDED FIELDS ARE NOT COUNTED. They are already
-                      // hidden, so unticking the folder does not hide them
-                      // again — counting them would inflate the warning with
-                      // records that lose nothing.
+
                       s.fields.filter((f) => !isExcluded(entry, f.id)).map((f) => f.id),
                       apply,
                     );
@@ -1820,10 +1377,6 @@ export default function PipelineAdmin({
         })}
       </div>
 
-      {/* 🔴 THE SCOPE CONFIRM, WITH THE NUMBER — round 115b, item M.
-          "Its records leave the Clients board" without saying how many is the
-          difference between a considered choice and a mis-click. ODP Enrolment
-          holds 139. */}
       {scopeAsk ? (
         <ConfirmDialog
           title={
@@ -1843,12 +1396,7 @@ export default function PipelineAdmin({
           onConfirm={() => {
             const { p, entry, next } = scopeAsk;
             setScopeAsk(null);
-            // ⚠️ `...entry` — the exclusions travel with it. Rebuilt as
-            // `{ scope, folders }` they would be silently dropped by a move.
-            // 🔴 ROUND 177 · R4 — "none" is on no board, so a hidden-tab
-            // setting there means nothing and would quietly come back if the
-            // pipeline were ever returned to a board. It is dropped; a move
-            // between client and caregiver KEEPS it (the same tab, other half).
+
             if (next === "none") {
               const { sidebar: _drop, ...rest } = entry;
               void _drop;
@@ -1858,7 +1406,7 @@ export default function PipelineAdmin({
           body={
             <>
               <p>
-                {/* ⚠️ A NUMBER, OR AN HONEST ABSENCE OF ONE. */}
+
                 {recordCounts[scopeAsk.p.id] != null && (
                   countsComplete || scopeAsk.entry.scope === "client"
                 ) ? (
@@ -1898,18 +1446,14 @@ export default function PipelineAdmin({
                 )}
               </p>
               <p className="ihint">
-                {/* 🔴 THE HALF THAT DOES NOT CHANGE, SAID OUT LOUD. */}
+
                 The import wizard, Admin → Access and this screen still list it.
                 Importing is a deliberate choice with a preview and a duplicate
                 check in front of it, and granting access is a permission
                 decision — neither is browsing.
               </p>
               <p>
-                {/* 🔴 THE QUESTION YOU ASKED: KEPT AND STILL USED. Verified —
-                    `groupFieldsForPipeline` takes the stored folder list and the
-                    pipeline id and never consults scope, so the ticks survive a
-                    move and the record panel keeps drawing them. Which is also
-                    what makes "you can move it back" true. */}
+
                 Its{" "}
                 <b>
                   {scopeAsk.entry.folders.length} ticked field section
@@ -1929,22 +1473,6 @@ export default function PipelineAdmin({
         />
       ) : null}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          🔴 ROUND 124 · ITEM 5 — THE BUTTON IS GONE. THE REASONING IS NOT.
-          //
-          This was a ONE-TIME MIGRATION and it is complete: the folder exists,
-          both fields are in it, and it is ticked onto all five client
-          pipelines. The button could only ever say "already done".
-          //
-          ⚠️ AND IT WAS A HAZARD. Somebody pressing it in six months, after
-          those folders have been deliberately reorganised, would have had two
-          fields moved back with nothing on screen explaining why.
-          //
-          🔴 THE SENTENCE IS THE VALUE. The button was how it got done; the
-          reasoning is what stops the next person undoing it. So it stays here,
-          as a note on the screen that owns folder layout, rather than as a
-          control that re-runs a finished job.
-          ══════════════════════════════════════════════════════════════════ */}
       <div className="istep" style={{ marginTop: 20 }}>Referral attribution</div>
       <div className="pfgovern">
         <p>
@@ -1961,13 +1489,6 @@ export default function PipelineAdmin({
         </p>
       </div>
 
-      {/* ── ITEM O — CONTACT SECTIONS, READ-ONLY, WITH BOTH NAMES ────────── */}
-      {/* 🔴 ROUND 130 — SAY IT BEFORE LISTING TEN EMPTY SECTIONS. On a
-          deployment whose folders this code has never seen, every section
-          resolves to nothing — and a list of ten sections at "0 fields" reads
-          as "configured and empty" rather than "pointed at another account".
-          `builtInFoldersAreForeign()` was written in 129 and left unwired until
-          the no-op was proven; this is the screen it was for. */}
       {data.builtInFoldersForeign ? (
         <div className="pfstale" style={{ marginTop: 16 }}>
           <b>This dashboard&apos;s built-in folder map is for a different account</b>
@@ -1984,16 +1505,7 @@ export default function PipelineAdmin({
 
       {data.contactSections?.length ? (
         <>
-          {/* 🔴 ROUND 121 · ITEM 5 — COLLAPSED, WITH THE COUNT IN THE HEADER.
-              116 built this and it earned its place — it found five folders
-              whose fields were being dropped, three of them ours, mapped in
-              118. But nothing in the LIST is actionable, and it sat open on a
-              screen already carrying nine controls. The number is the value: a
-              count that changes tells an admin something happened, and the
-              list only matters when it does.
-              ⚠️ `:not([open])` IS NOT OPTIONAL — round 119 measured three
-              <details> on this page rendering open because an author `display`
-              rule beat the browser's collapse. Sweep rule 8 checks it. */}
+
           <details className="pfcontacts-wrap">
             <summary>
               Contact sections
@@ -2006,10 +1518,7 @@ export default function PipelineAdmin({
             </summary>
           <div className="pfgovern">
             <p>
-              {/* 🔴 THE HONEST HALF. These are hardcoded in
-                  lib/fieldFolders.ts:493 and there is no way for an admin to
-                  change them without a deploy. Building a control that only
-                  half works would be worse than saying so. */}
+
               <b>These are sections on the PERSON, not on the case.</b> They
               follow a contact onto every record they hold, are the same
               everywhere, and are chosen by whether the record is a client or an
@@ -2017,8 +1526,7 @@ export default function PipelineAdmin({
               list shows what is configured rather than letting you change it.
             </p>
             <p>
-              {/* 🔴 BOTH NAMES, BECAUSE THE DASHBOARD RENAMES THEM. An admin
-                  searching GoHighLevel for "Enquiry Details" finds nothing. */}
+
               <b>Where the two names differ, GoHighLevel&apos;s is on the right.</b>{" "}
               Search for that one in GoHighLevel — the left-hand name is this
               dashboard&apos;s.
@@ -2031,28 +1539,19 @@ export default function PipelineAdmin({
                   {kind === "client" ? "On a client" : "On an applicant"}
                 </div>
                 {data.contactSections
-                  // ⚠️ "both" APPEARS UNDER BOTH HEADINGS — round 118, item 2.
-                  // Filtered on equality alone, the attribution folder would
-                  // render under neither, which is the same disappearance the
-                  // item is fixing one level down.
+
                   ?.filter((c) => c.appliesTo === kind || c.appliesTo === "both")
                   .map((c) => (
                     <div className="pfcrow" key={c.id}>
                       <span className="pfcname">{c.label}</span>
-                      {/* ⚠️ ONLY WHERE IT DIFFERS — round 121, item 5. "same
-                          name in GoHighLevel" repeated on eight of eleven rows,
-                          which is eight lines saying nothing. The two that
-                          matter are the two that are renamed. */}
+
                       {c.renamed ? (
                         <span className="pfcghl" title="The name in GoHighLevel">
                           {c.ghlName}
                         </span>
                       ) : null}
                       <span className="pfcfields">
-                        {/* ⚠️ A SECTION WITH NO FIELDS IS THE FINDING. "Enquiry
-                            Details" holds one field used by nobody and renders
-                            on every client record; a zero here is how that
-                            becomes visible at all. */}
+
                         {c.fields.length} field{c.fields.length === 1 ? "" : "s"}
                       </span>
                       <code className="pfcid" title="Paste this into GoHighLevel to find the folder">
@@ -2064,21 +1563,13 @@ export default function PipelineAdmin({
             ))}
           </div>
           </details>
-          {/* 🔴 OUTSIDE THE COLLAPSE, DELIBERATELY. These ARE actionable: their
-              fields do not appear on any record and somebody has to decide. */}
+
           {data.unknownContactFolders?.length ? (
             <div className="pfstale">
               <b>
                 Contact folders in GoHighLevel this dashboard does not know about
               </b>
-              {/* 🔴 ROUND 130 — "ADDING ONE NEEDS A CODE CHANGE TODAY" IS NO
-                  LONGER TRUE, AND THAT SENTENCE WAS THE BLOCKER. Naming one of
-                  these to match a section is what wires it up: the record panel
-                  resolves a section to the folder on THIS account whose stored
-                  name matches. So the control is a LIST OF THE SECTIONS, not a
-                  free-text box — a typo in free text would do nothing at all,
-                  silently, which is the failure this whole week has been
-                  about. */}
+
               <div className="ihint">
                 Their fields are dropped from contact panels — not shown under
                 &quot;Other&quot;, because a location&apos;s contact fields
@@ -2108,10 +1599,7 @@ export default function PipelineAdmin({
                     >
                       <option value="">Not one of these…</option>
                       {(data.contactSections || [])
-                        // ⚠️ ONLY SECTIONS THAT RESOLVE TO NOTHING. Offering one
-                        // that already has a folder would let an admin point two
-                        // folders at the same section, and the resolver takes
-                        // the first it finds — a coin toss nobody could see.
+
                         .filter((sec) => !sec.resolvedId)
                         .map((sec) => (
                           <option key={sec.id} value={sec.ghlName}>
@@ -2135,7 +1623,6 @@ export default function PipelineAdmin({
         </>
       ) : null}
 
-      {/* 🔴 ITEM T — THE UNTICKING WARNING, WITH THE COUNT. */}
       {hideAsk ? (
         <ConfirmDialog
           title={
@@ -2165,7 +1652,7 @@ export default function PipelineAdmin({
                     in this pipeline.
                   </>
                 ) : (
-                  // ⚠️ THE 115c WORDING, NOT A CONFIDENT ZERO.
+
                   <>
                     <b>I cannot say how many records hold a value here</b> — the
                     applicant payload has not been loaded in this tab, so the
@@ -2180,8 +1667,7 @@ export default function PipelineAdmin({
               </p>
               {hideAsk.count ? (
                 <p className="ihint">
-                  {/* ⚠️ SAY WHAT WAS COUNTED. A number with no denominator is a
-                      number nobody can check. */}
+
                   Counted over the {hideAsk.count.scanned} record
                   {hideAsk.count.scanned === 1 ? "" : "s"} this tab has loaded for
                   this pipeline.
@@ -2192,8 +1678,6 @@ export default function PipelineAdmin({
         />
       ) : null}
 
-      {/* 🔴 ITEM L — THE DELETE CONFIRMATION. The app's own dialog, as 115b
-          built for the scope confirm — not a browser confirm(). */}
       {deleteAsk ? (
         <ConfirmDialog
           title={`Delete “${deleteAsk.name}” from GoHighLevel?`}
@@ -2215,9 +1699,7 @@ export default function PipelineAdmin({
                 from this screen.
               </p>
               <p>
-                {/* 🔴 AND THE STORED ENTRY GOES TOO — round 90's stale key.
-                    Leaving it behind would manufacture exactly the "no longer in
-                    GoHighLevel" row this screen then asks you to reconcile. */}
+
                 Its dashboard configuration is removed with it. Deleting a
                 pipeline in GoHighLevel alone leaves a stale entry here; doing
                 both from one button is what avoids that.
@@ -2231,7 +1713,6 @@ export default function PipelineAdmin({
         />
       ) : null}
 
-      {/* ⚠️ RECONCILE, NEVER AUTO-DELETE. */}
       {data.stale.length ? (
         <div className="pfstale">
           <b>No longer in GoHighLevel</b>

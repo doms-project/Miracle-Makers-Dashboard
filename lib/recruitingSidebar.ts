@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// ROUND 177 — THE RECRUITING SIDEBAR: a heading, two sub-labels (Caregivers /
-// Office staff), and one entry per recruiting pipeline under the right one.
-//
-// Pure and env-free, so the client bundle and round177-proof drive the same
-// rules (the round-167 rule). Nothing here decides what anybody may see: the
-// server already scoped the caregiver payload. This only decides which of
-// those pipelines get a shortcut, under which sub-label, and what a click does.
-//
-// ⚠️ A SEPARATE FILE FROM clientSidebar.ts ON PURPOSE. The rules differ in
-// three places that matter: the list is the B5 rule (home ∪ pipelines you
-// already hold records in) rather than home only, there are two groups, and
-// there is no "All" entry. What IS shared — the hidden test, the initials and
-// the reset-on-hide — is imported, not copied.
-// ---------------------------------------------------------------------------
 import {
   entryInitials,
   isHiddenFromSidebar,
@@ -21,7 +6,6 @@ import {
 
 export type RecruitingGroup = "caregiver" | "staff";
 
-/** A pipeline's group. Unset reads as caregiver — the one default, in one place. */
 export function groupOf(
   groups: Record<string, RecruitingGroup | undefined>,
   pipelineId: string,
@@ -29,19 +13,6 @@ export function groupOf(
   return groups[pipelineId] === "staff" ? "staff" : "caregiver";
 }
 
-/**
- * The recruiting pipelines this viewer can open — page.tsx's B5 rule, moved
- * here so the proof drives the real one.
- *
- * Admins: every caregiver pipeline in the payload. Everyone else: their home
- * pipelines PLUS any pipeline they already hold records in.
- *
- * 🔴 THE UNION IS NOT OPTIONAL (round 155). applyAccess admits a record you
- * own or follow without consulting a grant, so a recruiter with no grant can
- * have applicants on screen; home-only — the client rule — would give them no
- * entry and no way in. It cannot widen anything: every id it adds is already
- * on a record the server sent this viewer.
- */
 export function recruitingVisible<P extends SidebarPipeline>(
   isAdmin: boolean,
   cgPipelines: P[],
@@ -54,7 +25,6 @@ export function recruitingVisible<P extends SidebarPipeline>(
   return cgPipelines.filter((p) => home.has(p.id) || inData.has(p.id));
 }
 
-/** The visible list narrowed to the heading switcher's group. */
 export function inGroup<P extends SidebarPipeline>(
   visible: P[],
   cgGroup: RecruitingGroup | "all",
@@ -66,7 +36,7 @@ export function inGroup<P extends SidebarPipeline>(
 export interface RecruitingEntry {
   id: string;
   name: string;
-  /** Applicants as the board shows them with no filters; null when it failed to load. */
+
   count: number | null;
   failed: boolean;
   initials: string;
@@ -75,23 +45,12 @@ export interface RecruitingEntry {
 export interface RecruitingModel {
   caregiver: RecruitingEntry[];
   staff: RecruitingEntry[];
-  /** A count for EVERY visible pipeline, hidden ones included (the dropdown's numbers). */
+
   counts: Record<string, number | null>;
-  /** True when there are pipelines to list and every one is hidden. */
+
   allHidden: boolean;
 }
 
-/**
- * The two lists. Payload order within each group — the order #cgPipeSel uses.
- *
- * ⚠️ NO "All" ENTRY, AND THE GROUPS NEVER MIX: a staff pipeline is only ever
- * under Office staff and a caregiver pipeline only under Caregivers, decided by
- * `groupOf` and nothing else.
- *
- * ⚠️ COUNTS: caregiver pipelines have no REASSIGN stage (ghl.ts — the reassign
- * flow refuses a pipeline without one), and the board filters by pipeline and
- * search only, so a count is simply that pipeline's records.
- */
 export function recruitingModel(args: {
   visible: SidebarPipeline[];
   records: { pipelineId: string }[];
@@ -121,19 +80,6 @@ export function recruitingModel(args: {
   return out;
 }
 
-/**
- * Which pipeline the board shows, given what was picked.
- *
- * 🔴 ROUND 177 · B7 — THE PICK MUST BE IN THE LIST. page.tsx returned
- * `cgPipeline` whatever it was, so a staff pipeline picked under "All
- * applicants" stayed on the board after switching to Caregivers, and #cgPipeSel
- * showed a value that was not among its options. A pick outside the group's
- * list now falls through to the default, so that state cannot be drawn.
- *
- * Default (nothing picked): the first SHOWN pipeline; if every one in the group
- * is hidden, the first hidden one — data on the board, the dropdown still
- * offers them, and no entry lights (the owner's Q3 answer).
- */
 export function activeRecruitingPipeline(
   cgPipeline: string,
   groupList: SidebarPipeline[],
@@ -151,7 +97,7 @@ export interface RecruitingFilterState {
   cgGroup: RecruitingGroup | "all";
   cgView: "list" | "board" | "resources";
   cgQuery: string;
-  /** The open record's pipeline, or null when nothing is open (client records too). */
+
   selPipelineId: string | null;
 }
 
@@ -166,18 +112,6 @@ export interface RecruitingFilterNext {
   closeRecord: boolean;
 }
 
-/**
- * One Recruiting sidebar click — every reset in one batch.
- *
- * ⚠️ THE GROUP RULE IS AddCaregiverDialog's onAdded rule: "all" stays "all"
- * (the pipeline is already in that list); otherwise the group becomes the
- * pipeline's own, so the board never shows a pipeline under the wrong half.
- *
- * Stage and tile focus reset (both are values of ONE pipeline). Sort and
- * group-by are kept (they are field-based preferences, not pipeline values).
- * Search text is kept (the user typed it). An open record outside the picked
- * pipeline — including a CLIENT record — is closed.
- */
 export function pickRecruitingPipeline(
   s: RecruitingFilterState,
   id: string,
@@ -197,7 +131,6 @@ export function pickRecruitingPipeline(
 
 export const REMEMBERED_CG_KEY = "mm.cgPipeline";
 
-/** The remembered Recruiting pipeline, validated: unopenable or hidden → "all". */
 export function restoreRememberedCg(
   stored: string | null | undefined,
   visible: SidebarPipeline[],
@@ -218,14 +151,6 @@ export type RecruitingEmptyCause =
   | "allHidden"
   | null;
 
-/**
- * Why there is nothing under the Recruiting heading — the sidebar's short
- * form of the board's `recruitingEmpty`, in the same order of precedence.
- *
- * 🔴 A FAILED LOAD COMES FIRST (round 177 · M3). An outage that read "no
- * pipelines assigned" would send a recruiter to an admin about access they
- * already have.
- */
 export function recruitingEmptyCause(args: {
   loadFailed: boolean;
   noRecruitingAccess: boolean;

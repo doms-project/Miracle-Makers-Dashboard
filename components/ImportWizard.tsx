@@ -21,18 +21,13 @@ import {
 
 type Parsed = { columns: string[]; rows: Record<string, unknown>[] };
 
-// "Append to notes" is a TARGET, not a fallback. It is listed first because it
-// is where an unclaimed column goes by default, and a person reading the list
-// should see the thing most of their columns are already pointing at.
 const NOTE_TARGET = "note:";
 
 const NATIVE_TARGETS: { key: string; label: string }[] = [
   { key: NOTE_TARGET, label: "Append to notes" },
   { key: "native:firstName", label: "Contact · First Name" },
   { key: "native:lastName", label: "Contact · Last Name" },
-  // ONE column, TWO fields. Split on the first space server-side, and shown in
-  // Preview so the split is seen rather than discovered. Indeed sends a single
-  // "name"; GHL wants First and Last separately.
+
   { key: "native:name", label: "Contact · Full Name (split into First / Last)" },
   { key: "native:email", label: "Contact · Email" },
   { key: "native:phone", label: "Contact · Phone" },
@@ -44,17 +39,6 @@ const CHUNK = 25;
 const STEPS = ["Upload", "Destination", "Map", "Preview", "Import"] as const;
 type StepIdx = 0 | 1 | 2 | 3 | 4;
 
-// ONE fixed vocabulary, ONE choice per import.
-//
-// This was a free-text input. Free text is how a channel ends up counted twice:
-// "Indeed", "indeed" and "Indeed.com" are three rows in the "By source" tile
-// and one real channel. The workflows that set `source` on inbound leads write
-// exactly these strings, so an import has to be able to write nothing else —
-// which means the vocabulary belongs in the picker, not in whoever is typing.
-//
-// A CSV COLUMN is deliberately not offered: a column fragments the count the
-// same way and puts it in the hands of whoever prepared the file. One import,
-// one source.
 const SOURCE_OPTIONS = [
   "Indeed",
   "Facebook",
@@ -64,36 +48,16 @@ const SOURCE_OPTIONS = [
   "Other",
 ] as const;
 
-/** Match a stored/typed value to the vocabulary, or "" if it isn't in it. */
 function canonicalSource(v: string): string {
   const k = (v || "").trim().toLowerCase();
   return SOURCE_OPTIONS.find((o) => o.toLowerCase() === k) || "";
 }
 
-// ---------------------------------------------------------------------------
-// THE HEADER ROW IS NOT ALWAYS ROW 1.
-//
-// A Google Ads export opens with the report's TITLE in row 1 — one populated
-// cell, everything else blank — and Indeed does the same. Read as the header,
-// that single cell becomes the file's only column and every real column
-// disappears. The wizard then offers one mapping target and looks broken.
-//
-// The rule is a SHAPE rule, not a vendor rule: a row carrying ONE populated
-// cell above rows carrying many is a title, whatever wrote it. Nothing here
-// knows the word "Google" or "Indeed".
-// ---------------------------------------------------------------------------
-const HEADER_SCAN_LIMIT = 10; // never eat more than the top of a file
+const HEADER_SCAN_LIMIT = 10;
 
 const populated = (row: unknown[]): number =>
   row.filter((c) => String(c ?? "").trim() !== "").length;
 
-/**
- * The index of the row that is really the header, plus the rows skipped to
- * reach it (returned so they can be NAMED on screen rather than vanishing).
- *
- * ⚠️ A genuinely single-column file must survive. If no row in the scan window
- * carries two or more populated cells, nothing is skipped and row 0 stands.
- */
 function findHeaderRow(grid: unknown[][]): { idx: number; skipped: string[] } {
   const limit = Math.min(grid.length, HEADER_SCAN_LIMIT);
   let best = -1;
@@ -111,20 +75,6 @@ function findHeaderRow(grid: unknown[][]): { idx: number; skipped: string[] } {
   return { idx: best, skipped };
 }
 
-/**
- * A trailing TOTALS row, by the same shape reasoning: the last row of a report
- * export is often a summary with one or two populated cells, or one whose first
- * cell says "Total". It is not a person and must not become a contact.
- */
-/**
- * Grid + header index -> the wizard's { columns, rows }.
- *
- * ⚠️ The Excel apostrophe comes off HERE as well as server-side, so Preview
- * shows the value that will actually be stored rather than one with a stray
- * quote in front of it. Leading only, once — O'Brien and D'Angelo are
- * untouched. (The server strips again; it must not trust a client to have done
- * it.)
- */
 function gridToParsed(
   grid: unknown[][],
   headerIdx: number,
@@ -154,15 +104,14 @@ function gridToParsed(
 }
 
 function trailingTotalsRow(grid: unknown[][], headerIdx: number): number | null {
-  if (grid.length - headerIdx < 3) return null; // header + at least two rows
+  if (grid.length - headerIdx < 3) return null;
   const last = grid[grid.length - 1] || [];
   const first = String(last[0] ?? "").trim();
   const headerCells = populated(grid[headerIdx] || []);
   const isSummary =
     /^(total|totals|grand total|sum)\b/i.test(first) ||
     (populated(last) <= 1 && headerCells >= 2) ||
-    // Far fewer cells than the header promises, AND the first cell is blank —
-    // the shape a spreadsheet totals line usually has.
+
     (!first && populated(last) > 0 && populated(last) < headerCells / 2);
   return isSummary ? grid.length - 1 : null;
 }
@@ -178,18 +127,14 @@ export default function ImportWizard({
   const [step, setStep] = useState<StepIdx>(0);
 
   const [fileName, setFileName] = useState("");
-  // The file as read, kept so the header row can be re-chosen without asking
-  // for the file again.
+
   const [rawGrid, setRawGrid] = useState<unknown[][] | null>(null);
-  // What was skipped to find the header, and any trailing totals row. Held so
-  // it can be SAID on screen: a row silently discarded is how someone ends up
-  // importing 46 of 47 people and never knowing.
+
   const [skipNotice, setSkipNotice] = useState<{
     top: string[];
     bottom: string | null;
     headerIdx: number;
-    // The person overrode the detection and asked for the file exactly as
-    // written. Kept so the notice can flip its wording and offer the way back.
+
     overridden: boolean;
   } | null>(null);
   const [parsed, setParsed] = useState<Parsed | null>(null);
@@ -198,19 +143,13 @@ export default function ImportWizard({
 
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState("");
-  // Starts EMPTY, not on "Indeed". A default that is a real channel stamps that
-  // channel on an import of some other channel whenever nobody looks at this
-  // step — the exact miscount the fixed vocabulary exists to prevent.
+
   const [source, setSource] = useState("");
-  // OPTIONAL. Free text, as typed — normalised only for display and for the
-  // write, never in the box, so the person is not fighting the field as they
-  // type. Blank means no tag is applied.
+
   const [batchTag, setBatchTag] = useState("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
 
-  // ITEM 5 — who already exists, checked on the way into Preview so the choice
-  // is made BEFORE anything runs.
   const [dupMode, setDupMode] = useState<DuplicateMode>("update");
   const [dups, setDups] = useState<ImportDuplicate[] | null>(null);
   const [dupBusy, setDupBusy] = useState(false);
@@ -230,7 +169,6 @@ export default function ImportWizard({
     return ssoBlob ? { "x-ghl-sso-key": ssoBlob } : {};
   }, [ssoBlob]);
 
-  // Load pipelines + field defs (all dynamic).
   useEffect(() => {
     let cancelled = false;
     fetch("/api/import/meta", { headers: ssoHeader(), cache: "no-store" })
@@ -238,7 +176,7 @@ export default function ImportWizard({
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw apiError(res, j);
         if (!cancelled) {
-          setMetaErr(null); // a success clears the previous attempt's error
+          setMetaErr(null);
           setMeta(j as ImportMeta);
         }
       })
@@ -256,7 +194,7 @@ export default function ImportWizard({
         Object.keys(JSON.parse(localStorage.getItem("importPresets") || "{}")),
       );
     } catch {
-      /* ignore */
+
     }
   }, []);
 
@@ -268,13 +206,6 @@ export default function ImportWizard({
   const stageName =
     pipeline?.stages.find((s) => s.id === stageId)?.name || "—";
 
-  // Three groups, rendered as <optgroup> so which model a field belongs to is
-  // obvious at the point of choosing rather than something you have to know.
-  //
-  // 🔴 CONTACT FIELDS MATTER MOST HERE. An applicant's experience,
-  // certifications and availability are contact fields BY DESIGN — they
-  // describe the person and survive a second application — and the wizard
-  // could not reach a single one of them until now.
   const targetGroups = useMemo(() => {
     const contact = (meta?.contactFieldDefs || []).map((d) => ({
       key: `ccf:${d.id}`,
@@ -291,7 +222,6 @@ export default function ImportWizard({
     ].filter((g) => g.options.length);
   }, [meta]);
 
-  // Flat, for looking a target's label up by key (Preview's column headers).
   const targets = useMemo(
     () =>
       targetGroups.flatMap((g) =>
@@ -307,9 +237,7 @@ export default function ImportWizard({
     (columns: string[]): { map: Record<string, string>; auto: Set<string> } => {
       const out: Record<string, string> = {};
       const auto = new Set<string>();
-      // A full-name column may only auto-map when the file has NO separate
-      // first/last columns. With all three present, mapping them all writes the
-      // same person twice and the last one silently wins.
+
       const hasSplitName = columns.some((c) => {
         const n = norm(c);
         return n.includes("firstname") || n.includes("lastname");
@@ -325,16 +253,7 @@ export default function ImportWizard({
         else if ((n === "name" || n === "fullname") && !hasSplitName)
           target = "native:name";
         else {
-          // EXACT normalised name only. Deliberately not fuzzy: "job location"
-          // would happily match "CG - Work State" under loose matching and
-          // nobody would ever notice. A wrong mapping that looks right is the
-          // failure mode this project has hit most often; unmapped is at least
-          // visible, and now recoverable.
-          //
-          // CONTACT fields are searched FIRST. Where both models happen to hold
-          // a field of the same name, the contact one is the one that describes
-          // the person and survives a second application — which is what an
-          // applicant import is writing.
+
           const cDef = (meta?.contactFieldDefs || []).find((d) => norm(d.name) === n);
           if (cDef) target = `ccf:${cDef.id}`;
           else {
@@ -343,10 +262,7 @@ export default function ImportWizard({
           }
         }
         if (target) auto.add(c);
-        // 🔴 THE FAILURE MODE FLIPS HERE. An unclaimed column used to be "" —
-        // dropped, silently, with the import still reporting success. It now
-        // defaults to the note, where it is recoverable. Dropping is still one
-        // click away; it is just no longer the thing that happens by default.
+
         out[c] = target || NOTE_TARGET;
       }
       return { map: out, auto };
@@ -354,14 +270,6 @@ export default function ImportWizard({
     [meta],
   );
 
-  /**
-   * Grid -> everything the wizard holds. ONE path, used by the first parse and
-   * by the override button, so what the notice claims and what the wizard is
-   * actually working from cannot drift apart.
-   *
-   * `overridden` means the person asked for the file exactly as written: row 0
-   * is the header and nothing comes off the bottom.
-   */
   const applyGrid = (
     grid: unknown[][],
     headerIdx: number,
@@ -377,8 +285,6 @@ export default function ImportWizard({
     return dropped;
   };
 
-  // The escape hatches on the Upload step. Neither re-reads the file — the grid
-  // is already in hand, so flipping back and forth costs nothing.
   const useFileAsWritten = () => {
     if (!rawGrid || !skipNotice) return;
     try {
@@ -400,9 +306,6 @@ export default function ImportWizard({
     }
   };
 
-  // The SAME check the route runs (lib/batchTag.ts). Shown as you type so
-  // "Batch — Google Ads Aug 2026" becoming "batch-google-ads-aug-2026" is
-  // visible BEFORE submitting rather than discovered afterwards.
   const tagCheck = useMemo(() => checkBatchTag(batchTag), [batchTag]);
 
   const parseFile = async (file: File) => {
@@ -410,14 +313,11 @@ export default function ImportWizard({
     setSummary(null);
     setImportErr(null);
     setFileName(file.name);
-    // A new file must not inherit the last one's notice or grid.
+
     setRawGrid(null);
     setSkipNotice(null);
     try {
-      // 🔴 BOTH formats become a GRID first, so the header-row detection is one
-      // rule applied once. CSV used to parse with `header: true`, which hands
-      // row 1 to Papa as the header before anything can look at it — a report
-      // title then IS the header and there is no way back.
+
       let grid: unknown[][];
       if (/\.csv$/i.test(file.name)) {
         const res = await new Promise<Papa.ParseResult<string[]>>(
@@ -443,10 +343,7 @@ export default function ImportWizard({
           ? { top: found.skipped, bottom: dropped, headerIdx: found.idx, overridden: false }
           : null;
       setSkipNotice(notice);
-      // 🔴 DO NOT SKIP PAST THE NOTICE. A clean file still jumps straight to
-      // Destination; a file where rows were dropped holds on Upload until the
-      // person has seen WHICH rows and agreed. Advancing here is how a silent
-      // discard stays silent.
+
       if (!notice) setStep(1);
     } catch (e) {
       setParseErr(e);
@@ -484,15 +381,12 @@ export default function ImportWizard({
             mapping,
             rows: chunk,
             rowOffset: off,
-            // The whole file, for the note's "N records in this batch" line —
-            // the chunk would say 25 on a 47-row import.
+
             totalRows: parsed.rows.length,
             duplicateMode: dupMode,
-            // Sent raw; the route normalises and re-checks it. Blank is valid
-            // and means no tag.
+
             batchTag,
-            // FILE order, so the note's Q&A pairing still sees the answer
-            // column immediately after its question.
+
             columns: parsed.columns,
           }),
         });
@@ -531,13 +425,6 @@ export default function ImportWizard({
     URL.revokeObjectURL(url);
   };
 
-  // Presets.
-  //
-  // This used `window.prompt()`. The dashboard runs INSIDE A GHL IFRAME, and a
-  // sandboxed iframe without `allow-modals` makes prompt() return null with no
-  // dialog at all — so "Save preset" did nothing, silently, exactly like the
-  // Remove-note button did. Same defect, different screen; found while fixing
-  // that one. An inline input replaces it.
   const savePreset = (name: string) => {
     const clean = name.trim();
     if (!clean) return;
@@ -558,17 +445,12 @@ export default function ImportWizard({
       for (const c of parsed.columns) next[c] = p.mapping?.[c] || mapping[c] || "";
       setMapping(next);
     }
-    // Presets saved before the picker existed hold free text. Anything that is
-    // not in the vocabulary is dropped rather than coerced to "Other" — a
-    // silently mis-stamped batch is worse than being asked the question again.
+
     if (p.source) setSource(canonicalSource(p.source));
     if (p.pipelineId) setPipelineId(p.pipelineId);
     if (p.stageId) setStageId(p.stageId);
   };
 
-  // Three groups, counted separately, because "mapped" stopped meaning one
-  // thing the moment notes became a target: a column going to notes is neither
-  // a field nor a silent loss.
   const fieldCols = parsed
     ? parsed.columns.filter((c) => mapping[c] && mapping[c] !== NOTE_TARGET)
     : [];
@@ -581,15 +463,10 @@ export default function ImportWizard({
     : [];
   const mappedCount = fieldCols.length + noteCols.length;
 
-  // The column mapped to Full Name, if any — Preview shows what the split does
-  // to it. At most one can be mapped there, so the first is the one.
   const nameCol = parsed
     ? parsed.columns.find((c) => mapping[c] === "native:name") || ""
     : "";
 
-  // The note the FIRST row would get, built by the same function the server
-  // uses. Not a mock-up of it — the same code, so what is previewed is what
-  // lands.
   const notePreview = useMemo(() => {
     if (!parsed || !parsed.rows.length || !noteCols.length) return "";
     const r = parsed.rows[0];
@@ -600,12 +477,9 @@ export default function ImportWizard({
       batchSize: parsed.rows.length,
       columns: noteCols.map((h) => ({ header: h, value: String(r[h] ?? "") })),
     });
-    // noteCols is derived from `parsed` and `mapping`; both are listed.
+
   }, [parsed, mapping, source, noteCols]);
 
-  // A row can only become a GHL contact if at least one column maps to a contact
-  // identity (name/email/phone). Without this, every row fails server-side with
-  // "No name/email/phone to import." — so require it before Preview/Import.
   const IDENTITY_TARGETS = new Set([
     "native:firstName",
     "native:lastName",
@@ -617,9 +491,6 @@ export default function ImportWizard({
     ? parsed.columns.some((c) => IDENTITY_TARGETS.has(mapping[c] || ""))
     : false;
 
-  // Resolve each row's identity from the CURRENT mapping — the same columns the
-  // import itself will use, so the check can never be asking about a different
-  // field than the one that will be written.
   const identityOf = useCallback(
     (r: Record<string, unknown>) => {
       let email = "";
@@ -647,8 +518,7 @@ export default function ImportWizard({
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw apiError(res, j);
       setDups(j.duplicates || []);
-      // A lookup that FAILED is not "no duplicate" — say so rather than letting
-      // a network blip read as a clean file.
+
       if (Array.isArray(j.errors) && j.errors.length)
         setDupErr({
           error: `${j.errors.length} row${j.errors.length === 1 ? "" : "s"} could not be checked.`,
@@ -665,17 +535,13 @@ export default function ImportWizard({
 
   const canNext = (): boolean => {
     if (step === 0) return !!parsed;
-    // Source is asked on this step and is not optional: see SOURCE_OPTIONS.
-    // A blocked tag stops the step. Blank does not — the tag is optional and an
-    // empty box must never hold an import up.
+
     if (step === 1)
       return !!pipelineId && !!stageId && !!source && !tagCheck.error;
     if (step === 2) return mappedCount > 0 && hasIdentity;
     return true;
   };
 
-  // Same rule: a failed RE-read of the import metadata must not delete a wizard
-  // the user is halfway through. Only a first load with nothing to show.
   if (metaErr && !meta)
     return (
       <div className="statewrap">
@@ -694,7 +560,7 @@ export default function ImportWizard({
 
   return (
     <div className="scroll importwrap">
-      {/* progress indicator */}
+
       <ol className="istepper">
         {STEPS.map((label, i) => (
           <li
@@ -713,7 +579,6 @@ export default function ImportWizard({
         ))}
       </ol>
 
-      {/* STEP 1 — Upload */}
       {step === 0 && (
         <div className="isec">
           <div
@@ -748,10 +613,6 @@ export default function ImportWizard({
             </div>
           ) : null}
 
-          {/* ⚠️ WHAT WAS DROPPED, NAMED. The rows are quoted back verbatim so
-              the person can see it really was a report title and not somebody's
-              record. Both directions are one click and no re-read of the
-              file. */}
           {skipNotice ? (
             <div className={`ihead ${skipNotice.overridden ? "raw" : ""}`}>
               {skipNotice.overridden ? (
@@ -811,7 +672,6 @@ export default function ImportWizard({
         </div>
       )}
 
-      {/* STEP 2 — Destination */}
       {step === 1 && (
         <div className="isec">
           <div className="istep">Destination</div>
@@ -838,9 +698,7 @@ export default function ImportWizard({
               disabled={!pipeline}
             >
               <option value="">Choose a stage…</option>
-              {/* ITEM 6 — REASSIGN is a holding queue, never a starting
-                  stage. Importing straight into it would create unowned
-                  records with no followers and no notification. */}
+
               {(pipeline?.stages || [])
                 .filter((s) => s.name.trim().toUpperCase() !== "REASSIGN")
                 .map((s) => (
@@ -867,10 +725,6 @@ export default function ImportWizard({
               this file mixes channels, split it and import each separately.
             </div>
 
-            {/* ⚠️ OPTIONAL, AND NOT THE SOURCE. Source is a field on both the
-                contact and the opportunity and drives the logo, the tile and
-                the filter. This tag exists only to find one import's records
-                again afterwards — which nothing else does today. */}
             <label>Batch tag <span className="iopt">optional</span></label>
             <input
               className="itag"
@@ -880,9 +734,7 @@ export default function ImportWizard({
               onChange={(e) => setBatchTag(e.target.value)}
               aria-invalid={!!tagCheck.error}
             />
-            {/* SUGGEST, NEVER RESTRICT — so nobody types "google ads" next to
-                an existing "google-ads". A brand-new tag stays one keystroke
-                away, and an empty list just leaves a plain text box. */}
+
             <datalist id="batchtags">
               {(meta?.tags ?? []).map((t) => (
                 <option key={t} value={t} />
@@ -912,7 +764,6 @@ export default function ImportWizard({
         </div>
       )}
 
-      {/* STEP 3 — Map */}
       {step === 2 && parsed && (
         <div className="isec">
           <div className="istep">
@@ -1003,11 +854,7 @@ export default function ImportWizard({
                       setMapping((m) => ({ ...m, [c]: e.target.value }))
                     }
                   >
-                    {/* "Don't import" still MEANS dropped. Notes is the
-                        default, not a catch-all — choosing this throws the
-                        column away, which is often the right call for 45 empty
-                        Qualification columns. It is now a click, not an
-                        oversight. */}
+
                     <option value="">— Don&apos;t import —</option>
                     {targetGroups.map((g) =>
                       g.group ? (
@@ -1034,7 +881,6 @@ export default function ImportWizard({
         </div>
       )}
 
-      {/* STEP 4 — Preview */}
       {step === 3 && parsed && (
         <div className="isec">
           <div className="istep">Preview</div>
@@ -1043,10 +889,6 @@ export default function ImportWizard({
             deduped by email/phone.
           </div>
 
-          {/* ITEM 5 — WHO ALREADY EXISTS, AND WHAT TO DO ABOUT THEM.
-              Asked here, before anything runs, and the people are NAMED: "12
-              already exist" is abstract, seeing Ebony Logan on the list makes
-              the choice real. */}
           {dupBusy ? (
             <div className="idups busy">Checking which of these already exist…</div>
           ) : dups && dups.length ? (
@@ -1083,9 +925,7 @@ export default function ImportWizard({
                 <span>
                   <b>Overwrite</b> — replace existing values, add the note.
                   {dupMode === "overwrite" ? (
-                    // Not just a label. A row from this file has 45 empty
-                    // columns; overwriting with blanks would wipe the answers a
-                    // caregiver gave through the form.
+
                     <em className="idups-warn">
                       This replaces values on {dups.length} record
                       {dups.length === 1 ? "" : "s"}. A blank cell in the CSV
@@ -1131,10 +971,6 @@ export default function ImportWizard({
           ) : null}
           {dupErr ? <ErrorMessage error={dupErr} className="savemsg err" /> : null}
 
-          {/* ⚠️ SCOPE. A contact field belongs to the PERSON, not to this
-              record — writing one changes what every opportunity that contact
-              holds shows. The record panel already says this; the wizard has to
-              say it too, before the write rather than after. */}
           {contactFieldCols.length ? (
             <div className="iscope">
               <b>
@@ -1147,10 +983,6 @@ export default function ImportWizard({
             </div>
           ) : null}
 
-          {/* The same rule for ROWS as for columns: say it here too, because
-              Preview is where the count gets checked against the file. Someone
-              expecting 47 and seeing 45 needs the two missing rows named on the
-              screen that shows the number, not three steps back. */}
           {skipNotice && !skipNotice.overridden ? (
             <div className="idrops">
               <b>
@@ -1166,10 +998,6 @@ export default function ImportWizard({
             </div>
           ) : null}
 
-          {/* NAMED, not counted. "6 columns will not be imported" is abstract;
-              seeing "education · job location" makes it a decision. Not an
-              error — dropping is often right, and the 45 empty Qualification
-              columns usually should be. */}
           {droppedCols.length ? (
             <div className="idrops">
               <b>
@@ -1180,8 +1008,6 @@ export default function ImportWizard({
             </div>
           ) : null}
 
-          {/* The split, SHOWN rather than discovered. Split on the first space,
-              so a multi-word surname stays whole. */}
           {nameCol ? (
             <div className="isplit">
               <b>{nameCol}</b> becomes First / Last —
@@ -1197,8 +1023,6 @@ export default function ImportWizard({
             </div>
           ) : null}
 
-          {/* One note per record, not one per column. Shown for the first row
-              so nobody discovers the layout after 47 records already have it. */}
           {noteCols.length && parsed.rows.length ? (
             <details className="inotepv">
               <summary>
@@ -1240,7 +1064,6 @@ export default function ImportWizard({
         </div>
       )}
 
-      {/* STEP 5 — Import */}
       {step === 4 && parsed && (
         <div className="isec">
           <div className="istep">Import</div>
@@ -1316,8 +1139,7 @@ export default function ImportWizard({
                 {summary.notesSkipped ? (
                   <span>· {summary.notesSkipped} notes already present</span>
                 ) : null}
-                {/* Only when a tag was asked for. A zero here on an untagged
-                    import would read like something failed. */}
+
                 {tagCheck.tag ? (
                   <span>
                     · {summary.tagged} tagged <code>{tagCheck.tag}</code>
@@ -1325,10 +1147,7 @@ export default function ImportWizard({
                 ) : null}
                 <span className="bad">· {summary.failed} failed</span>
               </div>
-              {/* NOT errors. The value went in exactly as written; this is the
-                  list a person looks at afterwards to decide whether it was
-                  right. An international phone that doesn't fit E.164 may be
-                  perfectly correct — code must not decide that. */}
+
               {summary.flagged.length ? (
                 <div className="iflags">
                   <b>
@@ -1388,7 +1207,6 @@ export default function ImportWizard({
         </div>
       )}
 
-      {/* nav */}
       {!(step === 4 && summary) ? (
         <div className="inav">
           <button
@@ -1405,17 +1223,9 @@ export default function ImportWizard({
               className="ibtn"
               disabled={!canNext()}
               onClick={() => {
-                // 🔴 THE CHECK MUST NOT LIVE INSIDE THE STATE UPDATER. React
-                // may call an updater more than once (it does, in development),
-                // and a side effect in there fires with it — the first run of
-                // this cost 15 GoHighLevel lookups on a 3-row file instead of
-                // 5, because the whole duplicate check ran twice. On a 47-row
-                // import that is 94 calls against a 100-per-10-seconds budget.
-                // Updaters are pure; the effect goes beside it.
+
                 const next = Math.min(step + 1, 4) as StepIdx;
-                // Entering Preview: find out who already exists BEFORE anything
-                // runs. Re-run each time, because the mapping may have changed
-                // which column is the email.
+
                 if (next === 3) void checkDuplicates();
                 setStep(next);
               }}

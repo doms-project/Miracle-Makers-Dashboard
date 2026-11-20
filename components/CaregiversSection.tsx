@@ -7,41 +7,20 @@ import type { Caregiver } from "@/lib/types";
 
 const LOCATION_ID =
   process.env.NEXT_PUBLIC_GHL_LOCATION_ID || "anzcWt3S0tzpu2fEaS8X";
-// DELIBERATELY NOT hidden from reps, unlike the panel's "Open in GoHighLevel"
-// link. That one targets /opportunities/ — the module reps are having switched
-// off. This targets /contacts/detail/, which is a SEPARATE GoHighLevel module
-// with its own permission, and a rep who has lost Opportunities may well keep
-// Contacts. Hiding it on the assumption they lost both would remove a working
-// link and leave the caregiver name unopenable for no reason.
-//
-// If reps also lose Contacts, this needs the same treatment — that is an account
-// setting, not something the code can determine.
+
 const contactUrl = (contactId: string) =>
   `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/contacts/detail/${contactId}`;
 
 type SearchHit = {
   id: string;
   name: string;
-  /**
-   * 🔴 ROUND 172 — NO EMAIL AND NO PHONE, ON EITHER SIDE. This carried
-   * `email` and the row printed it. A picker needs enough to tell two people
-   * apart and nothing more, and the case does that better than an address
-   * does. Removed from the TYPE as well as the markup so a future row cannot
-   * put it back by reading a field that was still arriving.
-   */
+
   pipelineName?: string;
   stage?: string;
-  /** Cases this person holds beyond the one shown. */
+
   more?: number;
 };
 
-// Task 4 — view + manage the caregivers associated with an enrollment's client
-// contact. Add is a searchable typeahead (caregiver contacts only); remove
-// unlinks the relation. All writes go through the visibility-gated API.
-// BUG 1 — the association is DIRECTIONAL, and this section used to ignore that.
-// It listed "whichever contact isn't me" and always called them caregivers, so
-// opening a CAREGIVER's record showed their CLIENTS under a "Caregivers"
-// heading. Every label here now follows the resolved role.
 export default function CaregiversSection({
   opportunityId,
   ssoBlob,
@@ -53,27 +32,15 @@ export default function CaregiversSection({
   opportunityId: string;
   ssoBlob: string | null;
   canManage: boolean;
-  // ITEM 1 — true once the panel ABOVE this section has finished loading and
-  // laid out. Visibility alone is not a usable trigger: at mount the contact
-  // sections do not exist yet, so this section sits high in a short panel and
-  // is genuinely on screen — the observer fired immediately and the lazy-load
-  // did nothing. Measured, not assumed: the caregivers call still went out at
-  // +90ms with the observer in place. So visibility is only consulted once the
-  // panel is its real height.
+
   panelReady?: boolean;
-  // ITEM 2 — THIS record's own role, decided by the caller from which payload
-  // the record came out of. See the note on `otherRole` below for why it had to
-  // be passed in rather than inferred here.
+
   selfRole?: "caregiver" | "client";
-  // ROUND 183 — tells the board what GoHighLevel just returned, so the card's
-  // "⇄ 1 caregiver" badge follows the panel instead of waiting for a reload.
-  // `links` is THIS record's full list as read back from GoHighLevel;
-  // `otherContactId` is the person just linked or unlinked, whose own count
-  // is now stale and must be re-asked.
+
   onLinksChanged?: (links: Caregiver[], otherContactId?: string) => void;
 }) {
   const [caregivers, setCaregivers] = useState<Caregiver[] | null>(null);
-  // A ref, so a new callback identity from the parent never re-runs load().
+
   const linksChangedRef = useRef(onLinksChanged);
   linksChangedRef.current = onLinksChanged;
   const [loadErr, setLoadErr] = useState<unknown>(null);
@@ -81,13 +48,9 @@ export default function CaregiversSection({
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
-  // 🔴 ROUND 171 — THE STANDING CONSUMER RULE, CLIENT HALF. The route filters
-  // the client list by the viewer's grants, so an empty picker has two causes
-  // that look identical: nobody matches, or nobody you may see matches.
+
   const [hitsWithheld, setHitsWithheld] = useState(0);
-  // 🔴 ROUND 172 — TRUE WHEN THE RECORD-TYPE HALF OF THE CAREGIVER SEARCH
-  // COULD NOT BE READ. "No caregiver matches" is only true if both halves were
-  // asked; saying it when one of them failed is a claim nobody checked.
+
   const [labelsOut, setLabelsOut] = useState(false);
   const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
@@ -100,13 +63,10 @@ export default function CaregiversSection({
     return h;
   }, [ssoBlob]);
 
-  /** Which load() is current — see the sequence guard inside it. */
   const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
-    // 🔴 SEQUENCED — round 111. `headers()` depends on `ssoBlob`, so this is
-    // rebuilt and re-fired when the blob lands, and `load` is also called again
-    // after every link/unlink. Two in flight, and the loser used to win.
+
     const seq = ++loadSeq.current;
     const isCurrent = () => seq === loadSeq.current;
 
@@ -121,27 +81,15 @@ export default function CaregiversSection({
       if (!res.ok) throw apiError(res, j);
       setLoadErr(null);
       setCaregivers(j.caregivers || []);
-      // Opening the panel is a fresh read, so it also corrects this record's
-      // badge if it was counted before a link changed elsewhere.
+
       linksChangedRef.current?.(j.caregivers || []);
     } catch (e) {
       if (!isCurrent()) return;
       setLoadErr(e);
-      // ⚠️ The linked caregivers stay. Emptying the list on a failed refresh
-      // says "nobody is assigned to this client", which is a different and much
-      // more alarming claim than "we could not check just now".
+
     }
   }, [opportunityId, headers]);
 
-  // ITEM 1 — LAZY. This section sits at the BOTTOM of a 58-field panel, below
-  // fourteen day-dropdowns, and most opens never scroll to it — yet it fired a
-  // GoHighLevel /associations/relations call the instant the panel mounted,
-  // alongside notes and the contact fields. Three requests at once against a
-  // 100-per-10s budget is how the 429 arrived, and it arrived HERE because this
-  // is simply the call that lost the race.
-  //
-  // Nothing is fetched until the section is actually scrolled into view. An
-  // open that never reaches it costs zero GHL calls.
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [seen, setSeen] = useState(false);
 
@@ -151,11 +99,10 @@ export default function CaregiversSection({
 
   useEffect(() => {
     if (seen) return;
-    if (panelReady === false) return; // panel still growing — measuring now is meaningless
+    if (panelReady === false) return;
     const el = hostRef.current;
     if (!el) return;
-    // No IntersectionObserver (old webview, jsdom) → fall back to eager, which
-    // is exactly the old behaviour. Degrade to slower, never to broken.
+
     if (typeof IntersectionObserver === "undefined") {
       setSeen(true);
       return;
@@ -167,7 +114,7 @@ export default function CaregiversSection({
           io.disconnect();
         }
       },
-      // A little early, so the list is usually there by the time it is read.
+
       { root: null, rootMargin: "200px" },
     );
     io.observe(el);
@@ -183,7 +130,6 @@ export default function CaregiversSection({
     load();
   }, [load, seen]);
 
-  // Debounced typeahead search.
   useEffect(() => {
     if (!canManage) return;
     if (debounce.current) clearTimeout(debounce.current);
@@ -209,7 +155,7 @@ export default function CaregiversSection({
           setLabelsOut(!!j.labelsUnavailable);
         }
       } catch {
-        /* ignore transient search errors */
+
       } finally {
         setSearching(false);
       }
@@ -264,22 +210,6 @@ export default function CaregiversSection({
     }
   };
 
-  // What the OTHER side of these relations is, from the server's direction
-  // resolution. Falls back to "caregiver" only when there is nothing to go on
-  // (an empty list), which is the common case on a client record.
-  // 🔴 REPORT 29'S FIX WAS ONLY EVER HALF-WORKING, and this is why.
-  //
-  // It read the direction out of the RELATIONS LIST — fine on a record with at
-  // least one link, but on an applicant with no linked clients the list is
-  // empty, the `?? "caregiver"` default won, and a caregiver's own record was
-  // headed "Caregivers". Exactly the bug 29 set out to fix, still happening on
-  // the records most likely to hit it: brand-new applicants, who have no
-  // relations yet.
-  //
-  // The record's OWN role is known for certain from which payload it came out
-  // of, so it is passed in and WINS. The list is kept only as a fallback for a
-  // caller that doesn't supply it — direction is a fact about this record, not
-  // something to infer from data that may not exist.
   const otherRole: "caregiver" | "client" = selfRole
     ? selfRole === "caregiver"
       ? "client"
@@ -290,17 +220,14 @@ export default function CaregiversSection({
 
   return (
     <div className="cgsec" ref={hostRef}>
-      {/* Direction decides the heading: this record is in the caregiver slot ->
-          the other side is a CLIENT, and vice versa. */}
+
       <div className="sechead cghead">
         {otherRole === "client" ? "Clients" : "Caregivers"}
         {caregivers?.length ? (
           <span className="cgcount">{caregivers.length}</span>
         ) : null}
       </div>
-      {/* A failed RELOAD is shown above the list it failed to replace, not
-          instead of it — the names already on screen are still the last true
-          answer. Only a first load with nothing to show takes the whole slot. */}
+
       {loadErr && caregivers?.length ? (
         <ErrorMessage error={loadErr} className="savemsg err" />
       ) : null}
@@ -360,15 +287,7 @@ export default function CaregiversSection({
                 </div>
               ) : hits.length === 0 ? (
                 <div className="cgmuted" style={{ padding: "8px 10px" }}>
-                  {/* 🔴 ROUND 172 — NOBODY MATCHING MEANS NOBODY IS SHOWN.
-                      The old picker answered an empty caregiver search with
-                      every other match it had, which is a confident answer to
-                      a different question and is how a client reached a
-                      caregiver slot.
-                      ⚠️ AND THE SENTENCE DIFFERS BY SIDE BECAUSE THE REASON
-                      DOES: the client list is scoped to your grants (round
-                      171) and the caregiver list is not scoped at all (round
-                      172), so only one of them can be empty because of you. */}
+
                   {otherRole === "caregiver" ? (
                     labelsOut ? (
                       <>
@@ -400,16 +319,7 @@ export default function CaregiversSection({
                       onClick={() => add(h)}
                     >
                       <span className="cghitname">{h.name}</span>
-                      {/* 🔴 THE CASE IS WHY THEY ARE IN THIS LIST AT ALL, so it
-                          is shown rather than implied. Two people with the same
-                          name are told apart by their pipeline and stage, and
-                          nothing else here could do it. */}
-                      {/* 🔴 THE CASE, AND NOTHING ELSE. It tells two people
-                          with one name apart, which is all a picker needs;
-                          an address, a number or a compliance flag is detail
-                          this control has no business carrying. A caregiver
-                          known only by their Record Type has no case to show,
-                          and showing nothing is the honest rendering. */}
+
                       {h.pipelineName ? (
                         <span className="cghitmeta">
                           {h.pipelineName}

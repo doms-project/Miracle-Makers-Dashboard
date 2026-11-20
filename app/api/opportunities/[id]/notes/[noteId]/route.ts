@@ -18,20 +18,6 @@ import { withGrants } from "@/lib/withGrants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 4 — edit a note. PUT { ssoKey?, body }
-//
-// The decision, and the reasons it was made that way:
-//   - the AUTHOR only, admins included. On a transferred case the notes are the
-//     receiving rep's only account of what happened; someone else rewriting them
-//     is worse than the typo.
-//   - NO delete route exists, deliberately. A gap nobody can see is worse than a
-//     visible correction. There is no DELETE handler here and there should not be.
-//   - the edit OVERWRITES the original text — this is not a true audit trail,
-//     and the "[edited]" marker is what keeps it honest.
-//
-// Two things are recovered SERVER-SIDE and never taken from the client: the
-// note's author (the gate) and the division stamped at original write time (so
-// an edit cannot relabel which division wrote it).
 async function putHandler(
   request: Request,
   ctx: { params: Promise<{ id: string; noteId: string }> },
@@ -93,7 +79,6 @@ async function putHandler(
         status: 404,
       });
 
-    // THE GATE. Author only — an admin is not an exception here.
     if (enforce && session && existing.userId !== session.userId)
       return NextResponse.json(
         {
@@ -105,28 +90,17 @@ async function putHandler(
         { status: 403 },
       );
 
-    // 🔴 THE SERVER IS THE BOUNDARY, not the form.
-    //
-    // The note is re-read from GoHighLevel and rebuilt from its STORED parts:
-    // the division stamped at original write time, the [move] flag, and — the
-    // one that matters — the SYSTEM half of a Move note. The only thing the
-    // client controls is the reason. Anything it sends for the prefix is
-    // discarded, so a direct API call cannot rewrite the audit trail however
-    // the form is bypassed.
-    //
-    // Only `body` goes to GHL, so `dateAdded` — the original timestamp — is
-    // untouched.
     const original = parseNoteBody(existing.body);
     const note = await updateOpportunityNote(
       record.contactId,
       noteId,
       composeNoteBody({
-        division: original.division, // stored
+        division: original.division,
         edited: true,
-        removed: false, // editing brings a withdrawn reason back
-        isMove: original.isMove, // stored
-        system: original.system, // stored — NEVER from the request
-        reason: text, // the only client-controlled part
+        removed: false,
+        isMove: original.isMove,
+        system: original.system,
+        reason: text,
       }),
       existing.userId,
     );
@@ -153,17 +127,6 @@ async function putHandler(
   }
 }
 
-// ITEM 5 — SOFT delete. Reversal of the earlier decision, built the safe way.
-//
-// The note is NOT erased. Its text is replaced with a removal record, and a
-// `[removed]` tag marks the slot so the reader can see that something was here
-// and who took it away. The original text is gone — this is a removal, not an
-// archive — but the GAP is visible, which was the whole objection to deleting:
-// on a transferred case these notes are the receiving rep's only account of
-// what happened, and an invisible gap is worse than a visible correction.
-//
-// Author only, exactly the same gate as edit. There is deliberately no way for
-// an admin to remove someone else's note.
 async function deleteHandler(
   request: Request,
   ctx: { params: Promise<{ id: string; noteId: string }> },
@@ -224,21 +187,11 @@ async function deleteHandler(
         { headers: { "Cache-Control": "no-store" } },
       );
 
-    // Who and when are baked into the text: GHL gives us no metadata field, and
-    // the note's own dateAdded is the ORIGINAL write time, not the removal.
     const userMap = await getUserMap();
     const who = (existing.userId && userMap.get(existing.userId)) || "the author";
-    // 🔴 ROUND 168 — WAS `timeZone: "UTC"`, EXPLICITLY, so a note removed at
-    // 9pm Eastern was stamped with tomorrow's date in the note text itself —
-    // permanently, because this string is written INTO the record. One zone for
-    // the dashboard; this is a day with no clock, so it takes the Eastern DAY.
+
     const when = formatEasternDay(new Date());
-    // A MOVE note loses only its reason — the system sentence stays, so the
-    // receiving rep still sees how the case reached them. A MANUAL note has no
-    // system half, so the whole thing becomes the removal record.
-    //
-    // The server builds this itself and accepts no body from the client, for
-    // the same reason as the edit path.
+
     const note = await updateOpportunityNote(
       record.contactId,
       noteId,

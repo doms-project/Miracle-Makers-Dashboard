@@ -5,20 +5,6 @@ import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 import type { OpportunityRecord } from "@/lib/types";
 
-// ITEM 3, STEP 1 — INTO Reassign. "This isn't mine."
-//
-// 🔴 NO PIPELINE PICKER. The record stays in ITS OWN pipeline and moves to that
-// pipeline's REASSIGN stage — every pipeline has one. The destination is
-// decided at STEP 2, by whoever picks the case up. Offering a pipeline here
-// implied a choice that does not exist.
-//
-// 🔴 IT IS A CONFIRMATION, NOT A FORM, because it CLEARS THE OWNER. An
-// accidental drag loses whoever was working the case, and the previous owner is
-// not recorded anywhere restorable — there is no undo. So the dialog names the
-// person being removed, names the pipeline it stays in, and requires a reason.
-//
-// ⚠️ Never window.confirm(): in a GHL iframe it returns false with no prompt,
-// and the action dies silently. That has already cost a round on this project.
 export default function ReassignDialog({
   record,
   ownerName,
@@ -28,12 +14,12 @@ export default function ReassignDialog({
   stageLabel = "Staffing needed",
 }: {
   record: OpportunityRecord;
-  /** The CURRENT owner's display name, or "" when the record is unowned. */
+
   ownerName: string;
   ssoBlob: string | null;
   onDone: (rec: OpportunityRecord) => void;
   onClose: () => void;
-  /** ROUND 197 — what the REASSIGN stage is called on this dashboard. */
+
   stageLabel?: string;
 }) {
   const [reason, setReason] = useState("");
@@ -55,13 +41,9 @@ export default function ReassignDialog({
         body: JSON.stringify({
           ssoKey: ssoBlob ?? undefined,
           expectedVersion: record.version,
-          // ITS OWN pipeline — this is not a move between pipelines.
+
           toPipelineId: record.pipelineId,
-          // "" (not undefined) is what marks this an owner change to NOBODY.
-          // The server treats that as a reassign: it clears the owner, adds the
-          // master-view holders as followers BEFORE the stage change so the GHL
-          // workflow notifies a real list, records the ids it added in
-          // "Reassign Followers", and lands the record on REASSIGN.
+
           newOwnerId: "",
           reason: reason.trim(),
         }),
@@ -99,9 +81,7 @@ export default function ReassignDialog({
         </div>
         <div className="movebody">
           <div className="moveintro">
-            {/* ⚠️ With no current owner the unassignment clause is dropped
-                entirely — telling someone they are unassigning nobody reads as
-                a bug, not as reassurance. */}
+
             <b>{who}</b>
             {ownerName ? (
               <>

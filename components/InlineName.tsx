@@ -3,28 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 
-/**
- * 🔴 ROUND 131 — RENAME IN PLACE, AND SAY WHICH NAME IS BEING RENAMED.
- *
- * Two names sit in the record panel's header and they are not the same thing:
- *
- *   the OPPORTUNITY name   this case only
- *   the CONTACT name       the person, on every record they hold
- *
- * ⚠️ THE DISTINCTION IS THE FEATURE, NOT DECORATION. A rep fixing "Mary
- * Malonne" has to know whether they are fixing it once or everywhere, and the
- * two controls are three millimetres apart. So the scope sentence is not a
- * tooltip and not a hint under a Save button — it is shown the moment the
- * editor opens, in the same words the field sections already use.
- *
- * ⚠️ NO OPTIMISTIC PAINT AND NO BLUR-TO-SAVE. Both names are NATIVE GoHighLevel
- * fields, which answer 200 to writes they discard, so the caller's save reads
- * the value back and can fail. Showing the new spelling before that returns
- * would show a rename that did not happen. Blur-to-save is left out for the
- * same reason a name is not a checkbox: clicking away is not an instruction.
- *
- * Enter saves · Escape cancels · the buttons do both explicitly.
- */
 export default function InlineName({
   display,
   parts,
@@ -39,24 +17,24 @@ export default function InlineName({
   empty,
   onSave,
 }: {
-  /** What the name reads as when nobody is editing it. */
+
   display: string;
-  /** One box, or two for a first/last pair. `key` is what onSave is given. */
+
   parts: { key: string; label: string; value: string }[];
-  /** 🔴 WHICH NAME THIS IS. Shown while editing, never hidden behind a hover. */
+
   scope: React.ReactNode;
-  /** The button's accessible name — "Rename this case" / "Rename this person". */
+
   editLabel: string;
   busy?: boolean;
   err?: unknown;
   disabled?: boolean;
-  /** The opportunity name is the panel's heading; the person's name is not. */
+
   heading?: boolean;
-  /** The small uppercase label — PERSON, PHONE, EMAIL. Omitted on a heading. */
+
   what?: string;
-  /** `tel:` / `mailto:` — see the note on the resting state below. */
+
   link?: string;
-  /** What to show when there is no value: "No phone", not "Unnamed". */
+
   empty?: string;
   onSave: (values: Record<string, string>) => Promise<boolean>;
 }) {
@@ -64,12 +42,10 @@ export default function InlineName({
   const [draft, setDraft] = useState<Record<string, string>>({});
   const firstBox = useRef<HTMLInputElement | null>(null);
 
-  // Reopening on a different record must not carry the last one's draft.
   useEffect(() => {
     if (!open) return;
     setDraft(Object.fromEntries(parts.map((p) => [p.key, p.value])));
-    // The focus lands on the first box with its text selected: "click the name,
-    // type" only works if typing replaces what is there.
+
     const t = setTimeout(() => {
       firstBox.current?.focus();
       firstBox.current?.select();
@@ -83,9 +59,7 @@ export default function InlineName({
     const values = Object.fromEntries(
       parts.map((p) => [p.key, (draft[p.key] ?? "").trim()]),
     );
-    // Unchanged is not a save. It would spend a write and a read-back to store
-    // what is already there, and on the contact path it would bump the version
-    // every other panel is holding.
+
     if (parts.every((p) => values[p.key] === p.value.trim())) return close();
     if (await onSave(values)) close();
   };
@@ -107,16 +81,7 @@ export default function InlineName({
     return (
       <Rest className={heading ? "inmhead" : "inmline"}>
         {!heading && what ? <span className="inmwhat">{what}</span> : null}
-        {/* 🔴 ROUND 134 — A VALUE THAT IS ALSO A LINK KEEPS THE LINK.
-            A phone number's commonest job on a care-agency dashboard is to be
-            DIALLED, not corrected, and `tel:` / `mailto:` is how that happens.
-            Making the whole value an edit button would have traded the everyday
-            action for the rare one. So the value stays an anchor and the pencil
-            beside it is the editor.
-            ⚠️ AND THE EMPTY STATE IS THE OTHER WAY ROUND: with no number there
-            is no link to protect, so the placeholder IS the button — click "No
-            phone", type, save. That is exactly the case the transfer refusal
-            points at. */}
+
         {link && display ? (
           <>
             <a className="inmbtn inmanchor" href={link}>
@@ -139,17 +104,13 @@ export default function InlineName({
             {!disabled ? <span className="inmpen" aria-hidden="true">✎</span> : null}
           </button>
         )}
-        {/* ⚠️ THE ERROR SURVIVES THE EDITOR CLOSING. A failed save that took its
-            message away with it would look like a save. */}
+
         {err ? <ErrorMessage error={err} /> : null}
       </Rest>
     );
 
   return (
-    // 🔴 `data-esc-local` — THE PAGE'S DOCUMENT-LEVEL ESCAPE HANDLER CLOSES THE
-    // WHOLE RECORD PANEL. Escape here means "cancel this rename", and without
-    // this marker it meant both: the edit was dropped and the record shut
-    // behind it. See the handler in app/page.tsx.
+
     <div className="inmedit" data-esc-local>
       <div className="inmscope">{scope}</div>
       <div className="inmboxes">

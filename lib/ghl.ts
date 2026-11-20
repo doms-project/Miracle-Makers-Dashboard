@@ -17,19 +17,9 @@ import { mapLimit, type Settled } from "./concurrency";
 import { getCaseManagers } from "./pipelineAccess";
 import { indexCaseHolders, matchCaseHolders } from "./peopleSearch";
 
-// Account-specific — MUST come from env (re-derive per account with
-// scripts/rederive-ids-probe.mjs). No stale fallback: an unset value fails
-// visibly rather than silently pointing at another account's folder.
 export const RESOURCES_FOLDER_ID = (
   process.env.RESOURCES_FOLDER_ID || ""
 ).trim();
-
-// ---------------------------------------------------------------------------
-// Server-only GoHighLevel client.
-//
-// This module must never be imported into a client component. The token is
-// read from process.env here and used only in server-side fetches.
-// ---------------------------------------------------------------------------
 
 import { normalizeTag } from "./batchTag";
 import {
@@ -44,24 +34,16 @@ import {
   type PipelineScope as StoredScope,
 } from "./pipelineConfig";
 
-// GoHighLevel, unless a harness points it somewhere else. The override exists
-// so a test can reproduce the PRODUCTION SHAPE — a real request, a real reply,
-// a real parse — rather than mocking the module and proving only that the mock
-// works. It is never set in the app; there is no such variable in .env.
 const BASE_URL = process.env.GHL_API_BASE || "https://services.leadconnectorhq.com";
 
 export class GhlError extends Error {
   status: number;
   detail?: string;
-  // GoHighLevel returns a traceId on its error bodies. It is the ONE field their
-  // support can actually look up, and it was being discarded — ghlMessage() only
-  // ever kept `message`. Carried through the error, the route response and into
-  // the UI's details block so a rep can paste it verbatim.
+
   traceId?: string;
-  // GHL's own machine-readable code (e.g. OPPORTUNITY_NO_DUPLICATE). What the
-  // friendly-message mapping keys off, rather than matching on prose.
+
   code?: string;
-  /** The colliding contact, named by the refusal itself. */
+
   dupContactId?: string;
   dupField?: string;
   dupName?: string;
@@ -89,40 +71,14 @@ export class GhlError extends Error {
   }
 }
 
-// Pull the machine-readable bits out of a GHL error body. Kept separate from
-// ghlMessage() so the human text and the lookup keys never overwrite each other.
 export function ghlErrorMeta(raw: string): {
   traceId?: string;
   code?: string;
-  /**
-   * ✅ ROUND 174 — PROBED LIVE 5 OCT, AND THE ANSWER IS YES. `POST /contacts/`
-   * refuses a duplicate phone at ONE SECOND with HTTP 400 "This location does
-   * not allow duplicated contacts.", and the body carries
-   *
-   *     meta.contactId      the colliding contact — the right id
-   *     meta.matchingField  "phone"
-   *     meta.contactName    their name
-   *
-   * 🔴 SO THIS IS THE PRIMARY SOURCE OF TRUTH for "does somebody already have
-   * this number". It is instant by construction — the same store the write
-   * would have hit — where `/contacts/search` returned ZERO hits on the same
-   * contact at one second old. No longer a maybe; see
-   * scripts/duplicate-refusal-probe.mjs for the run.
-   *
-   * 🔴 THE CONTACT GOHIGHLEVEL REFUSED THE WRITE *BECAUSE OF*,
-   * when the refusal body names it.
-   *
-   * A duplicate refusal is the only instant, authoritative answer to "does this
-   * phone already belong to somebody" — the search index lags new contacts by
-   * up to a minute. If the body carries the colliding contact's id, the 409
-   * confirmation can name them and offer to record them. Whether it does is
-   * UNPROVEN on this account: see scripts/duplicate-refusal-probe.mjs. Absent
-   * is handled, not assumed away.
-   */
+
   dupContactId?: string;
-  /** ✅ "phone" or "email" — WHICH detail collided. From GoHighLevel, not inferred. */
+
   dupField?: string;
-  /** ✅ The colliding contact's name, so the 409 needs no extra read. */
+
   dupName?: string;
 } {
   try {
@@ -133,16 +89,12 @@ export function ghlErrorMeta(raw: string): {
         : typeof j.trace_id === "string"
           ? j.trace_id
           : undefined;
-    // The code appears as `error` on some shapes and inside `message` on others
-    // (e.g. "OPPORTUNITY_NO_DUPLICATE: Can not create..."). Take the first
-    // SCREAMING_SNAKE token we find; anything else is prose, not a code.
+
     const hay = `${typeof j.error === "string" ? j.error : ""} ${
       typeof j.message === "string" ? j.message : ""
     } ${Array.isArray(j.message) ? j.message.join(" ") : ""}`;
     const m = /\b([A-Z][A-Z0-9]+(?:_[A-Z0-9]+){1,6})\b/.exec(hay);
-    // ⚠️ EVERY SHAPE THE BODY MIGHT USE, AND NONE OF THEM GUESSED AT. Each is
-    // read only if it is actually a string; a missing id stays missing rather
-    // than becoming "".
+
     const meta = (j.meta ?? {}) as Record<string, unknown>;
     const nested = (meta.contact ?? {}) as Record<string, unknown>;
     const str = (v: unknown): string | undefined =>
@@ -156,8 +108,7 @@ export function ghlErrorMeta(raw: string): {
         str(nested.id) ??
         str(j.contactId) ??
         str((j as Record<string, unknown>).contact_id),
-      // ⚠️ READ, NEVER INFERRED. Guessing "phone" when both a phone and an
-      // email were sent points the person at the field that was fine.
+
       dupField: str(meta.matchingField) ?? str(meta.matching_field),
       dupName: str(meta.contactName) ?? str(meta.contact_name) ?? str(nested.name),
     };
@@ -166,17 +117,6 @@ export function ghlErrorMeta(raw: string): {
   }
 }
 
-// `opts` lets a feature-specific caller additionally require an account-scoped
-// id (resources folder / caregiver association) so it throws AT THE POINT OF USE
-// — same fail-loud behaviour as locationId — instead of silently defaulting to
-// "" (which would upload to the media root / return an empty caregiver list).
-// Unrelated calls (search, pipelines, contacts) omit opts and are unaffected.
-// GHL puts a readable reason in the error body — e.g.
-//   { "message": "Can not make this user X owner as User does not have
-//                 permission to access this pipeline Y.", "statusCode": 400 }
-// `message` is sometimes a string and sometimes an array of strings (the 422
-// validation shape). Pull it out so callers surface the reason rather than a
-// bare status code; fall back to the raw text when it isn't JSON.
 function ghlMessage(raw: string): string {
   const text = (raw || "").trim();
   if (!text) return "";
@@ -186,21 +126,11 @@ function ghlMessage(raw: string): string {
     if (Array.isArray(m)) return m.map(String).join("; ").slice(0, 500);
     if (typeof m === "string" && m.trim()) return m.trim().slice(0, 500);
   } catch {
-    /* not JSON — fall through to the raw body */
+
   }
   return text.slice(0, 500);
 }
 
-// GHL enforces its own Pipeline Permissions on owner assignment, and that is a
-// SEPARATE system from our PIPELINE_ACCESS_MAP: ours governs what the dashboard
-// shows, GHL's governs who may own a record and see the native screen. They can
-// disagree, and a mismatch surfaces as:
-//   400 "Can not make this user <userId> owner as User does not have permission
-//        to access this pipeline <pipelineId>."
-// which names ids, not people. Rewrite it with the real names and the exact
-// place to fix it. We deliberately do NOT try to pre-filter the owner dropdown:
-// GHL exposes no API for those grants, so any filter would be a guess that
-// silently hides valid choices.
 export async function explainGhlError(e: unknown): Promise<string> {
   if (!(e instanceof GhlError))
     return e instanceof Error ? e.message : String(e);
@@ -216,37 +146,23 @@ export async function explainGhlError(e: unknown): Promise<string> {
     try {
       who = (await getUserMap()).get(userId) || userId;
     } catch {
-      /* keep the id */
+
     }
     try {
       which =
         (await getPipelines()).find((p) => p.id === pipelineId)?.name ||
         pipelineId;
     } catch {
-      /* keep the id */
+
     }
     return `${who} doesn't have access to the "${which}" pipeline in GoHighLevel, so they can't be made owner of this record. Grant it in GoHighLevel → Settings → Opportunities → Pipelines → the key icon on "${which}", then try again.`;
   }
-  // ITEM 4 — GHL's own one-opportunity-per-contact-per-pipeline rule. Its
-  // message says "create" even when the request was an UPDATE (a Move), which
-  // reads as "the dashboard tried to duplicate the record" — it did not. Say
-  // what actually happened and what to do about it.
+
   if (
     /OPPORTUNITY_NO_DUPLICATE/i.test(raw) ||
     /duplicate opportunity for the contact/i.test(raw)
   ) {
-    // 🔴 ROUND 121 · ITEM 4 — THE EVENT CASE IS NOT A CLIENT BEING MOVED.
-    //
-    // This sentence was written for the Move feature and it is the only one
-    // this limit has ever had. Adding a SECOND event for a partner hits the
-    // same GoHighLevel rule and got told "this client already has a case…
-    // can't be moved there" — three wrong nouns in one line: the contact is an
-    // organisation, not a client; nothing was moved; and "close the existing
-    // case first" is advice that would delete a real event.
-    //
-    // ⚠️ THE ROUTE KNOWS WHICH IT IS AND THIS FUNCTION DOES NOT, so the event
-    // wording is selected on the one thing visible from here: the pipeline
-    // named in GoHighLevel's own message.
+
     if (/\bevents?\b/i.test(raw))
       return (
         "GoHighLevel allows only ONE opportunity per contact per pipeline, and " +
@@ -256,24 +172,7 @@ export async function explainGhlError(e: unknown): Promise<string> {
       );
     return "This client already has a case in the destination pipeline. GoHighLevel allows only ONE opportunity per contact per pipeline, so this record can't be moved there. Close or move the existing case first, then try again. (GoHighLevel's own message says \"create\" — it fires on updates too; nothing was duplicated.)";
   }
-  // ═══ 🔴 ROUND 170 — "This location does not allow duplicated contacts." ════
-  //
-  // LIVE, on the record panel: changing a phone number to one another person
-  // already has produced
-  //
-  //     GoHighLevel returned 400 for PUT /contacts/… This location does not
-  //     allow duplicated contacts.
-  //
-  // Three things wrong with that on a rep's screen: it names an HTTP method and
-  // a path, it says "location" (a GoHighLevel word for the account), and it
-  // does not say WHICH value collided or that nothing changed.
-  //
-  // ⚠️ GENERIC HERE, SPECIFIC AT THE ROUTE. This function cannot know whether a
-  // phone or an email was sent — the same limit the duplicate-opportunity case
-  // records above ("THE ROUTE KNOWS WHICH IT IS AND THIS FUNCTION DOES NOT").
-  // So this covers every caller that hits the rule — import, Add Lead, Add
-  // partner, the caregiver intake — and the contact-fields route, which knows
-  // exactly which field it sent, says the sharper sentence itself.
+
   if (/duplicated\s+contacts/i.test(raw) || /DUPLICATED_CONTACT/i.test(raw))
     return (
       "That phone number or email address already belongs to another person in " +
@@ -281,17 +180,7 @@ export async function explainGhlError(e: unknown): Promise<string> {
       "Nothing was changed. Find the other person and merge or correct them in " +
       "GoHighLevel, then try again."
     );
-  // 🔴 WRAP ONCE — round 94's item 8, and round 118's item 1 found it again.
-  //
-  // This returned `${e.message} — ${e.detail}`, and every route's `fail()` puts
-  // `e.message` in `error` AND this string in `detail`. So the card rendered:
-  //
-  //   GoHighLevel returned 400 deleting the pipeline.
-  //   GoHighLevel returned 400 deleting the pipeline. — Pipeline with id … is deleted
-  //
-  // ⚠️ THE CALLER ALREADY HAS THE MESSAGE. What it does not have is GHL's own
-  // words, which is the whole reason this function exists. Returning the detail
-  // alone is the fix; the message falls back only when there is no detail.
+
   return e.detail || e.message;
 }
 
@@ -304,9 +193,7 @@ function requireEnv(opts?: {
   resourcesFolderId: string;
   caregiverAssociationId: string;
 } {
-  // Trim to defend against a trailing space / newline pasted into the env var,
-  // which GHL rejects as "invalid jwt". Also strip an accidental "Bearer "
-  // prefix baked into the value so the scheme is controlled in one place below.
+
   const token = process.env.GHL_PIT?.trim().replace(/^Bearer\s+/i, "");
   const locationId = process.env.GHL_LOCATION_ID?.trim();
   const resourcesFolderId = process.env.RESOURCES_FOLDER_ID?.trim() || "";
@@ -343,11 +230,6 @@ function requireEnv(opts?: {
   return { token, locationId, resourcesFolderId, caregiverAssociationId };
 }
 
-// The effective auth scheme for the Authorization header. GHL's v2
-// (LeadConnector) endpoints expect the Private Integration Token as a Bearer
-// credential — verified against /opportunities/pipelines (raw -> 401,
-// Bearer -> 200). Default to "Bearer"; override with GHL_AUTH_SCHEME for a
-// different scheme, or set it to "none"/"raw" to send the bare token.
 function effectiveScheme(): string {
   const override = process.env.GHL_AUTH_SCHEME?.trim();
   if (override === undefined || override === "") return "Bearer";
@@ -365,102 +247,40 @@ function headers(version?: string): HeadersInit {
   };
 }
 
-// 🔴 GOHIGHLEVEL RETURNS ITS OWN TIMEOUT AS A 401.
-//
-//   {"statusCode":401,"message":"Command timed out"}
-//
-// Reproduced outside the dashboard, with a token that had returned 25 users
-// minutes earlier — so this is GHL conflating a transient backend timeout with
-// an auth failure, and the error layer was faithfully passing it through.
-//
-// Two consequences, both handled:
-//   1. it is TRANSIENT, so it is worth one silent retry. The Access tab makes
-//      four reads in Promise.all, giving it four chances to hit an intermittent
-//      fault; a single retry per call removes most of that exposure.
-//   2. it must NEVER produce the token-troubleshooting text, which sends
-//      somebody to check a token that is provably fine.
 function isGhlTimeout(status: number, body: string): boolean {
   return status === 401 && /timed?\s*out/i.test(body);
 }
 
-// ⚠️ A MITIGATION, NOT THE FIX. GoHighLevel allows ~100 requests per 10s, and
-// the real remedy was to stop making requests nobody asked for (refresh-on-focus
-// is gone). But a burst can still coincide with somebody else's, and a 429 that
-// reaches the UI breaks the page over something that would have succeeded a
-// moment later.
-//
-// One retry, after a pause. GHL sends Retry-After on some 429s; when it does we
-// obey it, capped so a long value can't hang the request past the serverless
-// timeout. Otherwise a flat 1.2s, which clears a 10-second window's worth of
-// burst without making a failure feel like a hang.
-// ⚠️ `retryAfterMs` LIVED HERE and is gone — superseded by rateLimitWaitMs
-// below, which reads the interval header instead of falling back to a flat
-// 1.2s guess. Deleted rather than left beside its replacement: two backoff
-// helpers is how half the call sites end up on the old one.
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 117 · ITEM 2 — THE RATE-LIMIT HEADERS ARE AUTHORITATIVE. READ THEM.
-//
-// ✅ MEASURED LIVE BY THE OWNER, against this account, with a Private
-// Integration Token — which matters because GoHighLevel's docs scope the
-// published limits to OAuth and do not publish a PIT figure:
-//
-//   x-ratelimit-max                     100
-//   x-ratelimit-remaining                99
-//   x-ratelimit-interval-milliseconds 10000
-//   x-ratelimit-limit-daily          200000
-//   x-ratelimit-daily-remaining      198091
-//
-// 🔴 SO A PIT GETS THE SAME BURST BUDGET AND REPORTS IT IN THE SAME HEADERS.
-// GHL's own guidance is to read them "rather than counting requests yourself".
-// Round 89 paced the import loop on an ASSUMED latency; the header makes it
-// exact and, more usefully, makes it OBSERVED rather than modelled.
-//
-// 🔴 THE DAILY CEILING IS A NON-ISSUE. A heavy day of paginated sweeps used
-// 1,909 of 200,000. The 10-second burst is the only real constraint, and it is
-// the one this code paces against.
-// ═══════════════════════════════════════════════════════════════════════════
 export interface RateLimitSnapshot {
   max: number | null;
   remaining: number | null;
   intervalMs: number | null;
   dailyLimit: number | null;
   dailyRemaining: number | null;
-  /** When this was read, so a caller can tell a stale snapshot from a fresh one. */
+
   at: number;
 }
 
 let lastRateLimit: RateLimitSnapshot | null = null;
 
-/** The most recent headers GoHighLevel sent, or null before the first call. */
 export function getRateLimitSnapshot(): RateLimitSnapshot | null {
   return lastRateLimit;
 }
 
 function num(res: Response, name: string): number | null {
-  // 🔴 `Number(null)` IS 0, AND `Number.isFinite(0)` IS TRUE — round 118 found
-  // this in its own round-117 code. A response with NO rate-limit headers was
-  // recorded as "0 of 0 remaining", and `pauseIfNearLimit` then slept before
-  // every subsequent call. The proof's log made it obvious:
-  //   [ghl] 0 of 0 requests left in this 0ms window — pausing briefly.
-  // The header's ABSENCE has to be checked before the conversion, not after.
+
   const h = res.headers.get(name);
   if (h === null || h.trim() === "") return null;
   const v = Number(h);
   return Number.isFinite(v) ? v : null;
 }
 
-/**
- * Record what the response told us. Called on EVERY response, success or
- * failure — the headers come back on both, and a 429's headers are the most
- * informative ones there are.
- */
 function readRateLimit(res: Response): void {
   const max = num(res, "x-ratelimit-max");
   const remaining = num(res, "x-ratelimit-remaining");
-  if (max == null && remaining == null) return; // not a GHL response we can read
+  if (max == null && remaining == null) return;
   lastRateLimit = {
     max,
     remaining,
@@ -471,48 +291,21 @@ function readRateLimit(res: Response): void {
   };
 }
 
-/**
- * 🔴 BACKOFF FROM THE HEADER, NOT FROM A GUESS.
- *
- * The window is `x-ratelimit-interval-milliseconds` — 10,000 on this account.
- * Waiting the whole interval is what actually guarantees the bucket has
- * refilled, but a serverless request cannot spend 30 seconds sleeping across
- * three attempts, so each wait is a FRACTION of the window that grows with the
- * attempt, capped hard.
- *
- * ⚠️ AND `Retry-After` STILL WINS WHEN GHL SENDS IT. It is the server telling
- * us specifically; the interval is only how long the window is.
- */
 function rateLimitWaitMs(res: Response, attempt: number): number {
   const explicit = Number(res.headers.get("retry-after"));
   if (Number.isFinite(explicit) && explicit > 0)
     return Math.min(explicit * 1000, 6000);
   const interval = num(res, "x-ratelimit-interval-milliseconds") ?? 10000;
-  // 1/5, then 2/5 of the window: 2s then 4s at GHL's 10s. Capped at 6s so three
-  // attempts cannot outlive the function.
+
   const wait = Math.round((interval * attempt) / 5);
   return Math.min(Math.max(wait, 800), 6000);
 }
 
-/**
- * 🔴 AVOID THE 429 RATHER THAN RECOVER FROM IT — using `x-ratelimit-remaining`.
- *
- * ⚠️ A MITIGATION, AND I AM NOT GOING TO OVERSTATE IT. We do not know where the
- * 10-second window STARTED, only how much is left in it, and other processes on
- * the same account share the budget. So this cannot eliminate a 429; it removes
- * the self-inflicted ones, where this app's own next burst walks into a wall it
- * was just told about. The retry is the guarantee.
- *
- * ⚠️ AND THE PAUSE IS SMALL ON PURPOSE. Sleeping the full interval to be safe
- * would turn every heavy screen into a ten-second hang — worse than the 429 it
- * avoids.
- */
 const RL_FLOOR = 5;
 async function pauseIfNearLimit(): Promise<void> {
   const s = lastRateLimit;
   if (!s || s.remaining == null) return;
-  // A snapshot older than the window tells us nothing about the window we are
-  // in now. Reading it would pace against history.
+
   const interval = s.intervalMs ?? 10000;
   if (Date.now() - s.at > interval) return;
   if (s.remaining > RL_FLOOR) return;
@@ -523,13 +316,6 @@ async function pauseIfNearLimit(): Promise<void> {
   await sleep(Math.min(Math.round(interval / 10), 1200));
 }
 
-/**
- * The message a 429 reaches a person as, once retries are spent.
- *
- * 🔴 NOT A RAW 429. "GoHighLevel returned 429 for /opportunities/search" tells
- * somebody who did nothing wrong to do something they cannot do. This says what
- * happened and what to do, and keeps the numbers in `detail` for the log.
- */
 function rateLimitError(pathname: string, attempts: number): GhlError {
   const s = lastRateLimit;
   return new GhlError(
@@ -545,13 +331,12 @@ function rateLimitError(pathname: string, attempts: number): GhlError {
   );
 }
 
-/** Total attempts for a retryable 429: the first, plus two more. */
 const RL_ATTEMPTS = 3;
 
 async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
   let res: Response;
-  // 🔴 ITEM 2 — look at what the LAST response said before making this one.
+
   await pauseIfNearLimit();
   try {
     res = await fetch(url, { headers: headers(), cache: "no-store" });
@@ -568,13 +353,11 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
     try {
       raw = await res.text();
     } catch {
-      /* ignore */
+
     }
     let detail = ghlMessage(raw).slice(0, 500);
     const meta = ghlErrorMeta(raw);
 
-    // 🔴 ITEM 2 — A GET IS ALWAYS SAFE TO RETRY. It creates nothing, so
-    // repeating it can only cost time. Three attempts, spaced from the header.
     if (res.status === 429) {
       if (attempt < RL_ATTEMPTS) {
         const wait = rateLimitWaitMs(res, attempt);
@@ -587,12 +370,10 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
         await sleep(wait);
         return ghlGet<T>(path, attempt + 1);
       }
-      // 🔴 ONLY NOW does it become an error, and it says what it is.
+
       throw rateLimitError(new URL(url).pathname, RL_ATTEMPTS);
     }
 
-    // ONE retry, then give up. Retrying further would turn a GHL wobble into a
-    // request that hangs for the user instead of failing cleanly.
     if (isGhlTimeout(res.status, raw) && attempt === 1) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -602,8 +383,7 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
     }
 
     if (isGhlTimeout(res.status, raw)) {
-      // Reported as 502: this was an upstream failure, and calling it 401 makes
-      // every layer above treat a working token as expired.
+
       throw new GhlError(
         "GoHighLevel didn't respond.",
         502,
@@ -633,51 +413,11 @@ async function ghlGet<T>(path: string, attempt = 1): Promise<T> {
   return (await res.json()) as T;
 }
 
-/**
- * 🔴 ITEM 2 — HOW A RETRYABLE WRITE IS DISTINGUISHED FROM A DANGEROUS ONE.
- *
- * The rule is the METHOD, with one narrow opt-in:
- *
- *   PUT / PATCH   RETRIED. Every one this app makes sets a DESIRED STATE — a
- *                 stage, an owner, a field value. Applying it twice reaches the
- *                 same place, so a retry after a 429 that actually landed is a
- *                 no-op.
- *   POST          NOT RETRIED, ever, by default. A POST here CREATES: a
- *                 contact, an opportunity, a pipeline, a field, a note. If the
- *                 first attempt reached GoHighLevel and only the RESPONSE was
- *                 lost — which a 429 at a proxy looks exactly like — a retry
- *                 makes a SECOND one. The import wizard's duplicate check would
- *                 catch some contacts; NOTHING protects a partner, an event or
- *                 a pipeline from being created twice.
- *
- * ⚠️ SO A 429 ON A POST SURFACES IMMEDIATELY, with the honest message. That is
- * the right trade: "try again in a few seconds" costs one click, a duplicate
- * partner costs somebody an afternoon and is not always noticed.
- *
- * `idempotent: true` is the opt-in for a POST that is provably not a create —
- * it must be justified at the call site, not assumed here.
- */
 function retryableWrite(method: string, idempotent?: boolean): boolean {
   if (idempotent) return true;
   return method === "PUT" || method === "PATCH";
 }
 
-/**
- * 🔴 DELETE, THROUGH THE SAME MACHINERY AS EVERYTHING ELSE — round 118, item 1,
- * closing the gap round 117 named and did not fix.
- *
- * ⚠️ AND MY REASON FOR SKIPPING IT IN 117 WAS WRONG. I wrote that `ghlSend`
- * takes PUT/POST/PATCH only "because a DELETE has no body". One of the three
- * call sites — `removeFollowers` — sends `{followers: [...]}`. So the body is
- * optional, not absent, and that is what this takes.
- *
- * 🔴 A DELETE IS IDEMPOTENT, so it is retried like a PUT: deleting a thing
- * twice reaches the same place. That is the opposite of a POST, where a retry
- * after a 429 that landed makes a second record.
- *
- * @param goneOk a pattern matching GoHighLevel's own words for "it is already
- *        gone". When the body matches, the call SUCCEEDS — see deletePipeline.
- */
 async function ghlDelete<T = unknown>(
   path: string,
   opts?: { body?: unknown; goneOk?: RegExp; what?: string },
@@ -705,9 +445,7 @@ async function ghlDelete<T = unknown>(
     );
   }
   readRateLimit(res);
-  // ⚠️ THE RESPONSE BODY IS RETURNED WHEN THERE IS ONE. Most deletes have
-  // nothing to say; `removeOpportunityFollowers` answers with the remaining
-  // follower list, and dropping it would have made this helper unusable there.
+
   if (res.ok) {
     const txt = await res.text().catch(() => "");
     if (!txt.trim()) return null;
@@ -734,14 +472,6 @@ async function ghlDelete<T = unknown>(
     throw rateLimitError(`DELETE ${new URL(url).pathname}`, RL_ATTEMPTS);
   }
 
-  // 🔴 ALREADY GONE IS NOT A FAILURE. The outcome is what was asked for.
-  //
-  // ⚠️ MEASURED, NOT THEORISED: deleting "test" returned
-  //   400 — "Pipeline with id u4ShHPNEC04jkdmqfWQ0 is deleted"
-  // GoHighLevel's own message says the thing is deleted, and the screen said
-  // the action failed. A double-fire — the first request deleted it, the second
-  // found it gone — is the likeliest cause, and it does not matter: a caller
-  // asking for a thing to not exist has had its request satisfied either way.
   if (opts?.goneOk && (res.status === 404 || opts.goneOk.test(raw))) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -788,18 +518,11 @@ async function ghlSend<T>(
     try {
       raw = await res.text();
     } catch {
-      /* ignore */
+
     }
     const detail = ghlMessage(raw);
     const meta = ghlErrorMeta(raw);
 
-    // Same GHL timeout-as-401 as ghlGet. ⚠️ Retried here too, but note the
-    // difference: a WRITE that timed out may or may not have landed, so the
-    // retry can repeat it. Every write this app makes is idempotent in effect
-    // — it PUTs a desired state (stage, owner, field values), never an
-    // increment or an append — so applying it twice reaches the same place.
-    // The one exception is note creation, which appends; a duplicated note is
-    // visible and harmless, whereas a lost one is not.
     if (res.status === 429) {
       const safe = retryableWrite(method, opts?.idempotent);
       if (safe && attempt < RL_ATTEMPTS) {
@@ -841,8 +564,6 @@ async function ghlSend<T>(
       );
     }
 
-    // Log the failing request body alongside the reason — without it a 400 is
-    // undiagnosable from the logs alone.
     // eslint-disable-next-line no-console
     console.error(
       `[ghl] ${method} ${new URL(url).pathname} -> ${res.status}: ${detail}${
@@ -860,118 +581,29 @@ async function ghlSend<T>(
   return (await res.json()) as T;
 }
 
-// PUT /opportunities/{id} with the confirmed body shape, then return the fresh
-// normalized record. `body` should already have values formatted per dataType.
 export async function updateOpportunity(
   id: string,
   body: Record<string, unknown>,
 ): Promise<OpportunityRecord | null> {
   await ghlSend("PUT", `/opportunities/${encodeURIComponent(id)}`, body);
-  // 🔴 EVICT FIRST, THEN READ UNCACHED. Both are needed: evicting alone would
-  // still let a concurrent caller re-populate the entry from a read that
-  // started before the write landed. See the note on oppBurst above.
+
   invalidateOpportunity(id);
   const rec = await getOpportunityByIdUncached(id);
 
-  // ═══ TASK 1 · HOOK 1 OF 2 — THE PANEL'S OWN OWNER DROPDOWN ═══════════════
-  //
-  // 🔴 CONDITIONAL ON `"assignedTo" in body`, AND THAT IS NOT A DETAIL. This
-  // is the write path for EVERY field save on the record panel — every note,
-  // every date, every tick. Hooking it unconditionally would run the mapping
-  // hundreds of times a day for an owner that had not changed.
-  //
-  // ⚠️ AND IT IS HERE RATHER THAN IN THE ROUTE so a sixth owner-write path
-  // added later inherits it. `moveOpportunity` does NOT come through here —
-  // it has its own PUT via `putOpportunityVerified` — which is why there are
-  // two hooks and not one.
-  //
-  // ⚠️ NEVER AWAITED INTO A FAILURE. `applyCaseManagers` does not throw; if it
-  // did, a completed owner change would report itself as a failed save.
   if ("assignedTo" in body)
-    // ⚠️ `rec` IS FRESH — read uncached two lines above, after the PUT — so the
-    // unmapped-and-unrecorded case costs no request at all on this path, which
-    // is the common one.
-    //
-    // ⚠️ ROUND 151 — THE ONE CONSUMER THAT DROPS `mismatch`, ON PURPOSE AND
-    // RECORDED HERE. The other two carry it: `moveOpportunity` folds
-    // `cm.steps` into the transfer's step list, and the webhook refuses to
-    // report ACTED. This path returns an OpportunityRecord to a route that
-    // saves a field, and the rule three comments up is absolute — a follower
-    // failure must never make a completed save report itself as failed. So the
-    // mismatch reaches the LOG and not the panel.
-    //
-    // 🔴 WHAT THAT COSTS, SAID PLAINLY: a rep changing the owner from the panel
-    // sees a clean save while the managers may not have been applied. Closing
-    // it means a second channel on the save response — a warning that is not a
-    // failure — which is a UI contract, not a line here.
+
     await applyCaseManagers(id, String(body.assignedTo ?? ""), rec);
 
   return rec;
 }
 
-// ---------------------------------------------------------------------------
-// Lookups (pipelines, custom fields, users). Cached per warm lambda instance.
-// ---------------------------------------------------------------------------
-
 interface Pipeline {
   id: string;
   name: string;
-  // ⚠️ `position` IS IN THE PAYLOAD AND WAS NOT DECLARED — round 121, item 3.
-  // GoHighLevel sends it on every stage; this interface dropped it, so nothing
-  // in the codebase could sort by it and every caller used array order instead.
+
   stages: { id: string; name: string; position?: number }[];
 }
 
-/**
- * 🔴 THE PIPELINE'S FIRST STAGE — BY POSITION, NOT BY ARRAY ORDER.
- *
- * ⚠️ MEASURED LIVE: every one of the five client pipelines answered
- * "TRANSFERRED IN" from `stages[0]`. That is not five coincidences — GoHighLevel
- * does not return stages in position order, and `stages[0]` is whatever its
- * store handed back. A referral is a NEW ENQUIRY; filing one as TRANSFERRED IN
- * says it came from another agency, which is a different thing entirely.
- *
- * 🔴 NO HARDCODED STAGE IDS. A rename or a reorder in GoHighLevel has to keep
- * working, which is the whole reason this reads position rather than a name.
- *
- * ⚠️ AND THE FALLBACK IS ARRAY ORDER, not a guess at a name. If GHL ever stops
- * sending `position`, the old behaviour is what returns — wrong in the same way
- * it is wrong today, rather than newly wrong in some other way.
- */
-/**
- * 🔴 WHERE A **NEW ENQUIRY** BELONGS — round 126, and it does not ask where a
- * stage sits.
- *
- * ⚠️ ROUND 121 FIXED THE ORDERING AND THE SCREEN STILL SAYS TRANSFERRED IN.
- * There are three ways that happens and `firstStage()` cannot tell them apart:
- *
- *   a  GoHighLevel does not send `position` on this endpoint → the sort is a
- *      no-op and the fallback is array order, which is the bug, unchanged.
- *   b  something strips it between the API and the sort.
- *   c  🔴 `position` IS sent and TRANSFERRED IN genuinely holds the lowest one
- *      — in which case the sort is working perfectly and still lands on the
- *      wrong stage, because the question was never "which stage is first".
- *
- * ⚠️ (c) IS THE ONE NOBODY HAD CONSIDERED, and ordering cannot fix it. So this
- * stops depending on order at all: a new enquiry is filed by what a stage
- * MEANS.
- *
- * 🔴 AND THE HARD RULE IS THE NEGATIVE ONE. Filing a new referral as
- * TRANSFERRED IN does not merely look untidy — it asserts the case came from
- * another agency, which is a claim about where the business originated and the
- * exact thing the referral partner is being credited for. It is never a
- * defensible default, so it is never chosen while any other stage exists.
- *
- * Order of preference:
- *   1  a stage whose name means "a new one just arrived"
- *   2  otherwise the earliest stage that is NOT a transfer stage
- *   3  otherwise `firstStage()` — and `fellBack` says so, so a caller can
- *      admit it rather than presenting a guess as a decision
- *
- * ⚠️ POSITION IS STILL THE TIEBREAK inside each step, so when GoHighLevel does
- * send it the answer is the earliest matching stage rather than an arbitrary
- * one. It is used where it helps and never depended on.
- */
 const NEW_ENQUIRY_STAGE = /\bnew\b|enquir|inquir|\bintake\b|\blead\b|initial call|\bapplied\b|\bapplicant\b/i;
 const TRANSFER_STAGE = /transferred\s*in|^\s*transfer\b/i;
 
@@ -997,8 +629,7 @@ export function entryStage(
       fellBack: false,
       why: "the earliest stage that is not a transfer",
     };
-  // ⚠️ EVERY STAGE IS A TRANSFER STAGE. Vanishingly unlikely and not invented
-  // around: the first one is used and the caller is told it was a fallback.
+
   const f = byPosition[0];
   return {
     id: f.id,
@@ -1021,43 +652,24 @@ export function firstStage(
   return { id: ordered[0].id, name: ordered[0].name };
 }
 
-// Full custom-field definition — the single source of truth for editing:
-// `id` for the write body, `dataType` for which input to render, `options`
-// for dropdowns. Automatically covers any field added in GHL later.
 export interface FieldDefinition {
   id: string;
   name: string;
-  dataType: string; // e.g. TEXT, LARGE_TEXT, SINGLE_OPTIONS, MULTIPLE_OPTIONS, DATE, NUMERICAL
+  dataType: string;
   fieldKey?: string;
-  // GHL returns option lists under varying keys across API versions
-  // (options / picklistOptions / picklistOptionsV2), and each element may be a
-  // plain string OR an object ({ value, label, name, key }). Keep it permissive
-  // and normalize downstream via optionStrings().
+
   [key: string]: unknown;
 }
 
 let cache: {
   pipelines?: Pipeline[];
-  fieldDefs?: FieldDefinition[]; // full opportunity custom-field definitions
-  // ITEM 3 — CONTACT custom-field definitions, cached SEPARATELY. Deliberately
-  // not one merged list: a field id is only meaningful together with its model,
-  // and merging would let an opportunity write and a contact write resolve the
-  // same name to the wrong field.
+  fieldDefs?: FieldDefinition[];
+
   contactFieldDefs?: FieldDefinition[];
-  fieldMap?: Map<string, string>; // custom field id -> field name
-  userMap?: Map<string, string>; // user id -> display name
+  fieldMap?: Map<string, string>;
+  userMap?: Map<string, string>;
 } = {};
 
-// Reused by both the read path (name resolution) and the future write path
-// (id + dataType + options). Fetched once per warm lambda.
-// ITEM 3 — MODEL-AWARE, not caregiver-special.
-//
-// The caregiver fields (Application 18 / Compliance 16 / Availability 6) are
-// CONTACT fields, and this only ever asked for `model=opportunity`, so the panel
-// could not see them however they were mapped. Client Care Needs (25) is
-// contact-side too — so this is parameterised rather than given a caregiver
-// branch, and the client panel gets the same machinery for free. Building it
-// twice is how the two drift.
 export type FieldModel = "opportunity" | "contact";
 
 export async function getFieldDefinitions(
@@ -1074,12 +686,7 @@ export async function getFieldDefinitions(
     );
     defs = data.customFields || [];
   } catch (e) {
-    // Non-fatal for the read path (stage/owner/contact still resolve), but it
-    // is FATAL for every write that resolves a field by name: Move's transfer
-    // stamps, Division, the panel's editable-field allowlist. This used to be
-    // swallowed silently AND the empty result cached, so one failed fetch made
-    // a warm lambda permanently unable to stamp anything — the same defect as
-    // the users lookup. Never cache a failed read; say so loudly.
+
     // eslint-disable-next-line no-console
     console.error(
       "[ghl] custom-field definitions could not be fetched — NOT cached, will retry on the next call. Field-by-name writes (transfer stamps, Division) are skipped until this succeeds:",
@@ -1108,57 +715,17 @@ async function getPipelines(): Promise<Pipeline[]> {
   return cache.pipelines;
 }
 
-// Multi-pipeline (v2). The dashboard now spans several client pipelines. The
-// set is data-driven (env PIPELINE_IDS), defaulting to the five confirmed for
-// the anzcWt3S0tzpu2fEaS8X account. `OLTL_PIPELINE_ID` and the `/oltl/i` name
-// fallback are retired — four pipelines match that name now.
 const DEFAULT_PIPELINE_IDS = [
-  "KGjdCMG4F8xILk0ineB9", // OLTL Enrollment      12 stages
-  "74Pt3XX4hgBIqD10mW4G", // OLTL Transfer         8
-  "a14NtTi18ACxs99bHPmL", // ODP Enrollment        9
-  "PIs1iWVk0HqHZFNtmoTn", // ODP Transfer          9
-  "BJBWdRim6SOgjoMelVSZ", // Private Pay Clients  11
+  "KGjdCMG4F8xILk0ineB9",
+  "74Pt3XX4hgBIqD10mW4G",
+  "a14NtTi18ACxs99bHPmL",
+  "PIs1iWVk0HqHZFNtmoTn",
+  "BJBWdRim6SOgjoMelVSZ",
 ];
 
-// ITEM 13 — CAREGIVER PIPELINES, a SEPARATE set.
-//
-// 🔴 These must never appear in the client list, the client kanban or the
-// master view. Keeping them in their own env var rather than adding a flag to
-// the client set is what makes that structural: every existing caller reads
-// pipelineIds() and therefore cannot see them, without a single one of them
-// having to remember a filter.
-//
-// 🔴 ROUND 127 — THIS LIST NO LONGER "DRIVES THE CAREGIVER PATH", AND SAYING
-// SO WAS THE BUG. The Pipelines screen replaced it: scope lives in the stored
-// config, an admin sets it, and every board, picker and switcher reads from
-// there. This env list kept ONE more caller — the Access tab — which is why
-// three staff pipelines an admin had already configured were reported "not
-// loaded" on that screen and nowhere else.
-//
-// ⚠️ IT IS KEPT, FOR THE TWO JOBS IT STILL DOES AND NOTHING ELSE:
-//
-//   1  THE ONE-TIME SEED. A fresh account has no stored config, and
-//      getPipelineConfig() writes the first one from these ids. Without them
-//      the first admin to open the dashboard sees no pipelines anywhere and no
-//      way to add one, because the screen that adds them lists the pipelines
-//      the config already knows.
-//   2  THE OUTAGE FALLBACK inside getSelectedPipelines(). If the config read
-//      fails, the boards fall back to this list rather than emptying — "a GHL
-//      blip must not empty every board".
-//
-// 🔴 NEITHER IS "ANSWER WHICH PIPELINES ARE CAREGIVER ONES". That is a live
-// question with a live answer, and a second source for it is how one screen
-// disagrees with four others. Adding a pipeline is a dropdown on the Pipelines
-// screen, not an id here and a deploy.
-//
-// ⚠️ NO REASSIGN STAGE on these, and none is added. The reassign flow resolves
-// REASSIGN by name and REFUSES when a pipeline hasn't got one (see
-// moveOpportunity), so a caregiver pipeline simply cannot be reassigned into —
-// which is the intended outcome, reached by the existing guard rather than by a
-// new special case.
 const DEFAULT_CAREGIVER_PIPELINE_IDS = [
-  "EXVMveGzgDy9qf4wQR2H", // PP Caregiver Applicants
-  "232bytrK7FWNAwC6shME", // ODP DSP Applicant
+  "EXVMveGzgDy9qf4wQR2H",
+  "232bytrK7FWNAwC6shME",
 ];
 
 function parseIds(raw: string, fallback: string[]): string[] {
@@ -1168,12 +735,10 @@ function parseIds(raw: string, fallback: string[]): string[] {
   return ids.length ? ids : fallback;
 }
 
-/** The CLIENT pipelines. Unchanged behaviour — every existing caller uses this. */
 export function pipelineIds(): string[] {
   return parseIds(process.env.PIPELINE_IDS || "", DEFAULT_PIPELINE_IDS);
 }
 
-/** The CAREGIVER pipelines. Disjoint from the client set by construction. */
 export function caregiverPipelineIds(): string[] {
   return parseIds(
     process.env.CAREGIVER_PIPELINE_IDS || "",
@@ -1181,38 +746,15 @@ export function caregiverPipelineIds(): string[] {
   );
 }
 
-/**
- * Which family of pipelines a read is about.
- *
- * 🔴 THREE VALUES SINCE ROUND 116, AND THE THIRD HAS NO ENV LIST. "none" means
- * "listed by no board picker" — see pipelineConfig.ts. It exists only in the
- * STORED config, so there is nothing for `idsForScope` to fall back to and an
- * empty array is the correct answer, not the client list.
- */
 export type PipelineScope = "client" | "caregiver" | "none";
 
 export function idsForScope(scope: PipelineScope): string[] {
-  // 🔴 NOT A TERNARY ON "caregiver". Written as `scope === "caregiver" ? … :
-  // pipelineIds()`, "none" would fall to the CLIENT env list — so a pipeline an
-  // admin deliberately removed from both pickers would reappear on the Clients
-  // board the moment the stored config failed to read. The fallback must
-  // degrade toward FEWER pipelines, never more.
+
   if (scope === "caregiver") return caregiverPipelineIds();
   if (scope === "none") return [];
   return pipelineIds();
 }
 
-// Loud config check (memoized) — surfaces the two silent failure modes:
-//   1. running on baked-in DEFAULT_PIPELINE_IDS because PIPELINE_IDS is unset;
-//   2. a selected pipeline with no folder mapping.
-//
-// 🔴 THIS COMMENT WAS WRONG until round 90 and it mattered: it said such a
-// pipeline's fields "silently dump into Other fields". They do not. Read
-// groupFieldsForPipeline — an unmapped pipeline took `Object.values(FOLDERS)`,
-// so `allowedKeys` held ALL TWELVE and no field was ever skipped. The symptom
-// was the opposite of what this claimed: every folder rendered at once, 68
-// fields on one card (see the incident at fieldFolders.ts:68). Anyone debugging
-// from this sentence would have looked in the wrong place.
 let _configChecked = false;
 function checkPipelineConfig(): void {
   if (_configChecked) return;
@@ -1232,20 +774,11 @@ function checkPipelineConfig(): void {
   }
 }
 
-// Resolve the configured pipeline IDs to full Pipeline objects, in configured
-// order. Unknown IDs are skipped (logged via the error only if NONE match).
 export async function getSelectedPipelines(
   scope: PipelineScope = "client",
 ): Promise<Pipeline[]> {
   if (scope === "client") checkPipelineConfig();
-  // 🔴 THE STORED VALUE IS THE SOURCE OF TRUTH. `idsForScope()` (the env vars)
-  // is read exactly once, by the seed inside getPipelineConfig(), and never
-  // again — which is what lets an admin ADD a pipeline without a deploy and,
-  // just as importantly, REMOVE one. A union with the env would keep putting a
-  // removed pipeline back with nothing on screen to explain why.
-  //
-  // ⚠️ If the config read fails, fall back to the env list rather than
-  // returning nothing. A GHL blip must not empty every board.
+
   let ids: string[];
   try {
     ids = await configuredIds(scope);
@@ -1262,11 +795,7 @@ export async function getSelectedPipelines(
     const p = byId.get(id);
     if (p) selected.push(p);
   }
-  // 🔴 "none" IS ALLOWED TO BE EMPTY — round 116, item K. The throw below is a
-  // CONFIGURATION ALARM: a board with no pipelines means somebody's whole
-  // section is blank and we want to say why. "Listed by no picker" is the
-  // opposite — an empty list is the normal state, and throwing would take down
-  // every caller that merely asks whether such a pipeline exists.
+
   if (scope === "none" && !ids.length) return [];
   if (!selected.length) {
     throw new GhlError(
@@ -1280,9 +809,6 @@ export async function getSelectedPipelines(
   return selected;
 }
 
-// Composite stage-map key — stage names repeat across pipelines
-// (TRANSFERRED IN, UNCATEGORIZED, INACTIVE, LOST all exist in several), so the
-// map MUST be keyed by pipelineId + stageId, never by name alone.
 function stageKey(pipelineId: string, stageId: string): string {
   return `${pipelineId}::${stageId}`;
 }
@@ -1290,7 +816,7 @@ function stageKey(pipelineId: string, stageId: string): string {
 async function getFieldMap(): Promise<Map<string, string>> {
   if (cache.fieldMap) return cache.fieldMap;
   const map = new Map<string, string>();
-  // Built from the same definitions fetch used by the write path.
+
   for (const f of await getFieldDefinitions()) {
     if (f.id) map.set(f.id, f.name || f.fieldKey || "");
   }
@@ -1298,22 +824,10 @@ async function getFieldMap(): Promise<Map<string, string>> {
   return map;
 }
 
-// Exported so write routes can VALIDATE user ids (e.g. followers) against the
-// location's real users before writing — an arbitrary string would otherwise be
-// stored and render as "Former user", indistinguishable from a deleted account.
 export async function getLocationUserIds(): Promise<Set<string>> {
   return new Set((await getUserMap()).keys());
 }
 
-// The users lookup is fetched SERVER-SIDE with the PIT and is NOT gated on the
-// viewer's role — every viewer gets the same map. It backs owner names, follower
-// names, the owner dropdown and the follower picker, so an empty map degrades
-// all of them at once.
-//
-// It used to swallow the error AND cache the empty result, which made a single
-// transient failure (or a PIT missing the users scope) permanent for the life of
-// that warm lambda: every later request on that instance silently rendered raw
-// ids. Now a failure is logged loudly and NOT cached, so the next request retries.
 export async function getUserMap(): Promise<Map<string, string>> {
   if (cache.userMap) return cache.userMap;
   const { locationId } = requireEnv();
@@ -1333,7 +847,7 @@ export async function getUserMap(): Promise<Map<string, string>> {
       "[users] lookup FAILED — owner/follower names and the owner + follower pickers will be empty. Check the PIT's users.readonly scope.",
       e instanceof Error ? e.message : String(e),
     );
-    return map; // do NOT cache a failure — retry on the next request
+    return map;
   }
   if (!map.size) {
     // eslint-disable-next-line no-console
@@ -1345,10 +859,6 @@ export async function getUserMap(): Promise<Map<string, string>> {
   cache.userMap = map;
   return map;
 }
-
-// ---------------------------------------------------------------------------
-// Opportunity search + normalization.
-// ---------------------------------------------------------------------------
 
 interface RawCustomField {
   id?: string;
@@ -1366,93 +876,36 @@ interface RawOpportunity {
   pipelineId?: string;
   pipelineStageId?: string;
   stageId?: string;
-  assignedTo?: string | null; // owner user id (can be null)
-  followers?: string[]; // follower (co-rep) user ids — confirmed field name
-  source?: string; // native source field (Part A: the dashboard "Source" column)
-  status?: string; // native status (open/won/lost/abandoned)
-  monetaryValue?: number; // native value
+  assignedTo?: string | null;
+  followers?: string[];
+  source?: string;
+  status?: string;
+  monetaryValue?: number;
   contactId?: string;
   contact?: {
     id?: string;
     name?: string;
     firstName?: string;
     lastName?: string;
-    // ITEM #10 — GoHighLevel's opportunity search embeds the contact, and its
-    // documented shape includes tags. NOT PREVIOUSLY DECLARED HERE, so nothing
-    // read them. Optional and defensively normalised: if this account's
-    // response omits it, `tags` lands as [] and the card degrades to the
-    // neutral wording instead of claiming a route it cannot know.
+
     tags?: unknown;
-    // ITEM 1 — present on the search response (100/100 records carried
-    // email+phone per the tags probe) but never declared, so never read.
+
     email?: string;
     phone?: string;
   };
   customFields?: RawCustomField[];
-  // ITEM 2 — when the record last changed stage. GHL's own field name is
-  // lastStageChangeAt; the variants are accepted because this has NEVER been
-  // read here before and the exact spelling on this account is unconfirmed.
+
   lastStageChangeAt?: string;
   lastStageChangedAt?: string;
   lastStatusChangeAt?: string;
-  // ITEM 5 — the optimistic-concurrency token. GoHighLevel stamps this on every
-  // opportunity write, so it changes whenever ANYBODY edits the record — which
-  // is exactly what a version check needs and why nothing had to be invented.
+
   updatedAt?: string;
   dateUpdated?: string;
-  // WHEN THE OPPORTUNITY WAS CREATED. Read for the referral dashboard, where
-  // "how long ago was this referred" is the whole of `Referrals (90d)`. Same
-  // defensive treatment as lastStageChangeAt: several plausible spellings, and
-  // "" when GoHighLevel sends none — a referral with no date is COUNTED AND
-  // STATED as undated rather than being treated as "referred today".
+
   createdAt?: string;
   dateAdded?: string;
 }
 
-// Raw custom-field value, arrays preserved (for MULTIPLE_OPTIONS / CHECKBOX).
-//
-// ITEM 1 (read side) — SETTLED, live.
-//
-// This used to read exactly four fixed keys. GHL returns a custom field's value
-// under a key that varies by dataType, and DATE fields come back under
-// **fieldValueDate** — which was not in the list, so every DATE read back as ""
-// and was INDISTINGUISHABLE from "never written".
-//
-// That was the whole of the Transferred Date bug. The write was correct all
-// along; the READ was blind. Confirmed by the fallback below firing in
-// production:
-//   [ghl] custom-field value found under the unhandled key "fieldValueDate"
-//         (field XheOieRRGOFtSZc4TBWi)
-// The same applied to all ten Milestone dates — they were storing fine and
-// showing empty.
-//
-// fieldValueDate is now a KNOWN key, placed ahead of the generic ones so an
-// empty-but-present fieldValueString/fieldValue can never shadow it. The
-// `fieldValue*` fallback stays: it is what caught this, and it will catch the
-// next typed variant (fieldValueNumber, …) instead of silently blanking it.
-//
-// ═══ ROUND 165 — fieldValueNumber JOINS THEM, AND fieldValueString ALREADY HAD
-//
-// ⚠️ THE WARNING ABOVE PREDICTED ITS OWN SUCCESSOR BY NAME ("fieldValueNumber,
-// …") and then fired on every request for weeks with nobody acting on it:
-//
-//   [ghl] custom-field value found under the unhandled key "fieldValueNumber"
-//         (field Bemu4kJCe4HjWuFAOS9W). It is being read, but add it to
-//         KNOWN_CF_KEYS.
-//
-// The value was always being read correctly — the fallback is what makes that
-// true — so this changes no number on any screen. It stops a log line that has
-// been trained into the background for weeks, which is the only way the NEXT
-// unhandled key will be noticed.
-//
-// 🔴 PLACED WITH fieldValueDate, AHEAD OF THE GENERIC PAIR, for the reason
-// already given above: a typed key must not be shadowed by an
-// empty-but-present fieldValueString or fieldValue.
-//
-// ✅ AND fieldValueString WAS ALREADY HERE, which is worth stating because the
-// round-164 probe raised the opposite worry. Stage History reads back through
-// the KNOWN path and logs nothing — verified live: search returns the full
-// value under `fieldValueString`, 35 records, no truncation.
 const KNOWN_CF_KEYS = [
   "fieldValueArray",
   "fieldValueDate",
@@ -1483,35 +936,16 @@ function cfRaw(cf: RawCustomField): unknown {
   return "";
 }
 
-// ---------------------------------------------------------------------------
-// DATE values (ITEM 1).
-//
-// PROVEN BY A REAL WRITE: GHL accepts a full ISO 8601 string on a DATE custom
-// field, returns 200, and stores ONLY the calendar date —
-// `"2026-08-28T14:30:00.000Z"` reads back as `"2026-08-28"`. A DATE field
-// cannot hold a time, whatever the field is named.
-//
-// So the time component here is not an attempt to store one; it exists purely
-// to pin the date. Midday UTC keeps a bare `"2026-08-28"` from rolling onto the
-// previous or next day when a timezone is applied at either end.
-//
-// Every DATE write in this codebase goes through this function, so the panel,
-// the importer and Move all send one shape.
-// ---------------------------------------------------------------------------
 export function toGhlDate(value: unknown): string {
   if (value == null) return "";
   const s = String(value).trim();
   if (!s) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T12:00:00.000Z`;
-  // A zoneless "2026-08-28T14:30" — `new Date()` would read this as LOCAL time
-  // and could shift it onto the adjacent DAY at the server's offset, which is
-  // the part that survives truncation. The panel no longer produces this shape
-  // (the datetime editor was removed once GHL was proven to discard the time),
-  // but an imported spreadsheet cell still can. Read it as UTC.
+
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s))
     return new Date(`${s}${s.length === 16 ? ":00" : ""}Z`).toISOString();
   const d = new Date(s);
-  if (isNaN(d.getTime())) return s; // let GHL reject it rather than silently blanking
+  if (isNaN(d.getTime())) return s;
   return d.toISOString();
 }
 
@@ -1534,7 +968,7 @@ async function searchAll(
   const all: RawOpportunity[] = [];
   let startAfter: number | null | undefined;
   let startAfterId: string | null | undefined;
-  // Hard cap on pages as a runaway guard (100 * 50 = 5000 records).
+
   for (let page = 0; page < 50; page++) {
     const params = new URLSearchParams({
       location_id: locationId,
@@ -1551,7 +985,7 @@ async function searchAll(
     const meta = data.meta;
     if (!meta || batch.length < limit) break;
     if (meta.startAfterId == null && meta.startAfter == null) break;
-    // Avoid an infinite loop if the cursor doesn't advance.
+
     if (meta.startAfterId === startAfterId && meta.startAfter === startAfter) {
       break;
     }
@@ -1561,27 +995,24 @@ async function searchAll(
   return all;
 }
 
-// Normalize a custom-field name into a lookup key: lowercase, alphanumeric only.
 function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-// Map normalized custom-field names to the target record keys. Multiple
-// aliases per target so we tolerate slight naming differences in GHL.
 const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   harmony: ["harmonyid", "harmony"],
   countyId: ["countyid"],
   office: ["office"],
   county: ["county"],
   block: ["roadblocker", "roadblock", "blocker", "roadblockers"],
-  ref: ["referralsourcetype", "referralsource", "referral"], // fix: "Referral Source Type"
-  src: [], // native `source` field, not a custom field — read directly (Part A)
+  ref: ["referralsourcetype", "referralsource", "referral"],
+  src: [],
   asst: ["salesrepassistant", "repassistant", "assistant", "salesassistant"],
   cm: ["casemanager", "casemgr"],
   onb: ["onboardingrep", "onboarding", "onboardingrepresentative"],
-  cg: ["caregivername", "caregiver"], // fix: "Caregiver Name"
+  cg: ["caregivername", "caregiver"],
   checked: ["checkedthisweek", "checked", "checkedweek"],
-  // Fields below are not sourced from custom fields; listed for completeness.
+
   id: [],
   oppName: [],
   first: [],
@@ -1599,24 +1030,20 @@ const FIELD_ALIASES: Record<keyof OpportunityRecord, string[]> = {
   contactName: [],
   contactEmail: [],
   contactPhone: [],
-  tags: [], // not custom fields — read off the embedded contact
+  tags: [],
   pipelineId: [],
   pipelineName: [],
   shared: [],
-  stageChangedAt: [], // native GHL timestamp, not a custom field
-  createdAt: [], // native GHL timestamp, not a custom field
-  // ⚠️ NOT A CUSTOM FIELD EITHER. Listed because this map is exhaustive over
-  // OpportunityRecord and the compiler enforces it — which is how a new field
-  // cannot be silently left unmapped.
+  stageChangedAt: [],
+  createdAt: [],
+
   statusChangedAt: [],
-  version: [], // native GHL updatedAt, not a custom field
-  // 🔴 ROUND 181 — "First Opened", read by name like every field above. The
-  // value is machine-written (`<iso>|<userId>`) and hidden from the panel.
+  version: [],
+
   firstOpened: ["firstopened"],
-  newLead: [], // computed by the route, never a field
+  newLead: [],
 };
 
-// Reverse lookup: normalized alias -> target key.
 const ALIAS_TO_KEY = new Map<string, keyof OpportunityRecord>();
 for (const [key, aliases] of Object.entries(FIELD_ALIASES)) {
   for (const a of aliases) ALIAS_TO_KEY.set(a, key as keyof OpportunityRecord);
@@ -1643,14 +1070,13 @@ function normalizeOpportunity(
   opp: RawOpportunity,
   fieldMap: Map<string, string>,
   userMap: Map<string, string>,
-  stageNameByKey: Map<string, string>, // key = pipelineId::stageId
+  stageNameByKey: Map<string, string>,
   pipelineNameById: Map<string, string>,
 ): OpportunityRecord {
   const pipelineId = opp.pipelineId || "";
   const rec: OpportunityRecord = {
     id: opp.id,
-    // Keep the opportunity's OWN name — previously it was only used as a
-    // fallback when the contact had no name, so it never reached the UI.
+
     oppName: (opp.name || "").trim(),
     first: "",
     last: "",
@@ -1689,57 +1115,28 @@ function normalizeOpportunity(
       : [],
     pipelineId,
     pipelineName: pipelineNameById.get(pipelineId) || "",
-    shared: false, // set true later by the access filter for non-home pipelines
-    // ITEM 5 — see OpportunityRecord.version.
+    shared: false,
+
     version: String(opp.updatedAt ?? opp.dateUpdated ?? ""),
-    // ✅ DAYS-IN-STAGE — `lastStageChangeAt`, AND IT IS NOW VERIFIED LIVE.
-    //
-    // This read three plausible spellings because nothing had confirmed which
-    // one GoHighLevel sends. The probe has run: `lastStageChangeAt` is present
-    // on EVERY record, and one record shows a fifteen-day gap between creation
-    // and stage change — so it tracks real movement rather than echoing
-    // `createdAt`. The two speculative spellings are gone; a defensive fallback
-    // that is never taken is a claim nobody can check.
-    //
-    // ⚠️ `lastStatusChangeAt` IS PRESENT TOO AND IDENTICAL ON EVERY RECORD
-    // SAMPLED. It is deliberately NOT read: identical today is not the same as
-    // the same field, and falling back to it would silently substitute a
-    // different meaning the first time they diverge.
-    //
-    // 🔴 AND IT IS MOVED BY BULK WRITES, WHICH IS A REAL CAVEAT WHEREVER
-    // DAYS-IN-STAGE IS SHOWN. Fourteen records share a gap of exactly 2,880
-    // minutes — 48 hours — and all fourteen are still at NEW LEAD. That is one
-    // bulk correction touching the field without a stage move, most likely the
-    // 210-record Facebook remediation. So a tile reading "2 days in stage" on a
-    // record that has not moved since August is WRONG and has nothing on screen
-    // to say so. Anything rendering this number needs that sentence beside it.
+
     stageChangedAt: String(opp.lastStageChangeAt ?? ""),
-    // 🔴 ROUND 174 — NOW READ, AND ONLY FOR DATING WON/LOST. The note above
-    // still stands: identical to lastStageChangeAt on every record sampled, and
-    // a bulk write moves it. It is carried as its OWN field — never as a
-    // fallback for stageChangedAt — so the two can never be confused, and the
-    // one screen that reads it prints the caveat beside the number.
+
     statusChangedAt: String(opp.lastStatusChangeAt ?? ""),
     createdAt: String(opp.createdAt ?? opp.dateAdded ?? ""),
-    // ROUND 181 — filled from the "First Opened" field by the alias loop below.
+
     firstOpened: "",
   };
-  // Resolve follower ids -> names via the same users lookup used for the owner.
-  // Never leak a raw user id to the UI — an unresolvable id reads "Former user"
-  // everywhere (matches userLabel() in app/page.tsx).
+
   rec.followerNames = rec.followerIds.map(
     (id) => userMap.get(id) || "Former user",
   );
 
-  // Part A: the dashboard "Source" column is the native `source` field.
   rec.src = opp.source || "";
 
-  // Raw custom-field values keyed by field id — drives the Phase 2 editors.
   for (const cf of opp.customFields || []) {
     if (cf.id) rec.cf[cf.id] = cfRaw(cf);
   }
 
-  // Contact name -> first / last.
   const c = opp.contact;
   if (c?.firstName || c?.lastName) {
     rec.first = c.firstName || "";
@@ -1751,17 +1148,13 @@ function normalizeOpportunity(
     rec.last = parts.join(" ");
   }
 
-  // Stage name from pipelineId + stage id (names repeat across pipelines).
   const stageId = opp.pipelineStageId || opp.stageId || "";
   rec.stage = stageNameByKey.get(stageKey(pipelineId, stageId)) || "";
 
-  // Owner name — same rule: an unresolvable id reads "Former user", never the
-  // raw id (this leaked in the list "Rep" column and on board cards too).
   if (opp.assignedTo) {
     rec.rep = userMap.get(opp.assignedTo) || "Former user";
   }
 
-  // Custom fields -> target keys by name.
   for (const cf of opp.customFields || []) {
     const fname = (cf.id && fieldMap.get(cf.id)) || cf.fieldKey || cf.key || "";
     if (!fname) continue;
@@ -1773,7 +1166,7 @@ function normalizeOpportunity(
     } else if (key === "block") {
       rec.block = val || "None";
     } else if (typeof rec[key] === "string") {
-      // Only assign non-empty; keep defaults otherwise.
+
       if (val) (rec[key] as string) = val;
     }
   }
@@ -1782,22 +1175,18 @@ function normalizeOpportunity(
   return rec;
 }
 
-// Normalize a single option element (string OR object) to its stored string.
 function optionToString(o: unknown): string {
   if (o == null) return "";
   if (typeof o === "string") return o;
   if (typeof o === "object") {
     const r = o as Record<string, unknown>;
-    // Prefer the value GHL actually stores; fall back to a human label.
+
     const v = r.value ?? r.name ?? r.label ?? r.key ?? r.option ?? "";
     return typeof v === "string" ? v : String(v ?? "");
   }
   return String(o);
 }
 
-// Pull option strings out of a field definition, tolerant of GHL's varying
-// shapes: any property whose name contains "option" and holds an array is
-// treated as the option list (options, picklistOptions, picklistOptionsV2, …).
 function optionStrings(def: FieldDefinition): string[] {
   const collected: unknown[] = [];
   for (const [k, v] of Object.entries(def)) {
@@ -1815,7 +1204,6 @@ function optionStrings(def: FieldDefinition): string[] {
   return out;
 }
 
-// Editable field definitions for the client (id, dataType, options, editable).
 export async function getEditableFieldDefs(
   model: FieldModel = "opportunity",
 ): Promise<EditableFieldDef[]> {
@@ -1831,16 +1219,14 @@ export async function getEditableFieldDefs(
         (d as Record<string, unknown>).folderId ??
         "",
     ),
-    // ITEM 3 — the folder NAME when GHL sends one, under any of the spellings
-    // seen. Empty when it doesn't, and the folder match falls back to parentId.
+
     parentName: String(
       (d as Record<string, unknown>).parentName ??
         (d as Record<string, unknown>).folderName ??
         (d as Record<string, unknown>).parentFolderName ??
         "",
     ),
-    // GHL's authored order within the folder. Missing/unparseable sorts last
-    // (Number.MAX_SAFE_INTEGER) so it falls back to the name sort downstream.
+
     position: (() => {
       const p = Number((d as Record<string, unknown>).position);
       return Number.isFinite(p) ? p : Number.MAX_SAFE_INTEGER;
@@ -1852,8 +1238,7 @@ export async function getOltlOpportunities(
   scope: PipelineScope = "client",
 ): Promise<{
   records: OpportunityRecord[];
-  // A pipeline whose fetch failed. Its records are ABSENT from `records`, and
-  // that is indistinguishable from "this pipeline is empty" unless we say so.
+
   failedPipelines?: { id: string; name: string; error: string }[];
   pipeline: { id: string; name: string } | null;
   pipelines: { id: string; name: string }[];
@@ -1864,8 +1249,6 @@ export async function getOltlOpportunities(
 }> {
   const selected = await getSelectedPipelines(scope);
 
-  // Build: composite stage map (pipelineId::stageId -> name), pipeline-name
-  // lookup, per-pipeline stage lists, and a deduped union of stages.
   const stageNameByKey = new Map<string, string>();
   const pipelineNameById = new Map<string, string>();
   const stagesByPipeline: Record<string, { id: string; name: string }[]> = {};
@@ -1883,34 +1266,12 @@ export async function getOltlOpportunities(
     }
   }
 
-  // Shared lookups (fetched once, in parallel).
   const [fieldMap, userMap, fieldDefs] = await Promise.all([
     getFieldMap(),
     getUserMap(),
     getEditableFieldDefs(),
   ]);
 
-  // PARALLEL, CAPPED. This ran SEQUENTIALLY — `for (const p of selected) await
-  // searchAll(p.id)` — so the load's wall-clock was the SUM of five round trips
-  // plus their pages, one waiting on the last for no reason. The request COUNT
-  // is unchanged (5-10 pages either way, ~8-13 for the whole load); they simply
-  // stop queueing behind each other. That is "wait less", never "retry more".
-  //
-  // The cap is the point: 100 requests per 10 seconds is the budget, and an
-  // unbounded wave is how a slow load becomes a 429.
-  //
-  // 🔴 ONE PIPELINE FAILING MUST NOT FAIL THE LOAD. mapLimit returns settled
-  // results rather than rejecting, so a pipeline that times out costs its own
-  // records and nothing else.
-  //
-  // ⚠️ BUT IT MUST NOT BE SILENT EITHER. A dropped pipeline looks exactly like
-  // an empty one, and a rep seeing their division empty concludes there is no
-  // work rather than that the load half-failed. The names come back in
-  // `failedPipelines` so the UI can say which.
-  //
-  // The 401 "Command timed out" retry lives in ghlGet (report 47) and still
-  // applies per request — GoHighLevel returns 401 for its OWN timeouts, so that
-  // one retry happens beneath this and usually means nothing lands here at all.
   const PIPELINE_CONCURRENCY = 5;
   const settled = await mapLimit(selected, PIPELINE_CONCURRENCY, (p) =>
     searchAll(p.id),
@@ -1929,8 +1290,7 @@ export async function getOltlOpportunities(
       failedPipelines.push({ id: p.id, name: p.name, error: msg.slice(0, 200) });
       return;
     }
-    // GHL returns pipelineId on each opp; stamp it as a fallback so stage +
-    // pipeline resolution is never ambiguous.
+
     for (const o of res.value) if (!o.pipelineId) o.pipelineId = p.id;
     raw.push(...res.value);
   });
@@ -1943,7 +1303,7 @@ export async function getOltlOpportunities(
 
   return {
     records,
-    pipeline: null, // v2: no single pipeline — see `pipelines`
+    pipeline: null,
     pipelines: selected.map((p) => ({ id: p.id, name: p.name })),
     stages: unionStages,
     stagesByPipeline,
@@ -1953,22 +1313,6 @@ export async function getOltlOpportunities(
   };
 }
 
-/**
- * 🔴 ONE PIPELINE'S OPPORTUNITIES, BY ID, WHATEVER ITS SCOPE — round 124.
- *
- * ⚠️ THIS IS THE OTHER HALF OF THE EMPTY EVENTS TAB, and it is not the half the
- * brief guessed. `eventsPipeline()` has looked in the client AND "none" pickers
- * since round 116, but the RECORDS came from `getOltlOpportunities()`, which
- * defaults to `scope: "client"`. So an Events pipeline scoped "none" — or, now,
- * marked by role and scoped anything at all — was FOUND and its records were
- * never fetched: the tab drew "no events in this division" over a pipeline full
- * of them. A lookup and a fetch that disagree about which pipelines exist is
- * worse than either being wrong alone, because the screen looks configured.
- *
- * ⚠️ SAME NORMALISATION AS THE BOARD, deliberately. `cf`, stage and pipeline
- * names all resolve the way every other record on the screen does; a second
- * shaping path is how two views of one opportunity start disagreeing.
- */
 export async function getOpportunitiesInPipeline(pipe: {
   id: string;
   name: string;
@@ -1985,10 +1329,6 @@ export async function getOpportunitiesInPipeline(pipe: {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Contact notes — scoped to an opportunity via the note `relations` array.
-// ---------------------------------------------------------------------------
-
 interface RawNote {
   id?: string;
   body?: string;
@@ -1999,38 +1339,19 @@ interface RawNote {
 
 export interface OppNote {
   id: string;
-  who: string; // author name
-  when: string; // formatted date
-  txt: string; // body text (system + reason)
-  // ITEM 2 — a Move note is one note carrying a SYSTEM record and the author's
-  // own words. Only the second half may be edited or withdrawn.
+  who: string;
+  when: string;
+  txt: string;
+
   isMove: boolean;
-  system: string; // "" for a manual note
-  reason: string; // the whole text for a manual note
-  // ITEM 4 — note editing. `authorId` is what the edit gate compares against;
-  // it is sent to the client so the UI can show the affordance only on the
-  // viewer's OWN notes, but the server re-checks it and is the real boundary.
+  system: string;
+  reason: string;
+
   authorId: string;
   edited: boolean;
-  removed: boolean; // ITEM 5 — soft-deleted: the text is a removal record
+  removed: boolean;
 }
 
-/**
- * A note's timestamp, as the reader should see it.
- *
- * 🔴 ROUND 168 — THIS WAS THE WORST OF THE FOUR, BECAUSE IT RUNS ON THE SERVER.
- * `toLocaleString` with NO `timeZone` uses the host's zone, and this host is
- * UTC — so a note added at 8pm Eastern was stamped with the NEXT DAY at
- * 12:00 AM, on every note, for every reader. Not a formatting preference: the
- * date was wrong.
- *
- * ⚠️ NO ZONE LABEL, DELIBERATELY. Every note in the list is Eastern and the
- * panel says so once; "(EDT)" on forty rows is wallpaper. `formatEasternNoZone`
- * carries that decision and the reasoning behind it.
- *
- * ⚠️ RETURNS THE RAW VALUE ON AN UNPARSEABLE DATE, as it always did — a stamp
- * nobody can read beats a note that renders blank.
- */
 function fmtNoteDate(iso?: string): string {
   if (!iso) return "";
   const out = formatEasternNoZone(iso);
@@ -2043,7 +1364,6 @@ function noteBelongsToOpp(n: RawNote, oppId: string): boolean {
   );
 }
 
-// List a contact's notes, filtered to just this opportunity's, newest first.
 export async function listOpportunityNotes(
   contactId: string,
   oppId: string,
@@ -2065,15 +1385,13 @@ export async function listOpportunityNotes(
         id: n.id || "",
         who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
         when: fmtNoteDate(n.dateAdded),
-        // The division stamped at write time — NOT looked up now, so a later
-        // division change can never rewrite history.
+
         division: parsed.division,
         txt: parsed.text,
         authorId: n.userId || "",
         edited: parsed.edited,
         removed: parsed.removed,
-        // ITEM 2 — a Move note's two halves, split by the separator Move wrote.
-        // The panel greys the system half and lets the author edit only theirs.
+
         isMove: parsed.isMove,
         system: parsed.system,
         reason: parsed.reason,
@@ -2081,20 +1399,6 @@ export async function listOpportunityNotes(
     });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// A CONTACT'S NOTES, UNFILTERED — for a record that has NO opportunity.
-//
-// 🔴 `listOpportunityNotes` ABOVE CANNOT BE REUSED FOR THIS, and calling it with
-// an empty oppId is the trap: `noteBelongsToOpp` tests `r.recordId === oppId`,
-// so every note is filtered out and the caller reads "no notes at all". For the
-// referral Touch queue, "no note at all" means OVERDUE — so that mistake would
-// have marked EVERY partner overdue while looking entirely plausible.
-//
-// A referral partner is a contact with no case, so their touches are plain
-// contact notes. Same proven endpoint, no opportunity filter.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** ISO timestamp of the newest note on a contact, or "" when there are none. */
 export async function latestContactNoteAt(contactId: string): Promise<string> {
   const data = await ghlGet<{ notes?: RawNote[] }>(
     `/contacts/${encodeURIComponent(contactId)}/notes`,
@@ -2108,66 +1412,24 @@ export async function latestContactNoteAt(contactId: string): Promise<string> {
   return newest;
 }
 
-/**
- * Set a contact's owner.
- *
- * ⚠️ SEPARATE FROM updateContactCustomFields on purpose. That function's whole
- * contract is "send ONLY the field that changed, because a partial customFields
- * array updates rather than replaces" — folding a native field into it would
- * blur a boundary that took a live verification to establish.
- */
 export async function setContactOwner(contactId: string, userId: string): Promise<void> {
   if (!contactId || !userId) return;
   await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, {
     assignedTo: userId,
   });
 
-  // ═══ ROUND 151 — READ IT BACK ══════════════════════════════════════════════
-  //
-  // 🔴 SAME CLASS AS THE FOLLOWER WRITE: this asserts a USER's relationship to
-  // a record, and GoHighLevel validates those against that user's own access
-  // rather than the token's. The opportunity owner write fails loudly (400);
-  // the follower write returns 200 and stores nothing. Which of the two a
-  // CONTACT owner write behaves like has never been probed on this account —
-  // so this reads it back instead of assuming either.
-  //
-  // ⚠️ THE READ-BACK IS RIGHT WHICHEVER IT TURNS OUT TO BE. If GoHighLevel
-  // refuses loudly the throw above fires first and this never runs; if it
-  // refuses silently this catches it. It costs one GET on the promote path,
-  // which runs once per partner promotion, not in any loop.
   const back = await getContactCustomFields(contactId).catch(() => null);
   if (back && back.assignedTo && back.assignedTo !== userId)
-    // ═══ ROUND 156 — IT WARNS. IT USED TO THROW. ════════════════════════════
-    //
-    // 🔴 A DIFFERENT OWNER DOES NOT PROVE THE WRITE FAILED. Round 151 narrowed
-    // this to "only a DIFFERENT owner counts" thinking that was the strict
-    // reading — and a stale read returns exactly that, the OLD owner. So the
-    // narrowing protected against nothing, and on an eventually-consistent
-    // account this threw on every successful promotion.
-    //
-    // ⚠️ THE ASYMMETRY, WHICH IS THE RULE THIS ROUND IS BUILT ON: a read-back
-    // may CONFIRM a success and must never, on its own, establish a failure.
-    // It cannot tell "did not land" from "has not landed yet", and picking one
-    // is how a working write gets reported as broken — which sends somebody to
-    // redo something that worked.
-    //
-    // The log line is the deliverable. If contact owner writes turn out to be
-    // genuinely refused rather than merely slow, this is where the evidence
-    // will be, and it can become a throw then — with a probe behind it.
+
     // eslint-disable-next-line no-console
     console.warn(
       `[contact-owner] ${contactId}: wrote assignedTo=${userId} and the read-back still says ` +
         `${back.assignedTo}. Either GoHighLevel has not applied it yet (it applies some writes ` +
         `asynchronously) or the write was refused. NOT treated as a failure — the promote stands.`,
     );
-  // ⚠️ AN EMPTY READ-BACK IS NOT TREATED AS A REFUSAL. A contact that comes
-  // back with no `assignedTo` at all is more likely a read that did not carry
-  // the field than a write that vanished, and throwing on it would break the
-  // promote path on an account whose contact payload differs. Narrow on
-  // purpose: only a DIFFERENT owner proves the write did not take.
+
 }
 
-/** A contact's notes, newest first, with their text. No opportunity filter. */
 export async function listContactNotes(
   contactId: string,
 ): Promise<{ id: string; when: string; dateAdded: string; who: string; txt: string }[]> {
@@ -2185,15 +1447,11 @@ export async function listContactNotes(
       when: fmtNoteDate(n.dateAdded),
       dateAdded: String(n.dateAdded || ""),
       who: (n.userId && userMap.get(n.userId)) || "GoHighLevel",
-      // ⚠️ RAW, NOT parseNoteBody(). That parser strips a leading [DIVISION]
-      // tag that the opportunity note writer adds; a partner touch is written
-      // as plain text by addContactNote, and a note whose text happens to start
-      // with a bracket would silently lose its first word.
+
       txt: String(n.body || ""),
     }));
 }
 
-/** A note on the contact alone — no opportunity relation, because there is none. */
 export async function addContactNote(
   contactId: string,
   body: string,
@@ -2212,63 +1470,16 @@ export async function addContactNote(
   return { id: n.id || "", dateAdded: String(n.dateAdded || "") };
 }
 
-// ITEM 6 — the author's DIVISION AT WRITE TIME.
-// GHL's note object carries only body/userId/dateAdded/relations — there is no
-// metadata field to hang this on, so option (b) does not exist and we use (a):
-// stamp the division into the body at write time. It cannot drift, because a
-// later lookup would relabel every past note if the author changes division.
-// Read back with parseNoteBody(); the tag is stripped for display.
 const DIVISION_TAG = /^\s*\[([^\]]{1,40})\]\s*/;
 
-// ITEM 4 — the "edited" marker.
-//
-// GHL's note object carries body / userId / dateAdded / relations and nothing
-// else we can hang metadata on, so the marker goes where the division already
-// goes: a leading bracket tag. Notes may now carry EITHER or BOTH, in either
-// order — `[OLTL] [edited] text` — so the parser consumes every leading tag and
-// classifies them, which keeps every pre-existing `[OLTL] text` note reading
-// exactly as before.
-//
-// The original timestamp is kept for free: an edit sends ONLY the body, and GHL
-// does not touch `dateAdded` on update. Nothing recomputes it on read.
 const EDITED_TAG = "edited";
-// ITEM 5 — SOFT delete. The note is never erased: its text is replaced with a
-// removal record, and the tag is what tells the reader (and the UI) that this
-// slot held something. A hard delete would leave no trace that a note ever
-// existed, which is exactly the failure mode that got deletion rejected the
-// first time — on a transferred case the notes are the receiving rep's only
-// account of what happened.
+
 const REMOVED_TAG = "removed";
 
-// ---------------------------------------------------------------------------
-// A Move note carries TWO things in one body:
-//
-//   "Moved from ODP Enrollment to OLTL Enrollment. New owner: Chris." | "test transfer"
-//    └──────────────── SYSTEM record ──────────────────────────────┘   └ rep's words ┘
-//
-// The author may correct or withdraw THEIR words. They may not erase the fact
-// that a transfer happened — the receiving rep would inherit a case with no
-// account of how it got there.
-//
-// THE BOUNDARY MECHANISM: a UNIT SEPARATOR (U+001F) written by Move itself.
-//
-// Not a "Reason: " substring search — a rep can type that inside their own
-// text, and the split would then cut in the wrong place and let them rewrite
-// the system record. U+001F is a non-printing control character: it cannot be
-// typed into the note box, cannot survive a copy-paste of visible text, and
-// renders as nothing in GoHighLevel's own note view. So the split point is
-// unforgeable by anything a user can enter.
 const REASON_SEP = "\u001F";
 
-// Move-written notes are FLAGGED AT CREATION with [move] rather than recognised
-// by their wording — otherwise a rep could type "Moved from X to Y." into a
-// manual note and buy their text the same protection from editing.
 const MOVE_TAG = "move";
 
-// Notes written BEFORE the flag existed have no [move] tag. They are recognised
-// by the sentence Move generated, and ONLY as a fallback for untagged notes —
-// never for new ones. The capture keeps the system sentence intact and hands
-// back whatever followed "Reason: " as the rep's words.
 const LEGACY_MOVE =
   /^(Moved from .+? to .+?\.(?: New owner: .+?\.)?|Stage changed in .+?\.)\s*(?:Reason:\s*)?([\s\S]*)$/;
 
@@ -2276,10 +1487,10 @@ export interface NoteParts {
   division: string;
   edited: boolean;
   removed: boolean;
-  isMove: boolean; // written by Move — its system half is protected
-  system: string; // the Move sentence; "" for a manual note
-  reason: string; // the author's own words; the WHOLE text for a manual note
-  text: string; // system + reason, for anything that just wants to read it
+  isMove: boolean;
+  system: string;
+  reason: string;
+  text: string;
 }
 
 export function parseNoteBody(body: string): NoteParts {
@@ -2296,7 +1507,7 @@ export function parseNoteBody(body: string): NoteParts {
     else if (tag === REMOVED_TAG) removed = true;
     else if (tag === MOVE_TAG) isMove = true;
     else if (!division) division = m[1].trim();
-    else break; // a further tag isn't ours — leave it in the text
+    else break;
     rest = rest.slice(m[0].length);
   }
 
@@ -2304,18 +1515,11 @@ export function parseNoteBody(body: string): NoteParts {
   let reason = rest;
   const sep = rest.indexOf(REASON_SEP);
   if (sep >= 0) {
-    // NEW FORMAT. composeNoteBody writes the separator on EVERY note it
-    // creates — a manual note simply has an empty system half — so its presence
-    // is what proves the note is new. That is the whole discriminator: the
-    // legacy fallback below can then never fire on a note this app wrote, and a
-    // rep who types "Moved from A to B." into a manual note gets no protection
-    // they didn't earn. `isMove` comes from the [move] TAG alone, never wording.
+
     system = rest.slice(0, sep).trim();
     reason = rest.slice(sep + REASON_SEP.length).trim();
   } else {
-    // LEGACY, and only legacy: written before the separator existed, so the
-    // generated sentence is the only signal available. First-run verification
-    // caught this branch being unreachable when the note carried a division tag.
+
     const m = LEGACY_MOVE.exec(rest);
     if (m) {
       system = m[1].trim();
@@ -2335,8 +1539,6 @@ export function parseNoteBody(body: string): NoteParts {
   };
 }
 
-// Build a note body from its parts. Every write goes through this, so the tag
-// order and the separator live in exactly one place.
 export function composeNoteBody(p: {
   division?: string;
   edited?: boolean;
@@ -2352,19 +1554,14 @@ export function composeNoteBody(p: {
     (p.removed ? `[${REMOVED_TAG}] ` : "") +
     (p.isMove ? `[${MOVE_TAG}] ` : "");
   const system = (p.system || "").trim();
-  // The separator is written on EVERY note, including manual ones (where the
-  // system half is empty). It costs nothing — U+001F is non-printing — and it
-  // is what marks a note as new format, so the legacy wording fallback in
-  // parseNoteBody can never misfire on something this app wrote.
+
   return `${tags}${system}${REASON_SEP}${p.reason}`;
 }
 
-// Back-compat wrapper for the plain division stamp on manual notes.
 export function stampDivision(body: string, division: string): string {
   return composeNoteBody({ division, reason: body });
 }
 
-// Kept for the edit route, which rebuilds a note from its stored parts.
 export function buildNoteBody(
   text: string,
   division: string,
@@ -2374,8 +1571,6 @@ export function buildNoteBody(
   return composeNoteBody({ division, edited, removed, reason: text });
 }
 
-// Add a note on the contact, related to both the opportunity and the contact so
-// it appears under the opportunity's Notes/Associated objects in native GHL.
 export async function addOpportunityNote(
   contactId: string,
   oppId: string,
@@ -2411,18 +1606,6 @@ export async function addOpportunityNote(
   };
 }
 
-// ITEM 4 — edit a note IN PLACE.
-//
-// Decided deliberately, and the limits are real:
-//   - the AUTHOR only. Not admins: on a transferred case the notes are the
-//     receiving rep's account of what happened, and someone else rewriting them
-//     is worse than a typo.
-//   - NO delete. A gap nobody can see is worse than a visible correction.
-//   - this OVERWRITES the original text, so it is NOT a true audit trail. It is
-//     for typos, which is the actual need. The "[edited]" marker is what keeps
-//     it honest — a reader can always tell the text changed.
-//   - only `body` is sent, so GHL leaves `dateAdded` alone and the original
-//     timestamp stands.
 export async function updateOpportunityNote(
   contactId: string,
   noteId: string,
@@ -2451,8 +1634,6 @@ export async function updateOpportunityNote(
   };
 }
 
-// Fetch ONE note raw, so the edit route can verify authorship and recover the
-// division stamped at original write time. Never trust the client for either.
 export async function getRawNote(
   contactId: string,
   noteId: string,
@@ -2465,43 +1646,6 @@ export async function getRawNote(
   return { id: hit.id || "", body: hit.body || "", userId: hit.userId || "" };
 }
 
-// Fetch + normalize a single opportunity (used by the save route to re-check
-// permissions and to return a fresh record after a write).
-// ITEM 1 — IN-FLIGHT DEDUPE + A 3s TTL.
-//
-// Opening ONE record fires three requests — notes, caregivers, contact-fields —
-// and EVERY ONE of them starts by reading the same opportunity to decide
-// permission. That was three identical GET /opportunities/{id} calls against a
-// 100-per-10s budget, for one click, before any of the work those routes exist
-// to do. On a warm lambda they now collapse to one.
-//
-// Deliberately TINY (3 seconds) and keyed by id: this is a burst-collapser for
-// one user action, not a cache of record state. Anything longer would risk a
-// permission decision made against a stale owner, which is the one thing this
-// read must never get wrong.
-//
-// 🔴 AND IT MUST BE INVALIDATED ON WRITE. This is the bug it caused in v59-v61,
-// which is worth spelling out because the shape is easy to reintroduce:
-//
-//   1. PATCH /api/opportunities/{id} reads the record to check permission
-//      -> caches the PRE-WRITE record at T0
-//   2. it writes (PUT), which takes a few hundred ms
-//   3. updateOpportunity re-reads to return "the fresh record"
-//      -> still inside the 3s window, so it gets the CACHED PRE-WRITE record
-//   4. the route answers {ok:true, record:<pre-write>} and the client, doing
-//      exactly the right thing, replaces its correct optimistic update with
-//      that stale record
-//
-// The card snaps back to its old stage, the write HAS landed in GoHighLevel,
-// and a reload shows the new value. Not a race — deterministic, because a write
-// always completes well inside 3 seconds.
-//
-// It hit every write on both boards, not just caregivers; it only LOOKED like a
-// caregiver drag bug because v59-v61 shipped together, so the dedupe and the
-// caregiver board went live in the same deploy.
-//
-// `invalidateOpportunity` is therefore not optional bookkeeping — any write to
-// an opportunity MUST call it before re-reading.
 const oppBurst = new Map<string, { at: number; p: Promise<OpportunityRecord | null> }>();
 const OPP_BURST_MS = 3000;
 
@@ -2512,7 +1656,7 @@ export async function getOpportunityById(
   if (hit && Date.now() - hit.at < OPP_BURST_MS) return hit.p;
   const p = getOpportunityByIdUncached(id);
   oppBurst.set(id, { at: Date.now(), p });
-  // A rejected promise must never be served to the next caller.
+
   p.catch(() => oppBurst.delete(id));
   if (oppBurst.size > 200) {
     const cutoff = Date.now() - OPP_BURST_MS;
@@ -2521,10 +1665,6 @@ export async function getOpportunityById(
   return p;
 }
 
-/**
- * Drop the burst entry for one opportunity. MUST be called by anything that
- * writes to that opportunity, before it re-reads — see the note above.
- */
 export function invalidateOpportunity(id: string): void {
   oppBurst.delete(id);
 }
@@ -2543,26 +1683,7 @@ async function getOpportunityByIdUncached(
   }
   const opp = data.opportunity;
   if (!opp) return null;
-  // 🔴 EVERY PIPELINE ON THE LOCATION, not `getSelectedPipelines()`.
-  //
-  // That helper defaults to scope "client", so this map only ever held the five
-  // CLIENT pipelines. A CAREGIVER record read by id therefore resolved NEITHER
-  // its stage name NOR its pipeline name:
-  //
-  //     rec.stage = stageNameByKey.get(stageKey(pipelineId, stageId)) || ""
-  //                                                                     ^^ ""
-  //
-  // This function is what the PATCH route returns as "the fresh record" after a
-  // write. So a caregiver drag wrote correctly, then handed the client back a
-  // record with an EMPTY stage — the card matched no column and vanished, which
-  // reads exactly like "it snapped back". A reload fixed it because
-  // loadCaregivers() fetches with scope=caregiver, where the stages do resolve.
-  //
-  // Reading by ID is inherently scope-free: the caller has an opportunity id and
-  // no idea which family it belongs to, so restricting the lookup to one family
-  // could only ever be wrong. `stageKey` is namespaced by pipelineId, so a
-  // union cannot collide even though stage NAMES repeat across pipelines.
-  // getPipelines() is cached per warm lambda, so this costs nothing extra.
+
   const selected = await getPipelines();
   const stageNameByKey = new Map<string, string>();
   const pipelineNameById = new Map<string, string>();
@@ -2573,15 +1694,6 @@ async function getOpportunityByIdUncached(
   const [fieldMap, userMap] = await Promise.all([getFieldMap(), getUserMap()]);
   return normalizeOpportunity(opp, fieldMap, userMap, stageNameByKey, pipelineNameById);
 }
-
-// ---------------------------------------------------------------------------
-// Resources — files in the OLTL Resources media folder only.
-//
-// The Media Library is shared across the whole sub-account, so we scope BOTH at
-// the API (parentId param) AND again in code (belt-and-suspenders) to the
-// RESOURCES_FOLDER_ID. Media URLs are signed with a TTL, so we always LIST fresh
-// (never store a URL). Field names vary across GHL versions — read defensively.
-// ---------------------------------------------------------------------------
 
 interface RawMedia {
   _id?: string;
@@ -2601,22 +1713,6 @@ interface RawMedia {
   fileSize?: number;
 }
 
-// ---------------------------------------------------------------------------
-// ITEM 6 — Resource FOLDERS. Three endpoints, all Version 2021-07-28:
-//
-//   CREATE  POST   /medias/folder   { name, altId, altType: "location" }
-//   DELETE  DELETE /medias/{id}?altType=location&altId={loc}
-//   LIST    GET    /medias/files?altId=…&altType=location&type=folder
-//
-// NOT /medias/files for create — that is the LISTING endpoint, and posting to
-// it is the kind of near-miss that returns a confusing error rather than an
-// obvious one.
-//
-// 🔴 ORGANISATION, NOT SECURITY. GHL media URLs are publicly reachable once
-// known. Everything here scopes what people SEE in the tab; it cannot stop
-// anyone who already has a URL. Client-specific documents belong on the client's
-// RECORD, where they inherit its permissions — not in a shared folder.
-// ---------------------------------------------------------------------------
 export interface MediaFolder {
   id: string;
   name: string;
@@ -2636,21 +1732,13 @@ export async function listMediaFolders(): Promise<MediaFolder[]> {
   const raw = data.files || data.medias || [];
   const folders = raw
     .map((f) => ({
-      // 🔴 THE FOLDER-FETCH BUG. This read `f.id` ONLY. GoHighLevel's media API
-      // returns the Mongo id as **_id** — which RawMedia has always declared,
-      // three lines above where it was being ignored. Every folder therefore
-      // mapped to id:"" and was then dropped by the .filter() below, so the call
-      // SUCCEEDED and returned an empty array. No error, no 4xx, nothing to see
-      // in a log: the Access tab simply reported "no media folders" for an
-      // account that has two. Read both, _id first.
+
       id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? "Untitled"),
     }))
     .filter((f) => f.id)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // If GHL returned rows and we kept none, the shape changed again. Say so —
-  // that is precisely the failure this bug was, and it is invisible otherwise.
   if (raw.length && !folders.length)
     // eslint-disable-next-line no-console
     console.error(
@@ -2659,10 +1747,6 @@ export async function listMediaFolders(): Promise<MediaFolder[]> {
   return folders;
 }
 
-// ⚠️ GHL AUTO-RENAMES ON COLLISION: creating "OLTL" when one exists yields
-// "OLTL (1)" with NO error. So the caller is told the name GHL ACTUALLY
-// assigned, and we re-read the folder list to find it rather than assuming the
-// create response echoes it.
 export async function createMediaFolder(
   name: string,
 ): Promise<{ id: string; name: string; renamed: boolean; requested: string }> {
@@ -2681,15 +1765,14 @@ export async function createMediaFolder(
     altId: locationId,
     altType: "location",
   });
-  // Same _id/id trap as listMediaFolders — read both here too, or a successful
-  // create reports an empty id and the UI can't select the folder it just made.
+
   const id = String(
     res.folder?._id ?? res.folder?.id ?? res._id ?? res.id ?? "",
   );
   let actual = String(res.folder?.name ?? res.name ?? "");
 
   if (!actual || !id) {
-    // The response shape isn't guaranteed; find the new folder by diffing.
+
     const after = await listMediaFolders();
     const seen = new Set(before.map((f) => f.id));
     const fresh = after.find((f) => !seen.has(f.id));
@@ -2703,9 +1786,6 @@ export async function createMediaFolder(
   };
 }
 
-// 🔴 DELETING A FOLDER REMOVES ITS CONTENTS. The route counts the files first so
-// the confirmation can say how many, and the count is taken SERVER-SIDE — a
-// client-supplied number could be stale or forged.
 export async function countFilesInFolder(folderId: string): Promise<number> {
   const { locationId } = requireEnv();
   const params = new URLSearchParams({
@@ -2723,10 +1803,6 @@ export async function countFilesInFolder(folderId: string): Promise<number> {
   ).length;
 }
 
-// ITEM 11 — delete ONE file. Same endpoint as the folder delete: GoHighLevel's
-// media rows are files or folders alike, so /medias/{id} removes either. Kept
-// as a separate named function anyway — the call sites mean different things
-// and one of them destroys a folder's whole contents.
 export async function deleteMediaFile(fileId: string): Promise<void> {
   return deleteMediaFolder(fileId);
 }
@@ -2737,17 +1813,12 @@ export async function deleteMediaFolder(folderId: string): Promise<void> {
     altType: "location",
     altId: locationId,
   });
-  // ITEM 1 — through ghlDelete now, so a 429 here is retried like everywhere
-  // else. ⚠️ NO `goneOk`: a media folder that is already gone is not something
-  // this app has a reason to treat as success, and inventing one would hide a
-  // wrong-id bug.
+
   await ghlDelete(`/medias/${encodeURIComponent(folderId)}?${params.toString()}`, {
     what: "the folder",
   });
 }
 
-// Files in ONE folder. listResources() keeps its single-folder env behaviour for
-// the legacy path; this is what the per-folder tab uses.
 export async function listFolderFiles(folderId: string): Promise<ResourceFile[]> {
   const { locationId } = requireEnv();
   const limit = 100;
@@ -2770,11 +1841,11 @@ export async function listFolderFiles(folderId: string): Promise<ResourceFile[]>
     all.push(...batch);
     if (batch.length < limit) break;
   }
-  // Filter again in code so a mis-supported parentId can never leak the library.
+
   return all
     .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
     .map((f) => ({
-      // Same _id/id trap as the folder list — read both.
+
       id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
       url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
@@ -2796,7 +1867,7 @@ export async function listResources(): Promise<ResourceFile[]> {
       type: "file",
       sortBy: "createdAt",
       sortOrder: "desc",
-      parentId: folderId, // scope at the API when supported…
+      parentId: folderId,
       limit: String(limit),
       offset: String(offset),
     });
@@ -2807,11 +1878,11 @@ export async function listResources(): Promise<ResourceFile[]> {
     all.push(...batch);
     if (batch.length < limit) break;
   }
-  // …and filter again in code so a mis-supported param can never leak the library.
+
   return all
     .filter((f) => String(f.parentId ?? f.folderId ?? "") === folderId)
     .map((f) => ({
-      // Same _id/id trap as the folder list — read both.
+
       id: String(f._id ?? f.id ?? ""),
       name: String(f.name ?? f.fileName ?? f.originalName ?? "Untitled"),
       url: String(f.url ?? f.fileUrl ?? f.link ?? ""),
@@ -2821,22 +1892,6 @@ export async function listResources(): Promise<ResourceFile[]> {
     .filter((f) => f.url);
 }
 
-// ---------------------------------------------------------------------------
-// Bulk import — list all pipelines, upsert contacts (dedupe), create opps.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// ITEM 4 — the contact's OTHER opportunities, for the Move dialog's pre-check.
-//
-// GoHighLevel enforces ONE opportunity per contact per pipeline. Attempting to
-// move a record into a pipeline where that contact already has a case fails
-// with a 400 `OPPORTUNITY_NO_DUPLICATE` — and the message says "Can not create
-// duplicate opportunity", which reads as though the dashboard tried to create
-// something. It didn't; the rule fires on updates too.
-//
-// This is a READ, so the dialog can grey out the destinations that would fail
-// instead of letting the rep discover the rule by hitting it.
-// ---------------------------------------------------------------------------
 export interface ContactOpportunity {
   id: string;
   name: string;
@@ -2844,12 +1899,7 @@ export interface ContactOpportunity {
   pipelineName: string;
   stage: string;
   status: string;
-  /**
-   * 🔴 ROUND 175 — WHEN THE CASE WAS CREATED, and it is load-bearing rather
-   * than informational: the webhook's fallback picks the contact's NEWEST case
-   * in one pipeline created in the last few minutes, and a family in two
-   * divisions holds a second live case this must never reach.
-   */
+
   createdAt: string;
 }
 
@@ -2894,35 +1944,18 @@ export async function listPipelines(): Promise<
   return ps.map((p) => ({
     id: p.id,
     name: p.name,
-    // 🔴 `position` WAS STRIPPED HERE — round 121, item 3, found by the proof.
-    // Every admin surface reads this function, so none of them could order a
-    // pipeline's stages even after firstStage() existed: the field was thrown
-    // away one layer below. GoHighLevel does not return stages in position
-    // order, so dropping the only thing that says what the order IS makes the
-    // array order look authoritative when it is arbitrary.
+
     stages: (p.stages || []).map((s) => ({ id: s.id, name: s.name, position: s.position })),
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline Access (admin tab) — everything here is fetched LIVE, nothing is
-// hardcoded: users and pipelines come from GHL, grants from a Location Custom
-// Value. Adding a sixth division = create the pipeline in GHL and tick a box.
-//
-// Storage is a Location CUSTOM VALUE (not a custom object, so it doesn't touch
-// the 10-per-account cap). Verified working:
-//   GET  /locations/{loc}/customValues
-//   POST /locations/{loc}/customValues            (create)
-//   PUT  /locations/{loc}/customValues/{id}       (update)
-// Shape: { "<userId>": ["<pipelineId>", …], … }
-// ---------------------------------------------------------------------------
 export const ACCESS_CUSTOM_VALUE_NAME = "MM Pipeline Access";
 
 export interface LocationUser {
   id: string;
   name: string;
   email: string;
-  role: string; // "admin" | "user" | ""
+  role: string;
 }
 
 interface RawUser {
@@ -2935,8 +1968,6 @@ interface RawUser {
   roles?: { role?: string };
 }
 
-// Full user list (id/name/email/role) for the admin grid. Admins bypass the map
-// entirely, so the tab needs the role to label them.
 export async function listLocationUsers(): Promise<LocationUser[]> {
   const { locationId } = requireEnv();
   const data = await ghlGet<{ users?: RawUser[] }>(
@@ -2986,86 +2017,22 @@ async function findAccessCustomValue(): Promise<{
 
 export type AccessGrants = Record<string, string[]>;
 
-// ---------------------------------------------------------------------------
-// v2 SHAPE. The custom value used to be a FLAT map of userId -> pipelineIds.
-// Items 4 and 6 add two more scopes, so it becomes:
-//
-//   { "pipelines": { "<userId>": ["<pipelineId>"] },
-//     "folders":   { "<userId>": ["<folderId>"]   },
-//     "master":    ["<userId>"] }
-//
-// 🔴 THE LEGACY SHAPE MUST KEEP WORKING. Every pipeline grant on the account
-// today is stored flat. Reading a flat object as v2 would find no `pipelines`
-// key, hand back empty grants, and silently revoke everyone — the exact failure
-// mode that a users-scope 401 caused two rounds ago. So the reader detects the
-// shape and migrates in memory; the first SAVE writes v2.
-//
-// FOLDERS ARE THEIR OWN SCOPE, deliberately not derived from pipeline access: a
-// compliance folder may belong to case managers who hold no pipeline at all.
-// MASTER is a plain list — it grants a VIEW, not a set of records, and the
-// records it shows are still filtered by the viewer's own pipeline access.
-// ---------------------------------------------------------------------------
 export interface AccessGrantsV2 {
   pipelines: AccessGrants;
   folders: AccessGrants;
   master: string[];
-  /**
-   * 🔴 TASK 1 — CASE MANAGERS. Rep user id → the manager user ids who follow
-   * every case that rep owns. Data, never code: nothing about who is a manager
-   * or a rep belongs in a source file, and no role is inferred from a name.
-   *
-   * ⚠️ IT RIDES THIS VALUE RATHER THAN ITS OWN because `withGrants` reads this
-   * one custom value once per request and hands it to every route through
-   * AsyncLocalStorage. A separate custom value would be a second GET on every
-   * API call in the app, for a map that changes a few times a year — the same
-   * reasoning written at lib/withGrants.ts:28 for folders and master.
-   */
+
   caseManagers: AccessGrants;
-  /**
-   * 🔴 ROUND 161 — WHICH DIVISIONS' REFERRALS A USER SEES, WHEN THE DERIVED
-   * ANSWER IS NOT THE ONE WANTED.
-   *
-   * Derived stays the default and is right for most people: a grant on OLTL
-   * Enrollment should mean OLTL referrals without anyone saying so twice. This
-   * is the per-user override, and it has THREE states:
-   *
-   *   absent               derived — divisions from their client-pipeline grants
-   *   {mode:"divisions"}   an explicit list. `divisions: []` means NO referrals
-   *   {mode:"agency"}      every division, regardless of grants
-   *
-   * 🔴 ABSENT AND `{mode:"divisions", divisions:[]}` ARE DIFFERENT ANSWERS, the
-   * same distinction `getCaseManagers` documents for null vs []. Collapse them
-   * and an admin can never say "this person sees no referrals" — only "this
-   * person is unmanaged", which falls straight back to their pipeline grants.
-   *
-   * ⚠️ A RECORD OF OBJECTS, NOT `AccessGrants`. A sentinel inside a list of
-   * division names — "*" for agency — was the cheaper-looking option and is a
-   * trap: every consumer must remember to check for it, and one that forgets
-   * filters partners by a division literally called "*", which matches nothing.
-   * An agency-wide grant showing zero partners, looking exactly like a working
-   * filter. With a discriminated union, a consumer that forgets `agency` gets a
-   * type error instead of an empty screen.
-   */
+
   referralAccess: Record<string, ReferralAccess>;
-  /**
-   * 🔴 ROUND 197 — WHO MAY WORK THE STAFFING NEEDED QUEUE (the REASSIGN stage).
-   * userId → "self" (take a waiting case for themselves) | "any" (assign it to
-   * anyone). ABSENT = off: the tab is hidden and unowned REASSIGN client cases
-   * are not sent to them. Admins never need an entry.
-   */
+
   staffing: Record<string, StaffingLevel>;
-  /**
-   * 🔴 ROUND 197 — who may use the cross-account transfer (Transfer to ODP /
-   * Miracle Makers). Was admin-only. A listed user may transfer a case they
-   * OWN or an UNOWNED case in a pipeline they hold — never a follower's.
-   */
+
   peerTransfer: string[];
 }
 
-/** ROUND 197 — a user's Staffing needed permission. Absent means off. */
 export type StaffingLevel = "self" | "any";
 
-/** One user's referral-visibility override. See `referralAccess`. */
 export type ReferralAccess =
   | { mode: "agency" }
   | { mode: "divisions"; divisions: string[] };
@@ -3084,26 +2051,12 @@ function asIdMap(v: unknown): AccessGrants {
   const out: AccessGrants = {};
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   for (const [k, ids] of Object.entries(v as Record<string, unknown>)) {
-    if (!Array.isArray(ids)) continue; // ignores the {"test":"ok"} placeholder
+    if (!Array.isArray(ids)) continue;
     out[k] = ids.map(String).filter(Boolean);
   }
   return out;
 }
 
-/** Parse either shape. Returns null only when there is nothing usable at all. */
-/**
- * 🔴 VALIDATES THE UNION, AND KEEPS `divisions: []`.
- *
- * `asIdMap` cannot be reused here: it is built for `Record<string, string[]>`
- * and would drop every entry. The important half is what this does NOT do —
- * it does not discard an empty `divisions`, because that is the state meaning
- * "sees no referrals" and discarding it would silently mean "derived".
- *
- * ⚠️ AN UNRECOGNISED `mode` IS DROPPED, not coerced. A value hand-edited to
- * {mode:"all"} becomes absent — derived — rather than being guessed at as
- * agency, because guessing wider is the one direction that hands out access
- * nobody granted.
- */
 function asReferralAccess(v: unknown): Record<string, ReferralAccess> {
   const out: Record<string, ReferralAccess> = {};
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
@@ -3122,11 +2075,6 @@ function asReferralAccess(v: unknown): Record<string, ReferralAccess> {
   return out;
 }
 
-/**
- * ROUND 197 — the Staffing needed map, validated like the others: only the two
- * known levels survive, anything else (a typo in a hand-edited custom value)
- * is dropped, which reads as OFF — the safe direction.
- */
 export function asStaffing(v: unknown): Record<string, StaffingLevel> {
   const out: Record<string, StaffingLevel> = {};
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
@@ -3145,14 +2093,6 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const o = parsed as Record<string, unknown>;
 
-  // v2 — recognised by ANY of its keys, so a value holding only folders (no
-  // pipelines yet) is still read as v2 rather than mistaken for legacy.
-  //
-  // 🔴 `caseManagers` IS IN THE TEST, NOT JUST THE BODY. Without it, a value
-  // holding ONLY that key falls through to the legacy branch below and is read
-  // as a flat pipeline map — every rep id becoming a grant of the manager ids
-  // as though they were pipelines. Only reachable on a fresh account, which is
-  // exactly the kind of thing that bites once and is never explained.
   if (
     "pipelines" in o || "folders" in o || "master" in o ||
     "caseManagers" in o || "referralAccess" in o ||
@@ -3162,9 +2102,7 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
       pipelines: asIdMap(o.pipelines),
       folders: asIdMap(o.folders),
       master: Array.isArray(o.master) ? o.master.map(String).filter(Boolean) : [],
-      // ⚠️ SAME SHAPE AS THE OTHER TWO MAPS, so `asIdMap` validates it for free:
-      // non-array values are dropped rather than stored as a string that later
-      // code would iterate character by character.
+
       caseManagers: asIdMap(o.caseManagers),
       referralAccess: asReferralAccess(o.referralAccess),
       staffing: asStaffing(o.staffing),
@@ -3174,16 +2112,12 @@ export function parseAccessValue(raw: string): AccessGrantsV2 | null {
     };
   }
 
-  // Legacy flat map -> pipelines. An empty {} is a REAL state (everyone
-  // unmapped) and must not read as "missing", or we would fall back to the env
-  // var and hand back access the admin deliberately removed.
   const flat = asIdMap(o);
   if (Object.keys(flat).length || Object.keys(o).length === 0)
     return { ...emptyV2(), pipelines: flat };
   return null;
 }
 
-/** Full v2 grants, or null when the custom value is missing/unreadable. */
 export async function fetchAccessGrantsV2(): Promise<AccessGrantsV2 | null> {
   try {
     const cv = await findAccessCustomValue();
@@ -3199,14 +2133,11 @@ export async function fetchAccessGrantsV2(): Promise<AccessGrantsV2 | null> {
   }
 }
 
-// Back-compat: the pipeline half only. Every existing caller keeps working.
 export async function fetchPipelineAccessGrants(): Promise<AccessGrants | null> {
   const v2 = await fetchAccessGrantsV2();
   return v2 ? v2.pipelines : null;
 }
 
-// A deliberately-empty saved map ({}) is a real state — everyone unmapped — and
-// must NOT be treated as "missing" or we'd silently fall back to the env var.
 function isEmptyGrantsObject(parsed: unknown): boolean {
   return (
     !!parsed &&
@@ -3216,25 +2147,13 @@ function isEmptyGrantsObject(parsed: unknown): boolean {
   );
 }
 
-// Write the whole map as one JSON value. Creates the custom value if it's absent.
 export async function saveAccessGrantsV2(
   patch: Partial<AccessGrantsV2>,
 ): Promise<{ id: string }> {
   const { locationId } = requireEnv();
-  // MERGE, never replace. The Access tab may save only the folder grid; writing
-  // just that would wipe every pipeline grant on the account.
+
   const current = (await fetchAccessGrantsV2()) ?? emptyV2();
-  // 🔴 EVERY KEY, OR THE ONES LEFT OUT ARE DESTROYED.
-  //
-  // This is a LITERAL, not a spread, and that is deliberate — a spread would
-  // silently carry forward whatever junk a hand-edited custom value contained.
-  // The cost is that a key added to `AccessGrantsV2` and forgotten here is
-  // wiped on the next save of any other key, with a 200 and nothing on screen.
-  // `caseManagers` was that key until this commit: storing the map and then
-  // ticking one box on the Access tab would have erased it.
-  //
-  // ⚠️ IF YOU ADD AN EIGHTH KEY (round 197 added staffing + peerTransfer), ADD IT IN FOUR PLACES — the interface, emptyV2,
-  // the parseAccessValue branch AND here — and extend round135-proof.
+
   const next: AccessGrantsV2 = {
     pipelines: patch.pipelines ?? current.pipelines,
     folders: patch.folders ?? current.folders,
@@ -3268,24 +2187,12 @@ export async function savePipelineAccessGrants(
   return saveAccessGrantsV2({ pipelines: grants });
 }
 
-/**
- * 🔴 THE FIELD-DEF CACHES HAVE NO TTL, exactly like the pipeline cache. A field
- * or section created here is invisible to this process until the lambda
- * recycles unless all three slots are dropped — and an admin who cannot see
- * what they just made will make it again.
- */
 function bustFieldCaches(): void {
   cache.fieldDefs = undefined;
   cache.contactFieldDefs = undefined;
   cache.fieldMap = undefined;
 }
 
-/**
- * Create a custom-field FOLDER (a "section" on the record panel).
- *
- * ⚠️ documentType=folder is what distinguishes this from creating a field on
- * the same endpoint.
- */
 export async function createFieldFolder(args: {
   name: string;
   model?: "opportunity" | "contact";
@@ -3293,27 +2200,7 @@ export async function createFieldFolder(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A section needs a name.", 400);
-  // 🔴 ROUND 119 — THE WRONG API, AND ROUND 90 WROTE THE DISTINCTION DOWN:
-  // "/custom-fields/ and /locations/{id}/customFields are DIFFERENT APIs with
-  // different vocabularies." `/custom-fields/` is the write API and it REFUSES
-  // these objects — "Api does not support objectKey of type contact or
-  // opportunity". THIS FUNCTION was moved to the location endpoint in round
-  // 119, and nothing exercised it until round 118 built an action that calls it.
-  //
-  // 🔴 AN EARLIER VERSION OF THIS COMMENT SAID `createCustomField` HAD BEEN
-  // MOVED IN ROUND 93. IT HAD NOT — it was still posting to `/custom-fields/`
-  // four rounds later, and the sentence here was the reason nobody looked. A
-  // comment asserting that another function is fixed is a claim about code it
-  // cannot see; this one was wrong for four rounds and read as reassurance.
-  // Both are on the location endpoint now.
-  //
-  // ✅ THE LOCATION ENDPOINT IS PROVEN: all four folders created on this
-  // account this week went through it — Referral Partner, Event Attendance,
-  // Event Details, Referral Detail.
-  //
-  // ⚠️ AND THE VOCABULARY IS DIFFERENT TOO, which is the trap round 90 was
-  // warning about: `documentType: "folder"` and `model`, not `objectKey`; and
-  // the id comes back under **customFieldFolder**, not `customField`.
+
   const res = await ghlSend<Record<string, unknown>>(
     "POST",
     `/locations/${encodeURIComponent(locationId)}/customFields`,
@@ -3323,13 +2210,7 @@ export async function createFieldFolder(args: {
       model: args.model === "contact" ? "contact" : "opportunity",
     },
   );
-  // 🔴 READ THE ID FROM WHATEVER SHAPE COMES BACK — and `customFieldFolder` is
-  // the key this endpoint actually uses. This read only
-  // `res.customField.id`, and a folder create does not return `customField` —
-  // so it threw AFTER GoHighLevel had already created the folder, leaving an
-  // orphan section on the account that nothing pointed at and the screen never
-  // mentioned. A create that half-succeeds must not report itself as a clean
-  // failure.
+
   const id = pickCreatedId(res);
   if (!id)
     throw new GhlError(
@@ -3338,12 +2219,11 @@ export async function createFieldFolder(args: {
       `Reply keys: ${Object.keys(res).join(", ") || "(empty)"}`,
     );
   bustFieldCaches();
-  // ⚠️ RECORD THE NAME NOW — this is the only moment we will ever know it.
+
   await rememberFolderName(id, name).catch(() => {});
   return { id, name };
 }
 
-/** Store a folder's name in the config. The only place one can live. */
 export async function rememberFolderName(folderId: string, name: string): Promise<void> {
   if (!folderId || !name.trim()) return;
   const cfg = await getPipelineConfig();
@@ -3353,35 +2233,13 @@ export async function rememberFolderName(folderId: string, name: string): Promis
   });
 }
 
-/**
- * ITEM 4 — MOVE an existing field into a folder.
- *
- * 🔴 THIS IS WHAT KEEPS THE ORPHAN BUCKET FILLING. The screen could create a
- * field INTO a folder but never move one, so a field GoHighLevel dropped into
- * Additional Info could only be fixed in GHL.
- *
- * ⚠️ READ IT BACK. A move that silently does nothing is the same failure class
- * as the folder create that threw while succeeding.
- */
 export async function moveFieldToFolder(
   fieldId: string,
   parentId: string,
 ): Promise<{ ok: boolean; storedParent: string }> {
   const { locationId } = requireEnv();
   if (!fieldId || !parentId) throw new GhlError("A field and a section are required.", 400);
-  // 🔴 ROUND 121 — THE SAME DISEASE AS createFieldFolder, AND IT HALF-RAN LIVE.
-  //
-  //   WRONG  PUT /custom-fields/{id}
-  //          -> "Fields with model opportunity is not supported on this route"
-  //   RIGHT  PUT /locations/{locationId}/customFields/{id}   body { parentId }
-  //
-  // ⚠️ 119 LEFT THIS ALONE ON THE STRENGTH OF "it is proven working on
-  // 10 September". It was not — that was a different call, and the owner has
-  // said so. The lesson is not about that sentence: it is that BOTH halves of
-  // this file's `/custom-fields/` usage were wrong and only one was tested.
-  // Round 90 wrote down that these are different APIs; 93 moved the field
-  // CREATE; 119 moved the folder CREATE; this is the field UPDATE, the last
-  // one on the wrong route.
+
   const res = await ghlSend<Record<string, unknown>>(
     "PUT",
     `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`,
@@ -3392,14 +2250,6 @@ export async function moveFieldToFolder(
   return { ok: !storedParent || storedParent === parentId, storedParent };
 }
 
-/**
- * Pull a created record's id out of a GoHighLevel reply.
- *
- * ⚠️ THE WRAPPER KEY DIFFERS PER ENDPOINT — `customField`, `customFieldFolder`,
- * `field`, `folder`, or the object bare at the top level. Hard-coding one is
- * what made a successful folder create look like a failure, so this checks the
- * shapes rather than assuming.
- */
 function pickCreatedId(res: Record<string, unknown>): string {
   const direct = res.id ?? res._id;
   if (typeof direct === "string" && direct) return direct;
@@ -3413,7 +2263,6 @@ function pickCreatedId(res: Record<string, unknown>): string {
   return "";
 }
 
-/** The same, for the created object itself (to read `parentId` back). */
 function pickCreated(res: Record<string, unknown>): Record<string, unknown> {
   for (const k of ["customField", "customFieldFolder", "field", "folder", "data"]) {
     const w = res[k];
@@ -3422,13 +2271,6 @@ function pickCreated(res: Record<string, unknown>): Record<string, unknown> {
   return res;
 }
 
-/**
- * Create a custom FIELD inside a folder.
- *
- * ⚠️ parentId IS honoured on opportunity field create — earlier rounds in this
- * project assumed it was not. It is read back below and compared, because an
- * assumption is what put that belief in the codebase in the first place.
- */
 export async function createCustomField(args: {
   name: string;
   dataType: string;
@@ -3439,33 +2281,7 @@ export async function createCustomField(args: {
   const { locationId } = requireEnv();
   const name = args.name.trim();
   if (!name) throw new GhlError("A field needs a name.", 400);
-  // 🔴 TWO DIFFERENT APIS, AND THIS FUNCTION WAS ON THE WRONG ONE UNTIL NOW.
-  //
-  // `/custom-fields/` is the Custom Objects write API. It REFUSES a contact or
-  // an opportunity, in so many words:
-  //
-  //     POST /custom-fields/  ->  400
-  //     "Api does not support objectKey of type contact or opportunity"
-  //
-  // ⚠️ AND THE TREE SAID SO, THREE HUNDRED LINES ABOVE, WHILE THIS CALL SAT
-  // HERE. `createCustomFieldFolder`'s round-119 comment quotes that exact error
-  // and states "createCustomField was moved to the location endpoint in round
-  // 93". It was not. The claim and the counter-evidence lived in the same file
-  // for four rounds, and the only caller — the "add field" action on the
-  // Pipelines screen — has never once worked.
-  //
-  // ✅ THE WORKING SHAPE, PROVEN TWICE ON THIS ACCOUNT:
-  //
-  //     POST /locations/{id}/customFields
-  //     { name, dataType, model, parentId, documentType: "field" }
-  //     -> 201
-  //
-  // ⚠️ `documentType: "field"` IS WHAT DISTINGUISHES THIS FROM A FOLDER CREATE.
-  // Same endpoint, same verb; the discriminator is that one key, and omitting
-  // it is how a field create becomes a folder create by accident.
-  //
-  // ⚠️ AND THE VOCABULARY IS `model`, NOT `objectKey`. `fieldKey` belongs to the
-  // other API and is not sent here — GoHighLevel derives its own.
+
   const body: Record<string, unknown> = {
     name,
     dataType: args.dataType,
@@ -3473,13 +2289,7 @@ export async function createCustomField(args: {
     documentType: "field",
   };
   if (args.parentId) body.parentId = args.parentId;
-  // 🔴 UNVERIFIED ON THIS ENDPOINT. The shape proven above created a TEXT field,
-  // which carries no options. Whether this endpoint spells them `options` or
-  // `picklistOptions` on a SINGLE_OPTIONS create has NOT been established, and
-  // a wrong key here is a 200 with an empty picklist — the failure mode this
-  // codebase has met four times. `addFieldOption` writes options through
-  // PUT /locations/{id}/customFields/{id} and IS proven, so a field created
-  // without options can still be filled afterwards. See the report.
+
   if (args.options?.length)
     body.options = args.options.map((o) => String(o).trim()).filter(Boolean);
 
@@ -3502,29 +2312,11 @@ export async function createCustomField(args: {
     id,
     name: String(cf.name ?? name),
     parentId: storedParent,
-    // Reported rather than thrown: the field exists either way, and the admin
-    // needs to know it landed in the wrong section, not lose it.
+
     parentIdHonoured: !args.parentId || storedParent === args.parentId,
   };
 }
 
-/**
- * Create a pipeline WITH its stages, in one call.
- *
- * 🔴 BUSTS THE PIPELINE CACHE. `getPipelines()` is module-cached with NO TTL,
- * so without this the new pipeline does not exist as far as this process is
- * concerned until the lambda recycles: the admin presses Create, nothing
- * appears, they press again, and now there are two.
- *
- * ⚠️ CREATE ONLY. Renaming a stage is safe but DELETING one is not — the
- * opportunities in it have to go somewhere, and report 86 recorded what an id
- * change does: a stage recreated in GHL kept its NAME, changed its ID, and
- * every record in it vanished from the board until this very cache recycled.
- * Stage editing stays in GoHighLevel until that is answered.
- *
- * ⚠️ `stageWinProbability` is left at GHL's default of 50. Nothing in this app
- * reads it, so there is no control for it.
- */
 export async function createPipeline(args: {
   name: string;
   stages: string[];
@@ -3533,8 +2325,7 @@ export async function createPipeline(args: {
   const name = args.name.trim();
   if (!name) throw new GhlError("A pipeline needs a name.", 400);
   const stageNames = args.stages.map((x) => x.trim()).filter(Boolean);
-  // GHL accepted a single-stage pipeline in the probe, but one with none is
-  // unusable — nothing can be created in it.
+
   if (!stageNames.length) throw new GhlError("A pipeline needs at least one stage.", 400);
 
   const res = await ghlSend<{ pipeline?: Pipeline; id?: string }>(
@@ -3543,12 +2334,11 @@ export async function createPipeline(args: {
     {
       locationId,
       name,
-      // Position comes from LIST ORDER, never typed — a typed position is a
-      // second source of truth for the same thing.
+
       stages: stageNames.map((n, i) => ({ name: n, position: i })),
     },
   );
-  cache.pipelines = undefined; // 🔴 see above
+  cache.pipelines = undefined;
   const p = res.pipeline;
   return {
     id: String(p?.id ?? res.id ?? ""),
@@ -3557,18 +2347,6 @@ export async function createPipeline(args: {
   };
 }
 
-/**
- * How many opportunities sit in one pipeline. ONE request.
- *
- * 🔴 THE POINT IS THE TOTAL, NOT THE RECORDS. `limit=1` — GoHighLevel returns
- * the count in `meta.total` and we never page. `searchAll()` above would fetch
- * all 596 in pages of 100 to answer a question one call answers.
- *
- * ⚠️ AND THE FALLBACK IS A REFUSAL, NOT A ZERO. If neither `meta.total` nor
- * `total` comes back, this returns null — "I could not count" — and the caller
- * must not delete. A count that silently degrades to 0 is how a pipeline with
- * records gets deleted by a screen that promised to protect it.
- */
 export async function countOpportunitiesInPipeline(
   pipelineId: string,
 ): Promise<number | null> {
@@ -3584,41 +2362,11 @@ export async function countOpportunitiesInPipeline(
   );
   const total = data.meta?.total ?? data.total;
   if (typeof total === "number" && Number.isFinite(total)) return total;
-  // No total field at all, but a record came back — we know it is NOT empty,
-  // which is all the delete gate needs. Reporting that as "≥1" beats null.
+
   if ((data.opportunities || []).length) return (data.opportunities || []).length;
   return null;
 }
 
-/**
- * Delete a pipeline in GoHighLevel — round 116, item L.
- *
- * ✅ VERIFIED BY THE OWNER AGAINST THE LIVE ACCOUNT:
- *    DELETE /opportunities/pipelines/{id}?locationId=… -> {"success":true}
- *
- * 🔴 NO EMPTINESS CHECK HERE. This is the transport. The gate lives in the
- * route, which counts first and refuses — see the delete-pipeline case. Putting
- * the check in both places would mean two searches per delete and neither
- * caller knowing which one actually protected them.
- */
-/**
- * 🔴 DELETE ONE OPPORTUNITY — round 124, items 3 and 4.
- *
- * ⚠️ THE CASE, NOT THE PERSON. GoHighLevel keeps opportunities and contacts
- * separate, and this touches only the opportunity: the contact keeps its notes,
- * its other cases and its history. Most of what anybody wants to delete is a
- * duplicate CASE, and removing a person because their second card was junk is
- * not recoverable.
- *
- * ⚠️ IDEMPOTENT, ON THE SHAPE ROUND 118 MEASURED. GoHighLevel answers a second
- * delete of the same pipeline with 400 and "… is deleted"; the same family of
- * wording is treated as success here, because telling somebody the delete
- * failed about a record that is gone sends them looking for it.
- *
- * ⚠️ AND THE CACHE IS BUST IN A `finally`, for the reason deletePipeline
- * records: a caller that re-reads to confirm would otherwise be answered from
- * an entry written before the delete.
- */
 export async function deleteOpportunity(oppId: string): Promise<void> {
   const id = String(oppId || "").trim();
   if (!id) throw new GhlError("No opportunity id.", 400);
@@ -3641,30 +2389,15 @@ export async function deletePipeline(pipelineId: string): Promise<void> {
       `/opportunities/pipelines/${encodeURIComponent(id)}?locationId=${encodeURIComponent(locationId)}`,
       {
         what: "the pipeline",
-        // 🔴 "is deleted" IS A SUCCESS — round 118, item 1. GoHighLevel answers
-        // a second delete of the same pipeline with 400 and the words "Pipeline
-        // with id … is deleted". Reading that as a failure told the admin the
-        // action had not worked about a pipeline that was gone.
+
         goneOk: /\bis deleted\b|\bnot found\b|\bdoes ?n[o']?t exist\b/i,
       },
     );
   } finally {
-    // 🔴 IN A `finally`, NOT AFTER THE AWAIT. The route's reconciliation asks
-    // `listPipelines()` whether the pipeline is really gone when this throws —
-    // and that list is memoized, so leaving the bust on the success path would
-    // have answered "still there" from a cache written before the delete. The
-    // one read that has to be fresh is the one that runs after a failure.
+
     cache.pipelines = undefined;
   }
 }
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PIPELINE CONFIGURATION — the stored value, and the ONE-TIME SEED.
-//
-// See lib/pipelineConfig.ts for why this is the sole source of truth rather
-// than a union with the env vars.
-// ═══════════════════════════════════════════════════════════════════════════
 
 async function findPipelineConfigValue(): Promise<{ id: string; value: string } | null> {
   const { locationId } = requireEnv();
@@ -3683,15 +2416,6 @@ async function findPipelineConfigValue(): Promise<{ id: string; value: string } 
   };
 }
 
-/**
- * Write the config, then READ IT BACK AND RE-PARSE IT.
- *
- * ⚠️ The cap probe found no truncation at 100,000 characters, so this is
- * insurance rather than necessity — but the consequence it insures against is
- * total: invalid JSON in this value means parsePipelineConfig returns null,
- * and null is indistinguishable from "never configured" to anything that does
- * not check `seeded`. A save that half-worked must report itself as failed.
- */
 export async function savePipelineConfig(
   next: StoredPipelineConfig,
 ): Promise<StoredPipelineConfig> {
@@ -3710,21 +2434,11 @@ export async function savePipelineConfig(
       value: body,
     });
   }
-  // 🔴 ROUND 119 · ITEM 2 — RETRY THE READ-BACK, NOT THE WRITE.
-  //
-  // The write already happened. A re-read is a GET and is safe to repeat, which
-  // is exactly 117's rule for the 429 applied to a different race: GoHighLevel
-  // had not settled, the read-back returned the PREVIOUS value, and this
-  // reported a truncation that did not happen — about a save that had worked.
-  //
-  // ⚠️ AND THE OLD MESSAGE WAS WORSE THAN NO GUARD. "Treat this save as failed"
-  // reads as "click again", and clicking again writes it twice. Round 90 probed
-  // the cap at 100,000 characters and stored it intact; the whole config is
-  // about 600. Truncation was never a plausible reading of this evidence.
+
   let parsed: StoredPipelineConfig | null = null;
   let lastRaw = "";
   for (let attempt = 1; attempt <= 3; attempt++) {
-    if (attempt > 1) await sleep(attempt * 400); // 400ms, then 800ms
+    if (attempt > 1) await sleep(attempt * 400);
     const after = await findPipelineConfigValue();
     lastRaw = after?.value ?? "";
     parsed = after ? parsePipelineConfig(after.value) : null;
@@ -3737,9 +2451,6 @@ export async function savePipelineConfig(
       502,
     );
 
-  // 🔴 AND NOW IT SAYS WHAT DIFFERS, rather than guessing at a cause. Three
-  // reads disagreeing with the write is a real divergence and the admin needs
-  // to know WHICH pipeline, not a theory about byte limits.
   throw new GhlError(
     "Pipeline configuration was saved, but reading it back three times still shows something different. Check it in GoHighLevel before changing anything else.",
     502,
@@ -3748,21 +2459,6 @@ export async function savePipelineConfig(
   );
 }
 
-/**
- * 🔴 COMPARE WHAT THE VALUE MEANS, NOT ITS BYTES.
- *
- * The old guard was `serialisePipelineConfig(parsed) !== body` — a raw string
- * comparison against what was sent. `parsePipelineConfig` NORMALISES on the way
- * in: it drops an empty `exclude` (round 116), de-duplicates it, trims folder
- * tokens and drops entries with an unreadable scope. Every one of those is the
- * parser doing its job, and every one of them made the strings differ — so a
- * perfectly stored config could be reported as truncated by a normalisation
- * this file performs on purpose.
- *
- * Parsing BOTH sides removes that entire class of false alarm, and leaves the
- * guard doing the one thing it was for: catching a value that came back saying
- * something else.
- */
 function sameConfig(a: StoredPipelineConfig, b: StoredPipelineConfig): boolean {
   const norm = (c: StoredPipelineConfig) => {
     const round = parsePipelineConfig(serialisePipelineConfig(c));
@@ -3772,7 +2468,6 @@ function sameConfig(a: StoredPipelineConfig, b: StoredPipelineConfig): boolean {
   return !!na && na === norm(b);
 }
 
-/** Which pipelines differ, named — for the detail line above. */
 function describeConfigDiff(
   sent: StoredPipelineConfig,
   got: StoredPipelineConfig,
@@ -3791,62 +2486,11 @@ function describeConfigDiff(
   return `Differs on ${diffs.length} pipeline(s): ${diffs.slice(0, 4).join(" · ")}.`;
 }
 
-/**
- * The config, seeding it once from the env vars + the code map if it has never
- * been configured.
- *
- * 🔴 SEEDING IS DRIVEN BY THE `seeded` FLAG, NEVER BY EMPTINESS. If a save
- * failed and left this value empty, "empty means seed" would silently
- * overwrite an admin's configuration with the env defaults and look like it
- * had worked. An UNPARSEABLE value is treated the same as a lost one: it does
- * NOT re-seed, because the flag it would need is the thing that failed to
- * parse.
- */
-/** At most one folderNames backfill write per process — see below. */
 let folderNameBackfillDone = false;
 
-/**
- * 🔴 WHY A NAME MAY BE BACKFILLED WHEN A PIPELINE MAY NOT.
- *
- * The seed is one-time and driven by the `seeded` flag, never by emptiness —
- * round 90's rule, and it is the right one: "no pipelines stored" and "the save
- * that wiped them" look identical from here, so seeding on empty would let one
- * failed write silently restore env defaults over an admin's configuration.
- *
- * ⚠️ THE COST OF THAT RULE IS EXACTLY THIS BUG. This account was seeded BEFORE
- * `folderNames` existed, so the seed had already run and three folders we
- * ourselves created have stood unnamed ever since, with a banner each.
- *
- * ✅ A NAME IS SAFE TO BACKFILL, AND A PIPELINE IS NOT, for a reason that is
- * checkable rather than a matter of taste:
- *
- *   - A pipeline entry CAN be removed deliberately (the Pipelines screen writes
- *     the whole `pipelines` map), so "absent" is a decision that must be obeyed.
- *   - A folder name CANNOT. `rememberFolderName` refuses an empty name and there
- *     is no unname action anywhere — `name-folder` is the only writer. So a name
- *     can be SET or CORRECTED and never cleared, which means "absent" can only
- *     ever mean NEVER SET.
- *
- * Nothing an admin can do is undone by this, and the per-key test is what makes
- * that true: a key already present is left exactly as it is, whatever it says.
- * If an unname action is ever added, this must go — the comment is the contract.
- */
 function backfillFolderNames(
   cfg: StoredPipelineConfig,
-  /**
-   * 🔴 ROUND 129 — THE FOLDER IDS THAT ACTUALLY EXIST ON THIS ACCOUNT.
-   *
-   * ⚠️ WITHOUT THIS, EVERY READ CONTAMINATED EVERY ACCOUNT. `SEED_FOLDER_NAMES`
-   * is Miracle Makers' folder ids, and this ran on every config read on every
-   * deployment — so the second account's stored config was steadily filling up
-   * with names for folders it does not have. That is worse than leaving it
-   * empty: a config full of ids that resolve to nothing LOOKS configured, and
-   * the screen then reports "0 fields" beside a list of the account's real
-   * folders it claims not to know.
-   *
-   * ⚠️ Undefined means "we have not read the fields", and then nothing is
-   * backfilled at all — a name written on a guess is the thing being removed.
-   */
+
   present?: Set<string>,
 ): {
   cfg: StoredPipelineConfig;
@@ -3857,7 +2501,7 @@ function backfillFolderNames(
   );
   if (!added.length) return { cfg, added };
   const folderNames = { ...cfg.folderNames };
-  // ⚠️ ONLY THE ABSENT ONES. A name an admin typed wins over ours, always.
+
   for (const id of added) folderNames[id] = SEED_FOLDER_NAMES[id];
   return { cfg: { ...cfg, folderNames }, added };
 }
@@ -3866,8 +2510,7 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
   const found = await findPipelineConfigValue();
   const parsed = found ? parsePipelineConfig(found.value) : null;
   if (parsed?.seeded) {
-    // ⚠️ THE FIELD DEFS ARE ALREADY CACHED on every path that reaches here —
-    // this read is a map lookup in the warm case, not a request.
+
     let present: Set<string> | undefined;
     try {
       const [oppDefs, contactDefs] = await Promise.all([
@@ -3876,18 +2519,12 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
       ]);
       present = folderIdsPresent([...oppDefs, ...contactDefs]);
     } catch {
-      // 🔴 UNKNOWN IS NOT EMPTY. If the field read fails we do not know which
-      // folders exist, so nothing is backfilled — rather than backfilling
-      // everything, which is what produced the cross-account config.
+
       present = undefined;
     }
     const { cfg, added } = backfillFolderNames(parsed, present);
-    if (!added.length) return parsed; // the normal path: no merge, no write
-    // 🔴 THE MERGED VALUE IS RETURNED EITHER WAY. The persist below is an
-    // optimisation so this stops recurring and so the names are legible in
-    // GoHighLevel's own custom-values screen — it is NOT what makes the screen
-    // correct. A read that fails because its own housekeeping write failed
-    // would be a worse bug than the one being fixed.
+    if (!added.length) return parsed;
+
     if (!folderNameBackfillDone) {
       folderNameBackfillDone = true;
       try {
@@ -3902,7 +2539,7 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
     return cfg;
   }
   if (found && !parsed) {
-    // Present but unreadable. Do not seed over it.
+
     throw new GhlError(
       `The "${PIPELINE_CONFIG_CUSTOM_VALUE_NAME}" custom value exists but is not readable JSON. It is not being overwritten — repair or clear it in GoHighLevel.`,
       502,
@@ -3911,34 +2548,9 @@ export async function getPipelineConfig(): Promise<StoredPipelineConfig> {
   return seedPipelineConfig();
 }
 
-/**
- * THE ONE-TIME SEED. Reads PIPELINE_IDS, CAREGIVER_PIPELINE_IDS and
- * PIPELINE_FOLDERS — the only place any of the three is consulted from now on —
- * and writes them in as folder KEYS.
- */
 export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   const next = emptyPipelineConfig();
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔴 ROUND 129 — THE SEED MUST NOT CROSS ACCOUNTS.
-  //
-  // Every id below — the folder names, the ticked folders, the per-pipeline
-  // folder lists — is Miracle Makers'. Seeding them into a different account's
-  // config is worse than leaving it empty, because it LOOKS configured and
-  // resolves nothing: the second deployment's Contact sections listed eleven
-  // sections at "0 fields" while its six real folders sat under "folders this
-  // dashboard does not know about".
-  //
-  // ⚠️ SO THE SEED IS FILTERED BY WHAT IS ACTUALLY HERE. A folder id survives
-  // only if some field on this account carries it as `parentId`.
-  //   Miracle Makers — every id is present, so the seed is byte-identical.
-  //   Anywhere else  — the folder half seeds EMPTY, and the pipelines' scopes
-  //                    still seed, so the boards work and the sections say
-  //                    they are unconfigured rather than lying.
-  //
-  // ⚠️ AND A FAILED FIELD READ SEEDS NO FOLDERS AT ALL. "We could not check"
-  // must not resolve to "assume they are ours" — that is the behaviour being
-  // removed.
-  // ═══════════════════════════════════════════════════════════════════════
+
   let present = new Set<string>();
   try {
     const [oppDefs, contactDefs] = await Promise.all([
@@ -3953,18 +2565,14 @@ export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   next.folderNames = Object.fromEntries(
     Object.entries(SEED_FOLDER_NAMES).filter(([id]) => mine(id)),
   );
-  // ⚠️ NOT Object.keys(SEED_FOLDER_NAMES) — see SEED_TICKED_ON_CLIENT. Naming a
-  // folder and putting it on every client record are different decisions.
+
   const seededFolderIds = [...SEED_TICKED_ON_CLIENT].filter(mine);
   const add = (ids: string[], scope: StoredScope) => {
     for (const id of ids) {
       const mapped = Object.prototype.hasOwnProperty.call(PIPELINE_FOLDERS, id)
         ? PIPELINE_FOLDERS[id]
-        : [FOLDERS.shared]; // never the all-twelve fall-through, even in the seed
-      // 🔴 FILTERED BEFORE THE KEY CONVERSION, not after. A key like "shared"
-      // is legible and account-neutral to LOOK at, which is exactly why it is
-      // dangerous here: stored as a key it resolves through FOLDERS to Miracle
-      // Makers' id on whatever account reads it.
+        : [FOLDERS.shared];
+
       const folders = mapped.filter(mine).map((fid) => folderKeyById(fid) || fid);
       if (scope === "client") for (const fid of seededFolderIds) folders.push(fid);
       next.pipelines[id] = { scope, folders };
@@ -3976,12 +2584,10 @@ export async function seedPipelineConfig(): Promise<StoredPipelineConfig> {
   return savePipelineConfig(next);
 }
 
-/** The configured ids for a scope, from the stored value alone. */
 export async function configuredIds(scope: StoredScope): Promise<string[]> {
   return idsInScope(await getPipelineConfig(), scope);
 }
 
-// Upsert dedupes by email/phone at GHL; `isNew` distinguishes created vs matched.
 export async function upsertContact(fields: {
   firstName?: string;
   lastName?: string;
@@ -3989,16 +2595,9 @@ export async function upsertContact(fields: {
   email?: string;
   phone?: string;
   source?: string;
-  /**
-   * The contact's owner. Used by "+ Add partner", where the owner IS the
-   * answer to "who holds this relationship" and drives whose queue it lands in.
-   *
-   * ⚠️ NOT SENT BY THE REFERRAL PATH. A referral's opportunity is left for the
-   * pipeline's notification workflow to assign — option (b), settled in round
-   * 101. Owning the partner and working the case are different questions.
-   */
+
   assignedTo?: string;
-  /** ROUND 186 — see createContact. */
+
   companyName?: string;
   customFields?: { id: string; value: unknown }[];
 }): Promise<{ id: string; isNew: boolean }> {
@@ -4024,56 +2623,14 @@ export async function upsertContact(fields: {
   return { id: res.contact?.id || "", isNew: res.new !== false };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 166 — A CONTACT THAT HAS ONLY A NAME.
-//
-// 🔴 THE BUG THIS FIXES SHIPPED IN ROUND 124 AND NEVER WORKED ONCE. "Add an
-// event" makes the VENUE a contact so a partner can host more than one event,
-// and it created that contact through `upsertContact` with a name and nothing
-// else. GoHighLevel refuses:
-//
-//     400  Pass at least one of number, email query parameter
-//
-// ⚠️ AND THIS CODEBASE ALREADY KNEW. Round 133 wrote that exact sentence into
-// `ContactFieldsRead.email`'s doc comment — "GoHighLevel will not create a
-// contact without one of them" — nine rounds after round 124 shipped against
-// it, and nobody swept the finding back over the path that was already live.
-//
-// ✅ THE WAY THROUGH, PROBED LIVE ON 1 OCTOBER:
-//
-//     POST /contacts/  { locationId, name }       -> 422 "Contacts without
-//                        email, phone, firstName and lastName are not allowed."
-//     POST /contacts/  { locationId, firstName }  -> created (twice, same)
-//
-// So `name` is not one of the four fields that count, and `firstName` is. The
-// create endpoint needs ONE of email / phone / firstName / lastName; the UPSERT
-// endpoint is stricter and needs a deduplication key, which is a different
-// requirement and the reason both functions exist below.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** GoHighLevel's refusal when none of the four identifying fields is sent. */
 const CREATE_NEEDS_A_NAME = 422;
 
-/**
- * Create a contact outright. No deduplication — see `ensureContact`.
- *
- * 🔴 THE NAME IS SENT AS `firstName`, ALWAYS, AND IT IS NOT SPLIT. A venue is
- * "Delco Expo Centre" and a partner is "Main Line Health": one string naming
- * one thing. Splitting on the first space would file a lastName of "Expo
- * Centre" and a firstName of "Delco", which is wrong in the data and wrong on
- * every screen that reads it back. Callers with a real person's two names pass
- * them explicitly.
- */
 export async function createContact(fields: {
-  /** The display name. Becomes `firstName` unless `firstName` is given. */
+
   name?: string;
   firstName?: string;
   lastName?: string;
-  /**
-   * ROUND 186 — GoHighLevel's own "Company Name" on the contact. A referral
-   * partner's ORGANISATION goes here, so that naming a contact person in
-   * first/last no longer loses it.
-   */
+
   companyName?: string;
   email?: string;
   phone?: string;
@@ -4089,9 +2646,6 @@ export async function createContact(fields: {
     if (fields[k]) body[k] = fields[k];
   if (fields.customFields?.length) body.customFields = fields.customFields;
 
-  // ⚠️ REFUSED HERE RATHER THAN BY GOHIGHLEVEL. With nothing to put in any of
-  // the four fields the 422 is certain, and a local refusal names the thing
-  // that is missing instead of quoting an endpoint nobody called.
   if (!first && !fields.lastName && !fields.email && !fields.phone)
     throw new GhlError(
       "A contact needs a name, a phone number or an email address.",
@@ -4108,10 +2662,7 @@ export async function createContact(fields: {
     );
     return { id: String(res.contact?.id || res.id || "") };
   } catch (e) {
-    // 🔴 THE 422 IS TRANSLATED, NOT PASSED THROUGH. What reached the screen
-    // before this round was GoHighLevel's own wording about a "query
-    // parameter", on a dialog that has no such thing — unreadable to the
-    // person who hit it and unsearchable in this repo.
+
     if (e instanceof GhlError && e.status === CREATE_NEEDS_A_NAME)
       throw new GhlError(
         "GoHighLevel would not create that contact.",
@@ -4125,76 +2676,24 @@ export async function createContact(fields: {
 
 export interface EnsureContactResult {
   id: string;
-  /**
-   * How the id was obtained. Carried out to the route so a response can say
-   * what happened rather than only that it worked.
-   */
+
   how: "upserted" | "reused" | "created";
 }
 
-/**
- * Get a contact id for `name`, whatever identifying fields are available.
- *
- * 🔴 ONE DECISION, ONE PLACE. Three call sites needed this and each had its own
- * half of it — which is how the venue path ended up calling the one endpoint
- * that cannot serve it. The rule:
- *
- *   a phone or an email  -> UPSERT. GoHighLevel deduplicates on that key, which
- *                           is the whole reason to prefer it: the same person
- *                           added twice is one contact.
- *   neither              -> SEARCH by name, reuse an EXACT match, else CREATE
- *                           — but ONLY where the name identifies the thing.
- *                           See `nameIdentifies`: a person's name does not.
- *
- * ⚠️ THE SEARCH IS A WEAKER DEDUPLICATION THAN THE UPSERT, AND KNOWINGLY SO.
- * `/contacts/search` is an index and it lags a few seconds behind a create, so
- * two name-only adds in quick succession can both miss and both create. That is
- * accepted rather than papered over: the alternative is refusing the second add
- * on a read we already know can be stale, and round 156 settled that a stale
- * read may confirm but must never condemn.
- *
- * ⚠️ MATCHED ON THE EXACT NAME, NOT ON THE SEARCH RANKING. `/contacts/search`
- * is a candidate generator — it matches substrings — so "Riddle" would return
- * "Riddle Hospital" and reusing the top hit would attach a new venue to an
- * existing one.
- */
 export async function ensureContact(fields: {
   name: string;
   firstName?: string;
   lastName?: string;
-  /** ROUND 186 — see createContact. */
+
   companyName?: string;
   email?: string;
   phone?: string;
   source?: string;
   assignedTo?: string;
   customFields?: { id: string; value: unknown }[];
-  /**
-   * 🔴 DOES THE NAME IDENTIFY THE THING? REQUIRED, WITH NO DEFAULT, BECAUSE
-   * BOTH ANSWERS ARE RIGHT SOMEWHERE AND THE WRONG ONE MERGES TWO PEOPLE.
-   *
-   *   true   a VENUE or a PARTNER ORGANISATION. "Delco Expo Centre" is one
-   *          place and "Main Line Health" is one company, so an exact name
-   *          match IS the same thing — without reuse a venue accumulates one
-   *          contact per event.
-   *
-   *   false  a PERSON. Two people called Nina, met at two different events,
-   *          are two different people — and a first-name match would file the
-   *          second one's outcome onto the first one's record. With no phone
-   *          and no email nothing identifies them, so a new contact is created
-   *          every time and the duplicate stays VISIBLE rather than being
-   *          silently merged into a stranger.
-   *
-   * ⚠️ NO DEFAULT ON PURPOSE. Defaulting to `true` would hand the dangerous
-   * answer to any new caller who says nothing; defaulting to `false` would
-   * quietly bring back the duplicate venues. The compiler asks instead.
-   */
+
   nameIdentifies: boolean;
-  /**
-   * Contacts that must never be reused, by id. The venue path passes every
-   * partner: venue names and partner names overlap constantly, and attaching
-   * an event to the PARTNER's contact is the bug round 124 existed to remove.
-   */
+
   excludeIds?: readonly string[];
 }): Promise<EnsureContactResult> {
   const { excludeIds, nameIdentifies, ...rest } = fields;
@@ -4218,23 +2717,9 @@ export async function ensureContact(fields: {
   return { id: made.id, how: "created" };
 }
 
-/** Name comparison for reuse: case, spacing and punctuation insensitive. */
 const normName = (s: string): string =>
   (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// ---------------------------------------------------------------------------
-// ITEM 4 — the hybrid picker's write half.
-//
-// Fields like Onboarding Rep / Case Manager / Sales Rep Assistant / HR-Assigned
-// Team are SINGLE_OPTIONS (or MULTIPLE_OPTIONS) holding a plain string. Most of
-// the people who belong in them ARE GHL users, so the picker lists those
-// automatically. But some — subcontractors, staff without a login — are not, and
-// those names have to live in the field's own picklist.
-//
-// Appending is ADMIN ONLY and gated in the route. This function does the write:
-// read the current options, append, PUT the whole list back (GHL replaces the
-// array, so it must be sent complete or existing options are destroyed).
-// ---------------------------------------------------------------------------
 export async function addFieldOption(
   fieldId: string,
   option: string,
@@ -4246,10 +2731,7 @@ export async function addFieldOption(
   let defs = await getFieldDefinitions();
   let def = defs.find((d) => d.id === fieldId);
   if (!def) {
-    // The definitions are cached per warm lambda, so a field created (or an id
-    // changed) after this instance warmed up would look like it doesn't exist.
-    // Drop the cache and look once more before saying so — a wrong 404 here
-    // reads exactly like a missing route and sends you hunting in the wrong place.
+
     cache.fieldDefs = undefined;
     defs = await getFieldDefinitions();
     def = defs.find((d) => d.id === fieldId);
@@ -4270,48 +2752,16 @@ export async function addFieldOption(
     );
 
   const current = optionStrings(def);
-  // Case-insensitive: "jhune" and "Jhune" must not both end up in the list.
+
   if (current.some((o) => o.trim().toLowerCase() === value.toLowerCase()))
     return current;
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔴 GOHIGHLEVEL NORMALISES EN-DASHES. PROVEN, AND IT IS SILENT.
-  //
-  //   sent   : "100 – Uploaded into HHA"   (U+2013 EN DASH)
-  //   stored : "100 - Uploaded into HHA"   (U+002D HYPHEN-MINUS)
-  //
-  // No error, no warning, no hint in the response. The value simply comes back
-  // different from the one you wrote.
-  //
-  // WHY THIS MATTERS FOR THE WORKFLOW REBUILD:
-  // The old account's compliance picklists mixed en-dashes and hyphens. Those
-  // values CANNOT be reproduced on this account — anything with an en-dash is
-  // silently converted. So ANY workflow condition copied across from the old
-  // account that matches on an en-dash WILL NEVER FIRE. It will not error; the
-  // workflow will just sit there doing nothing, which is the worst failure
-  // shape to debug. Rewrite such conditions against plain hyphens.
-  //
-  // ⚠️ THE SEPARATOR DISTINCTION IS DELIBERATE AND DOES SURVIVE — it is a
-  // hyphen-vs-nothing difference, not a dash-type difference, so GHL leaves it
-  // alone. Do not "tidy" these into one shape:
-  //
-  //   CG - HHA App Status / DocuSign Status / E-Verify Status / Medi Check
-  //       -> "100 - Uploaded into HHA"     (number, space, HYPHEN, space, text)
-  //   CG - Patch Check / LEIE Status / FBI Check / Child Line Status
-  //       -> "100 Uploaded into HHA"       (number, space, text — NO separator)
-  //
-  // This function does NOT transliterate on the way out: the value is sent as
-  // typed, and GHL decides. Normalising here would hide the behaviour rather
-  // than record it, and the option list would then disagree with what an admin
-  // typed for a different reason.
-  // ═══════════════════════════════════════════════════════════════════════
   const options = [...current, value];
   const path = `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`;
   try {
     await ghlSend("PUT", path, { name: def.name, options });
   } catch (e) {
-    // Name the exact upstream call. A 404 from GHL and a 404 from Next look
-    // identical in the browser otherwise, and they need opposite fixes.
+
     // eslint-disable-next-line no-console
     console.error(
       `[fields] PUT ${path} failed while adding "${value}" to "${def.name}" (${def.dataType}, ${current.length} existing options):`,
@@ -4325,32 +2775,17 @@ export async function addFieldOption(
       );
     throw e;
   }
-  // The definitions cache now holds a stale option list; drop it so the next
-  // read sees the new name rather than the panel showing an option that isn't
-  // in its own dropdown.
+
   cache.fieldDefs = undefined;
   return options;
 }
 
-// Generic contact typeahead, for the Add Client duplicate check. Same endpoint
-// and body shape as searchCaregiverContacts (proven live), minus the Record Type
-// filter — here we WANT every match, because the point is to notice that the
-// person already exists before creating them a second time.
 export interface ContactHit {
   id: string;
   name: string;
   email: string;
   phone: string;
-  /**
-   * 🔴 ROUND 171 — THE CUSTOM FIELDS THE SEARCH CARRIED, AND A FLAG SAYING
-   * WHETHER IT CARRIED ANY.
-   *
-   * ⚠️ AN EMPTY MAP AND AN ABSENT ONE ARE DIFFERENT ANSWERS, and conflating
-   * them is how "no Record Type" gets printed next to somebody who has one.
-   * `fieldsKnown` is false when the response carried no custom fields at all,
-   * and the caller must then say "not shown" rather than "none" — a screen
-   * that states an absence it did not observe is making it up.
-   */
+
   fields: Record<string, string>;
   fieldsKnown: boolean;
 }
@@ -4371,107 +2806,47 @@ export async function searchContacts(query: string): Promise<ContactHit[]> {
       email: String(c.email ?? ""),
       phone: String(c.phone ?? ""),
       fields: cf || {},
-      // ⚠️ NO EXTRA REQUEST, EVER. This reads what the one search already
-      // returned. Hydrating ten hits per keystroke would be ten per-contact
-      // reads against a 100-per-10-second budget.
+
       fieldsKnown: cf != null && Object.keys(cf).length > 0,
     };
   });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🔴 LIST CONTACTS BY A CUSTOM FIELD VALUE — THE ONE CALL IN THE REFERRAL
-// FEATURE THAT COULD NOT BE VERIFIED AGAINST A LIVE ACCOUNT.
-//
-// Every other GoHighLevel call this feature makes already runs in production
-// somewhere in this app. This one does not: nothing here has ever asked
-// /contacts/search to FILTER on a custom field, only to match free text
-// (`searchContacts`, `searchCaregiverContacts` — both proven live). There is no
-// credential in the build environment, so the filter body below is written from
-// the documented shape and is UNPROVEN.
-//
-// ⚠️ SO IT IS BUILT TO FAIL LOUDLY, IN BOTH DIRECTIONS:
-//
-//   1. GoHighLevel REJECTS the filter  → the error says which request was sent,
-//      verbatim, so the shape can be corrected in one round.
-//   2. GoHighLevel IGNORES the filter  → far more dangerous, because the reply
-//      is a 200 carrying EVERY contact in the account. Each row is therefore
-//      re-checked in code, and a page of contacts that carries custom fields
-//      but none matching is treated as a FAILURE, not as "no partners".
-//
-// Returning [] for either case would have shown an empty, believable dashboard.
-// ═══════════════════════════════════════════════════════════════════════════
-
 export interface ContactByField {
   id: string;
   name: string;
-  /**
-   * ROUND 186 — the contact's Company Name ("" when none). A referral
-   * partner's organisation lives here when a contact person was named too.
-   * Optional: only the custom-field search fills it.
-   */
+
   company?: string;
   email: string;
   phone: string;
   assignedTo: string;
-  /** Custom field values by field id. */
+
   fields: Record<string, string>;
-  /**
-   * 🔴 GHL's `dateUpdated` — CONTACTS DO NOT HAVE `updatedAt` AT ALL.
-   * Round 94 recorded that (see getContactCustomFields), so `dateUpdated` is
-   * read first here and `updatedAt` only as a tolerated fallback. "" when the
-   * search sends neither, which the caller must treat as "cannot check".
-   */
+
   version: string;
 }
 
 export interface ContactSearchResult {
   rows: ContactByField[];
-  /** GoHighLevel's own count for the filter. -1 when it returns none. */
+
   total: number;
-  /** The page cap stopped us before the end. STATED in the UI, never silent. */
+
   truncated: boolean;
-  /** Extra per-contact GETs spent because search returned no field values. */
+
   hydrated: number;
-  /** Contacts whose fields could not be read at all. Stated, never dropped. */
+
   unreadable: number;
 }
 
 const CF_PAGE = 100;
 const CF_MAX_PAGES = 10;
-/** Per-contact hydrate ceiling. 100 requests per 10 seconds is the budget. */
-// ⚠️ 150, NOT 250. At the paced rate 250 reads take ~37s of a 60s budget before
-// anything else runs. Rows past the cap set `truncated`, which the screen states
-// rather than silently showing a short list.
+
 const CF_HYDRATE_CAP = 150;
-/**
- * 🔴 PACED, LIKE THE TOUCH LOOP — AND IT WAS NOT.
- *
- * This loop was `mapLimit(targets, 5, …)` with no pause while the touch loop in
- * /api/referrals chunks and sleeps for exactly the same budget. Same feature,
- * same round, one reasoned about and one left firing flat out.
- *
- * ⚠️ ROUND 89's ARITHMETIC APPLIES: a loop at concurrency C and latency L issues
- * `C × 10000/L` requests per 10 seconds. At C=5 and a 100ms round trip that is
- * 500 per 10s against a ceiling of 100.
- *
- * ✅ MEASURED, NOT ESTIMATED — scripts/hydrate-rate-proof.mjs, 250 reads at
- * 100ms latency, peak inside any sliding 10-second window:
- *
- *     BEFORE  concurrency 5, no pause     250 req/10s   🔴 2.5× the ceiling
- *     1100ms pause, 12 × conc 4            92 req/10s   ✅ but only 8 spare
- *     AFTER   1500ms pause, 12 × conc 4    72 req/10s   ✅ 28 spare
- *
- * 🔴 THE FIRST FIX MEASURED AT 92 AND I HAD WRITTEN "~86, leaving headroom".
- * Eight requests per 10 seconds is not headroom — the opportunity sweep and the
- * touch loop share this ceiling. The pause is 1500ms because 1100ms did not
- * survive its own measurement.
- */
+
 const CF_CHUNK = 12;
 const CF_CONCURRENCY = 4;
 const CF_PAUSE_MS = 1500;
 
-/** A contact's custom fields as a map, or null when the row carried none. */
 function contactCfMap(c: RawContact): Record<string, string> | null {
   const raw = (c as Record<string, unknown>).customFields;
   if (!Array.isArray(raw)) return null;
@@ -4479,15 +2854,13 @@ function contactCfMap(c: RawContact): Record<string, string> | null {
   for (const f of raw as Record<string, unknown>[]) {
     const id = String(f.id ?? f.customFieldId ?? "");
     if (!id) continue;
-    // ✅ `value` FIRST — what a CONTACT returns (verified live, see
-    // getContactCustomFields). A multi-select arrives as an array.
+
     const v = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
     out[id] = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
   }
   return out;
 }
 
-/** Does this stored value carry `want`? Tolerates a multi-select's list. */
 function cfHasValue(stored: string | undefined, want: string): boolean {
   const s = (stored ?? "").trim().toLowerCase();
   const w = want.trim().toLowerCase();
@@ -4515,7 +2888,7 @@ export async function ghlSearchContacts(
     locationId,
     pageLimit: CF_PAGE,
     filters,
-    // searchAfter paging is only meaningful over a deterministic order.
+
     sort: [{ field: "dateAdded", direction: "desc" }],
   };
 
@@ -4545,11 +2918,11 @@ export async function ghlSearchContacts(
     const batch = data.contacts || [];
     if (typeof data.total === "number") total = data.total;
     raw.push(...batch);
-    if (batch.length < CF_PAGE) break; // last page
+    if (batch.length < CF_PAGE) break;
     const last = batch[batch.length - 1] as Record<string, unknown>;
     const after = last.searchAfter;
     if (!Array.isArray(after) || !after.length) {
-      // A full page and no cursor: there may be more and we cannot ask for it.
+
       truncated = total < 0 || total > raw.length;
       break;
     }
@@ -4583,15 +2956,10 @@ export async function ghlSearchContacts(
   let unreadable = 0;
 
   if (!mapped.some((m) => m.carried)) {
-    // Search returned contacts but no field values on ANY of them, so the
-    // filter cannot be confirmed and the partner's category, tier and division
-    // are all missing. Fall back to the PROVEN per-contact read — capped,
-    // because this is one request each and the budget is 100 per 10 seconds.
+
     const targets = rows.slice(0, CF_HYDRATE_CAP);
     if (rows.length > CF_HYDRATE_CAP) truncated = true;
-    // ⚠️ CHUNKED AND PAUSED. See CF_CHUNK above — an unpaced wave here is a 429
-    // on the ONE path where a 429 is hardest to diagnose, because this branch
-    // only runs when GoHighLevel's search has already returned no field values.
+
     const got: Settled<ContactFieldsRead>[] = [];
     for (let i = 0; i < targets.length; i += CF_CHUNK) {
       const slice = targets.slice(i, i + CF_CHUNK);
@@ -4606,13 +2974,13 @@ export async function ghlSearchContacts(
     for (let i = 0; i < targets.length; i++) {
       const s = got[i];
       if (!s || !s.ok) {
-        unreadable++; // ⚠️ counted and reported, never silently dropped
+        unreadable++;
         continue;
       }
       const fields: Record<string, string> = {};
       for (const [k, v] of Object.entries(s.value.values))
         fields[k] = Array.isArray(v) ? v.map(String).join(", ") : String(v ?? "");
-      // The hydrate read carries a version even when the search did not.
+
       out.push({ ...targets[i], fields, version: s.value.version || targets[i].version });
     }
     rows = out;
@@ -4631,53 +2999,15 @@ export async function ghlSearchContacts(
   return { rows: kept, total: total < 0 ? kept.length : total, truncated, hydrated, unreadable };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 171 · ITEM 2 — EVERYONE WHOSE `Event Attended` IS SET, WHATEVER THEY
-// ARE LABELLED.
-//
-// 🔴 THE QUESTION IS "IS THIS FIELD SET", AND THIS CODEBASE HAS NEVER ASKED
-// GOHIGHLEVEL ANYTHING BUT `eq`. lib/ghl.ts:4341 is the only filter shape ever
-// sent, and its own comment calls it "the one call in the referral dashboard
-// that could not be tested against a live account before shipping". Writing
-// `exists` and asserting it works would be rule 7 for the fourth time.
-//
-// ✅ SO IT IS TRIED AND MEASURED, NOT ASSUMED. The first call IS the probe —
-// it costs nothing extra. Three outcomes, and only one of them is "supported":
-//
-//   refused            GoHighLevel rejects the operator  -> unsupported
-//   applied            every row carries a value         -> supported
-//   silently ignored   rows come back without it         -> unsupported
-//
-// 🔴 THE THIRD IS THE ONE THAT MATTERS, and it is the failure `ghlSearchContacts`
-// already knows about: a filter GoHighLevel ignores returns EVERY contact in
-// the account with a 200. Treating that as the attendee list would put the
-// whole address book in People met. An outcome assertion cannot tell the two
-// apart — only reading the rows can.
-//
-// ⚠️ THE VERDICT IS MEMOISED PER PROCESS, not per call. One probe per warm
-// instance; a tenant does not gain or lose an operator between requests.
-// ═══════════════════════════════════════════════════════════════════════════
-
 export interface FieldSetSearch {
   rows: ContactByField[];
-  /**
-   * How the answer was obtained.
-   *
-   *   "exists"       rows came back AND every one carries the field. Trusted.
-   *   "empty"        no refusal and no rows. 🔴 NOT PROOF OF AN EMPTY ACCOUNT:
-   *                  an operator GoHighLevel does not understand could return
-   *                  nothing just as easily as everything, and the two are the
-   *                  same shape here. The caller must still run its fallback.
-   *   "unsupported"  refused, or applied to nothing it returned. Useless.
-   */
+
   via: "exists" | "empty" | "unsupported";
   truncated: boolean;
 }
 
-/** null = not probed yet. Reset only by a process restart. */
 let existsOperatorWorks: boolean | null = null;
 
-/** Visible to proofs and to the second fixture shape; never called in prod. */
 export function resetExistsProbe(): void {
   existsOperatorWorks = null;
 }
@@ -4708,9 +3038,7 @@ export async function ghlSearchContactsWhereSet(
         searchAfter ? { ...sent, searchAfter } : sent,
       );
     } catch (e) {
-      // ⚠️ REFUSED IS AN ANSWER, NOT A FAILURE. Anything in the 4xx range is
-      // "this tenant will not take that operator"; a 5xx is a wobble and must
-      // NOT be remembered as a permanent verdict.
+
       const status = e instanceof GhlError ? e.status : 0;
       if (status >= 400 && status < 500) existsOperatorWorks = false;
       return { rows: [], via: "unsupported", truncated: false };
@@ -4741,10 +3069,6 @@ export async function ghlSearchContactsWhereSet(
     };
   });
 
-  // 🔴 THE CONTROL. A filter that was ignored returns rows without the field.
-  // An EMPTY result is not evidence either way — nobody may have the field set
-  // — so it is accepted without setting the verdict, and the caller's union
-  // still runs. Only a non-empty result proves the operator one way or other.
   if (!rows.length) return { rows: [], via: "empty", truncated: false };
   const applied = rows.every((r) => String(r.fields[fieldId] ?? "").trim() !== "");
   if (!applied) {
@@ -4755,24 +3079,6 @@ export async function ghlSearchContactsWhereSet(
   return { rows, via: "exists", truncated };
 }
 
-/**
- * The fallback for `ghlSearchContactsWhereSet`: ask `eq` once per known value.
- *
- * 🔴 IT GROWS WITH EVENTS, NOT WITH CONTACTS, AND THAT IS THE WHOLE POINT. The
- * owner's constraint on this round is "no per-contact reads; the Referrals
- * load's request count must not grow with the number of contacts". A sweep of
- * the address book would — this does not. Twelve events cost twelve searches
- * whether the account holds 300 contacts or 30,000.
- *
- * ⚠️ AND IT CANNOT FIND A DANGLING ATTENDEE, BY CONSTRUCTION. It only asks
- * about events it was handed, so somebody pointing at a DELETED event is
- * invisible to it. That is why the caller unions this with the Record Type
- * search rather than replacing it — round 167 settled that people at a deleted
- * event keep counting, and this path alone would undo that.
- *
- * ⚠️ CHUNKED AND PACED, like every other fan-out here. 100 requests per 10
- * seconds, and round 152 produced 13,851 timeouts by ignoring it.
- */
 export async function ghlSearchContactsAnyOf(
   fieldId: string,
   values: readonly string[],
@@ -4789,8 +3095,7 @@ export async function ghlSearchContactsAnyOf(
       ghlSearchContacts(fieldId, v),
     );
     for (const s of got) {
-      // ⚠️ ONE EVENT FAILING COSTS ITS OWN PEOPLE AND NOBODY ELSE'S. Same
-      // posture as the board's per-pipeline settle.
+
       if (!s.ok) continue;
       for (const r of s.value.rows) byId.set(r.id, r);
     }
@@ -4800,30 +3105,14 @@ export async function ghlSearchContactsAnyOf(
   return { rows: [...byId.values()], truncated, asked: targets.length };
 }
 
-/** Events asked about one at a time before the list is called truncated. */
 const EVENT_FANOUT_CAP = 40;
 
-// ---------------------------------------------------------------------------
-// ITEM 5 — DOES THIS PERSON ALREADY EXIST?
-//
-// 🔴 This exists because the import route used to DECIDE AFTER IT HAD ALREADY
-// WRITTEN. `upsertContact` ran with the mapped custom fields, and only then was
-// its `isNew` flag read to decide whether to "skip" the row. A skipped
-// duplicate had already had its fields overwritten — silently, on records the
-// importer believed it had left alone. Decide first, write second.
-//
-// ⚠️ SEARCH IS A CANDIDATE GENERATOR, NOT THE ANSWER. /contacts/search takes a
-// free-text query and will happily return near matches; treating a hit as
-// proof of identity would merge two different people. The returned rows are
-// re-checked in code against the exact email (case-insensitive) or the last ten
-// digits of the phone, and only an exact match counts.
-// ---------------------------------------------------------------------------
 export interface ContactMatch {
   id: string;
   name: string;
   email: string;
   phone: string;
-  /** Which field actually matched — shown to the person choosing what to do. */
+
   matchedOn: "email" | "phone";
 }
 
@@ -4834,8 +3123,7 @@ export async function findContactByEmailOrPhone(args: {
   const { locationId } = requireEnv();
   const wantEmail = emailKey(args.email);
   const wantPhone = phoneKey(args.phone);
-  // Email first: it is the stronger identifier and the one an Indeed export
-  // always carries. Phone is the fallback for a row that has no email.
+
   const queries: { q: string; on: "email" | "phone" }[] = [];
   if (wantEmail) queries.push({ q: wantEmail, on: "email" });
   if (wantPhone) queries.push({ q: wantPhone, on: "phone" });
@@ -4851,9 +3139,7 @@ export async function findContactByEmailOrPhone(args: {
       );
       rows = data.contacts || [];
     } catch {
-      // A failed lookup must not be read as "no duplicate" — that would create
-      // a second record for someone who exists. Rethrow so the row reports an
-      // error instead of quietly doing the wrong thing.
+
       throw new GhlError(
         "Could not check for an existing contact.",
         502,
@@ -4875,30 +3161,12 @@ export async function findContactByEmailOrPhone(args: {
   return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 173 · ITEM 1 — THE INSTANT DUPLICATE LOOKUP.
-//
-// 🔴 WHY `findContactByEmailOrPhone` IS NOT ENOUGH, PROVED LIVE ON v172. It
-// asks `/contacts/search`, which is an INDEX and lags a new contact by up to a
-// minute. `/contacts/upsert` matches on phone INSTANTLY. So between a create
-// and the index catching up there is a window where the check sees nobody and
-// the write overwrites somebody — observed at 7 seconds, absent at 12.
-//
-// ⚠️ THIS ENDPOINT IS UNPROVEN ON THIS ACCOUNT. It is GoHighLevel's documented
-// duplicate lookup and it is the obvious candidate for an instant answer, but
-// no call in this repo has ever used it. Rule 7's shape: the probe
-// (scripts/duplicate-refusal-probe.mjs) answers whether it sees a contact
-// created one second earlier. Until it does, this is a BEST EFFORT in a chain
-// whose first link needs no endpoint at all — the create's own refusal.
-// ═══════════════════════════════════════════════════════════════════════════
 export async function lookupDuplicateContact(args: {
   phone?: string;
   email?: string;
 }): Promise<{ id: string; name: string } | null> {
   const { locationId } = requireEnv();
-  // ⚠️ `e164` RETURNS AN OBJECT, NOT A STRING — and the compiler said so. The
-  // normalised form is what GoHighLevel stores; the typed value is the fallback
-  // when it could not be normalised.
+
   const phone = e164(args.phone || "").value || (args.phone || "").trim();
   const email = (args.email || "").trim();
   if (!phone && !email) return null;
@@ -4914,10 +3182,7 @@ export async function lookupDuplicateContact(args: {
     if (!id) return null;
     return { id, name: contactDisplay(c as RawContact) };
   } catch {
-    // ⚠️ A 404 HERE MEANS "no duplicate" ON SOME TENANTS AND "no such route" ON
-    // OTHERS, AND THE TWO ARE THE SAME SHAPE. Neither is an error worth
-    // failing a write over, and neither is proof of absence — which is why the
-    // caller never treats null from this as "nobody has that number".
+
     return null;
   }
 }
@@ -4929,17 +3194,8 @@ export async function createOpportunity(o: {
   name: string;
   source?: string;
   status?: string;
-  assignedTo?: string; // Add Client — the owner, forced server-side for reps
-  /**
-   * The opportunity's value. On this account it is a MONTHLY RECURRING figure,
-   * which is why every number derived from it is labelled `/mo`.
-   *
-   * 🔴 THIS PARAMETER DID NOT EXIST, AND TYPESCRIPT COULD NOT SAY SO. "Log a
-   * referral" passed it as `...(monthly > 0 ? { monetaryValue: monthly } : {})`,
-   * and a SPREAD bypasses excess-property checking — so the call compiled
-   * cleanly and the rep's estimated value would have been dropped on the floor
-   * with nothing on screen to show it. A green build proves compilation.
-   */
+  assignedTo?: string;
+
   monetaryValue?: number;
   customFields?: { id: string; value: unknown }[];
 }): Promise<string> {
@@ -4965,71 +3221,19 @@ export async function createOpportunity(o: {
   return res.opportunity?.id || res.id || "";
 }
 
-// ---------------------------------------------------------------------------
-// The Move action (Task 6).
-//
-// One control; the system classifies. Two paths:
-//
-//   owner UNCHANGED -> simple move: change pipelineId + stage. Nothing else.
-//   owner CHANGED   -> transfer. ORDERING IS DELIBERATE:
-//     0. PREFLIGHT (no writes): destination pipeline resolves, it HAS a
-//        "TRANSFERRED IN" stage, and the new owner is a real location user.
-//     1. PUT #1 — assignedTo + Transferred From/Date (+ Transfer Reason) in ONE
-//        atomic write. The owner change is the step that can fail for permission
-//        reasons, so it goes FIRST: if it fails, NOTHING has been written and the
-//        record is untouched. (Stamping first would leave a record marked
-//        "transferred" while still owned by the old rep.)
-//     2. Clear followers — all except the new owner (G1: a transferred lead must
-//        leave the old division entirely).
-//     3. Note with the reason — written AFTER the owner actually moved, so a note
-//        can never claim a transfer that did not happen.
-//     4. PUT #2 — pipelineId + stage = TRANSFERRED IN. MUST come after the owner
-//        change: GHL blocks revoking pipeline access from a user who still owns
-//        opportunities in that pipeline.
-//
-// A CONTACT TAG is written on the transfer path: `transferred-to-<division>`.
-// This reverses an earlier decision recorded here, and the reason for that
-// decision still stands — tags are contact-scoped, so on a contact with several
-// opportunities the tag cannot say which record moved. It is written anyway
-// because its job is different: it is the handle GHL-side smart lists and
-// workflows use to FIND these people. The opportunity-scoped Transferred From /
-// Transferred Date / note remain the per-record history.
-//
-// There are no transactions — on a step failure we STOP and report exactly which
-// steps completed, rather than silently half-moving.
-// ---------------------------------------------------------------------------
-
 export interface MoveResult {
-  transferred: boolean; // false = simple move
-  steps: string[]; // completed steps, in order
-  failedStep?: string; // set when we stopped early
+  transferred: boolean;
+  steps: string[];
+  failedStep?: string;
   error?: string;
-  stranded?: boolean; // owner moved but the record never left the source pipeline
-  attemptedFollowerRemovals?: string[]; // ids we asked GHL to clear (on failure)
-  // ITEM 5b — the followers THIS reassign added, so 5c can remove exactly those
-  // and leave anyone who was already following the record alone.
+  stranded?: boolean;
+  attemptedFollowerRemovals?: string[];
+
   addedFollowers?: string[];
 }
 
-// ITEM 5 — resolved BY NAME on each pipeline, exactly as TRANSFERRED IN is.
-// The stage ids exist on all five pipelines but are deliberately not hardcoded.
 export const REASSIGN_STAGE_NAME = "REASSIGN";
 
-// ITEM 5c — the durable record of WHICH followers this dashboard added during a
-// reassign, so the claim can remove exactly those.
-//
-// A CUSTOM FIELD, not the move note. A note is editable and deletable by its
-// author, so a rep tidying their own wording could silently destroy the list —
-// and a claim reading a destroyed list would strip a follower who was there
-// first, which is the single failure this whole mechanism exists to prevent.
-// Nothing else writes to this field: it is hidden from the panel and on the
-// read-only blocklist, so even a direct API call can't corrupt it through us.
-/**
- * 🔴 ROUND 198 — "a lead left New Leads, and went HERE". One line in the case's
- * own "Sorted From New Leads" field (format in lib/sorting.ts). BEST-EFFORT:
- * the sort itself is already written when this runs, so a missing field or a
- * failed write is logged and never reported as a failed sort.
- */
 export async function stampSortedFromNewLeads(
   oppId: string,
   kind: SortedKind,
@@ -5065,7 +3269,6 @@ export async function stampSortedFromNewLeads(
 
 export const REASSIGN_FOLLOWERS_FIELD = "Reassign Followers";
 
-/** Store the ids WE added. Never the full follower list. */
 export async function setReassignFollowers(
   oppId: string,
   userIds: string[],
@@ -5086,7 +3289,6 @@ export async function setReassignFollowers(
   return true;
 }
 
-/** The ids we added, or [] when the field is empty/absent. */
 export async function getReassignFollowers(
   rec: { cf: Record<string, unknown> },
 ): Promise<string[]> {
@@ -5100,7 +3302,6 @@ export async function getReassignFollowers(
     .filter(Boolean);
 }
 
-/** Clear it once the claim has removed them. */
 export async function clearReassignFollowers(oppId: string): Promise<void> {
   const def = findDefByName(await getFieldDefinitions(), REASSIGN_FOLLOWERS_FIELD);
   if (!def) return;
@@ -5114,13 +3315,6 @@ export async function clearReassignFollowers(oppId: string): Promise<void> {
 const normOpt = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/s$/, "");
 
-// Find a field definition by (normalized) name — never by hardcoded id.
-//
-// ITEM 1 diagnostic: if the account holds TWO fields whose names normalize the
-// same ("Transferred Date" in the Transfer folder and a stray "Transferred
-// Date" elsewhere), `find` silently takes the first and every write lands on
-// the wrong field — which looks exactly like "the value was dropped" when you
-// check the field you meant. Name the collision instead of hiding it.
 function findDefByName(
   defs: FieldDefinition[],
   name: string,
@@ -5138,21 +3332,6 @@ function findDefByName(
   return hits[0];
 }
 
-// ---------------------------------------------------------------------------
-// PUT /opportunities/{id} that VERIFIES the custom fields actually landed.
-//
-// ITEM 1, stated by the user and correct: "A 200 doesn't mean the field was
-// written." GHL validates each customFields entry INDEPENDENTLY — it can accept
-// one entry and drop another from the very same array, with no error and no
-// mention in the response. That is why "Transferred From and Transferred Date
-// ride the same array" is both TRUE and consistent with only one of them
-// landing; the array is not the unit of success, the entry is.
-//
-// So every Move write now reads its own result back: what we sent vs what the
-// response reports, per field id, by name. A dropped or altered value is logged
-// with both values. Verification NEVER fails the move — the write already
-// happened; this only makes a silent drop visible.
-// ---------------------------------------------------------------------------
 interface PutOppResponse {
   opportunity?: { customFields?: RawCustomField[] };
   customFields?: RawCustomField[];
@@ -5187,7 +3366,7 @@ async function putOpportunityVerified(
       (await getFieldDefinitions()).map((d) => [d.id, d.name || d.id]),
     );
   } catch {
-    /* ids are still useful on their own */
+
   }
   const byId = new Map(returned.filter((c) => c.id).map((c) => [c.id!, c]));
 
@@ -5204,8 +3383,7 @@ async function putOpportunityVerified(
     const stored = cfRaw(got);
     const a = String(Array.isArray(stored) ? stored.join(",") : stored);
     const b = String(Array.isArray(s.value) ? (s.value as unknown[]).join(",") : s.value);
-    // A DATE round-trips as the calendar date, so compare on the leading 10
-    // characters before calling it a mismatch.
+
     const same = a === b || (a && b && a.slice(0, 10) === b.slice(0, 10));
     if (!same) {
       // eslint-disable-next-line no-console
@@ -5216,28 +3394,12 @@ async function putOpportunityVerified(
   }
 }
 
-// Match a pipeline NAME to one of a SINGLE_OPTIONS field's option values.
-// Tolerates singular/plural drift ("ODP Enrollment" vs the option "ODP
-// Enrollments") without hardcoding either spelling.
 function matchOption(options: string[], value: string): string | null {
   const v = normOpt(value);
   for (const o of options) if (normOpt(o) === v) return o;
   return null;
 }
 
-// Division follows the pipeline. The account was backfilled once from each
-// record's pipeline, but that is a SNAPSHOT — the first record moved between
-// pipelines would carry a stale Division and drift from there. So whenever Move
-// changes the pipeline, it writes Division in the SAME PUT (no extra call, no
-// new failure point).
-//
-// The value is derived with divisionLabel(pipelineName) — the same function the
-// UI uses — so there is ONE source of truth, not a second hardcoded map. The
-// field is SINGLE_OPTIONS, so the label is matched against its real options and
-// skipped if nothing matches (never write an invalid option).
-//
-// Division stays a normal EDITABLE field: Move only ensures it is right by
-// default when the pipeline changes. It is deliberately NOT in READ_ONLY_FIELDS.
 export async function divisionCustomField(
   destPipelineName: string,
 ): Promise<{ id: string; value: unknown }[]> {
@@ -5258,33 +3420,13 @@ export async function divisionCustomField(
   return [{ id: def.id, value }];
 }
 
-/**
- * 🔴 ROUND 197 — SORTING A NEW LEAD, AND ASSIGNING A STAFFING NEEDED CASE.
- *
- * WHY NOT moveOpportunity. That function treats ANY owner change — including
- * "nobody → someone" — as a TRANSFER: it ignores the chosen stage, lands the
- * case at TRANSFERRED IN and writes the Transferred From/Date stamps. Master
- * then files the case under "Sent out". Sorting a brand-new lead is not a
- * hand-over between departments, and neither is the first owner of a case
- * waiting in Staffing needed, so this path:
- *
- *   • writes pipeline + the CHOSEN stage + owner (+ Division) in ONE verified PUT
- *   • writes NO Transferred From / Transferred Date / Transfer Reason
- *   • writes a plain note saying what was sorted, by whom, and why
- *   • from Staffing needed: removes exactly the followers the reassign added
- *     (the "Reassign Followers" field), as the panel's claim already does
- *
- * ⚠️ IT REFUSES ANY OTHER STARTING STAGE. "sort" only from NEW LEAD, "assign"
- * only from REASSIGN — so this can never become a stamp-free side door for an
- * ordinary transfer between two worked pipelines.
- */
 export async function sortOpportunity(args: {
   mode: "sort" | "assign";
   oppId: string;
   toPipelineId: string;
-  /** Empty = stay at NEW LEAD (allowed only for an unowned re-route). */
+
   toStageId?: string;
-  /** undefined = keep the current owner; "" = no owner. */
+
   newOwnerId?: string;
   reason?: string;
   actorUserId: string;
@@ -5326,7 +3468,6 @@ export async function sortOpportunity(args: {
   if (args.mode === "assign" && !finalOwner)
     throw new GhlError("Pick who will own it.", 400);
 
-  // ---- STAGE (resolved before any write) ----
   const stages = dest.stages || [];
   let destStageId = args.toStageId || "";
   const chosen = destStageId ? stages.find((st) => st.id === destStageId) : undefined;
@@ -5353,7 +3494,6 @@ export async function sortOpportunity(args: {
     throw new GhlError("Use Staffing needed for that.", 400);
   }
 
-  // ---- OWNER (validated before any write) ----
   if (ownerChanged && finalOwner) {
     const validUsers = await getLocationUserIds();
     if (validUsers.size && !validUsers.has(finalOwner))
@@ -5377,12 +3517,9 @@ export async function sortOpportunity(args: {
   );
   invalidateOpportunity(args.oppId);
 
-  // ---- ROUND 198 — THE STATS STAMP (sort only, and only when it LEFT New Leads) ----
-  // An unowned re-route that stays at NEW LEAD is still waiting to be sorted.
   if (args.mode === "sort" && (stages.find((st) => st.id === destStageId)?.name || "").trim().toUpperCase() !== "NEW LEAD")
     steps.push(`stats: ${await stampSortedFromNewLeads(args.oppId, "pipeline", args.toPipelineId, args.actorUserId)}`);
 
-  // ---- FOLLOWERS (assign only) — same rule as the panel's claim ----
   if (args.mode === "assign") {
     try {
       const added = await getReassignFollowers(current);
@@ -5391,13 +3528,12 @@ export async function sortOpportunity(args: {
       if (added.length) await clearReassignFollowers(args.oppId);
       steps.push(`followers cleared: ${toRemove.length}`);
     } catch (e) {
-      // The assignment itself is written. Saying it failed would be untrue.
+
       console.error("[assign] follower cleanup failed:", e);
       steps.push("followers: cleanup failed (remove by hand)");
     }
   }
 
-  // ---- NOTE ----
   if (current.contactId) {
     try {
       const from = pipelines.find((p) => p.id === current.pipelineId)?.name || "—";
@@ -5430,15 +3566,13 @@ export async function sortOpportunity(args: {
 export async function moveOpportunity(args: {
   oppId: string;
   toPipelineId: string;
-  toStageId?: string; // honoured on the simple path only
-  newOwnerId?: string | null; // undefined/equal to current => simple move
+  toStageId?: string;
+  newOwnerId?: string | null;
   reason?: string;
-  actorUserId: string; // note authorship (server-derived)
-  actorDivision?: string; // the author's division AT WRITE TIME (stamped, never looked up)
-  addSenderAsFollower?: boolean; // Option A switch; default OFF (Option B)
-  // ITEM 5b — master-view holders, read LIVE by the ROUTE from the access map
-  // and passed in. Resolved there rather than here because the request-scoped
-  // store lives in the route's async context.
+  actorUserId: string;
+  actorDivision?: string;
+  addSenderAsFollower?: boolean;
+
   masterUsers?: string[];
 }): Promise<MoveResult> {
   const steps: string[] = [];
@@ -5447,38 +3581,15 @@ export async function moveOpportunity(args: {
   if (!current)
     throw new GhlError("Opportunity not found.", 404, `id ${args.oppId}`);
 
-  // Did the OWNER actually change? Used for the permission rule and for the
-  // "is there a person to validate" question — NOT for deciding a reassign.
   const ownerChanged =
     typeof args.newOwnerId === "string" &&
     (args.newOwnerId || "") !== (current.ownerId || "");
 
-  // 🔴 UNASSIGNING IS A PROPERTY OF THE REQUEST, NOT OF THE OWNER DIFFERENCE.
-  //
-  // This was `isTransfer && !args.newOwnerId`, i.e. it required the owner to be
-  // CHANGING. A reassign sends newOwnerId: "" — so on an ALREADY-UNASSIGNED
-  // record `"" !== ""` is false, isTransfer was false, and the whole reassign
-  // branch was skipped: the record took the ordinary simple-move path, landing
-  // wherever the caller's stage said instead of REASSIGN, with no followers
-  // added, no master users notified and the previous followers left attached.
-  //
-  // That is NOT an edge case. WF-06 creates applicants unassigned, and a record
-  // that has ALREADY been reassigned is unassigned by definition — so
-  // re-reassigning one, the single most likely repeat action, always missed.
-  //
-  // Asking the REQUEST ("did you send an empty owner?") instead of the DIFF
-  // ("did the owner change?") is what makes it hold on an unowned record.
   const unassigning =
     typeof args.newOwnerId === "string" && args.newOwnerId === "";
 
-  // A reassign is a transfer even when it changes no owner: it still has to
-  // resolve the REASSIGN stage, write the stamps and rebuild the followers.
   const isTransfer = ownerChanged || unassigning;
 
-  // ITEM 2 — the note's [DIVISION] prefix comes from actorDivision. When that
-  // arrives empty, stampDivision correctly returns the body UNCHANGED — which is
-  // indistinguishable from "the stamp is broken". It was silent; now it isn't.
-  // The route logs WHY it is empty; this logs THAT it is, at the point of use.
   if (!args.actorDivision?.trim()) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -5486,7 +3597,6 @@ export async function moveOpportunity(args: {
     );
   }
 
-  // ---- PREFLIGHT (no writes) ----
   const pipelines = await getSelectedPipelines();
   const dest = pipelines.find((p) => p.id === args.toPipelineId);
   if (!dest)
@@ -5498,28 +3608,13 @@ export async function moveOpportunity(args: {
 
   let destStageId = args.toStageId || "";
   if (isTransfer) {
-    // Transfers land in TRANSFERRED IN — verified BEFORE any write, otherwise we
-    // would fail at the final step with the owner already changed.
+
     const ti = (dest.stages || []).find(
       (s) => (s.name || "").trim().toUpperCase() === "TRANSFERRED IN",
     );
-    // ITEM 4 — HANDING A RECORD TO A DEPARTMENT RATHER THAN A PERSON.
-    //
-    // This threw "New owner is not a user of this location." for an EMPTY owner
-    // — while the Move dialog's owner dropdown has always offered "Unassigned"
-    // as its first option. Choosing it produced a 400 whose message named a
-    // problem that did not exist, and the REASSIGN column could never fill
-    // because nothing was able to put a record into a pipeline unowned.
-    //
-    // An unassigned move is legitimate: it is a hand-off to a DEPARTMENT, and
-    // the absence of an owner is exactly what marks it as unclaimed. So it is
-    // allowed, and only the "is this a real user" check is skipped — there is no
-    // user to check.
+
     if (unassigning) {
-      // ITEM 5 — a REASSIGN lands in the destination's REASSIGN stage, resolved
-      // BY NAME exactly as TRANSFERRED IN is. The ids exist on all five
-      // pipelines but are deliberately not written down: a name match survives a
-      // pipeline being rebuilt, an id does not.
+
       const ra = (dest.stages || []).find(
         (s) => (s.name || "").trim().toUpperCase() === REASSIGN_STAGE_NAME,
       );
@@ -5539,16 +3634,10 @@ export async function moveOpportunity(args: {
         );
       destStageId = ti.id;
     }
-    // Skipped entirely when unassigning — there is no user id to validate, and
-    // running it would emit a warning naming an owner that doesn't exist.
+
     if (!unassigning) {
       const validUsers = await getLocationUserIds();
-      // Same trap as withGrants: getUserMap() swallows a failure and returns an
-      // EMPTY map, so a PIT missing `users.readonly` would make this reject EVERY
-      // transfer with a flatly untrue message ("not a user of this location") that
-      // sends you looking at the wrong thing entirely. An empty list means we
-      // cannot verify, not that the user is invalid — let GoHighLevel be the
-      // authority and reject it on the write if it really is bad.
+
       if (!validUsers.size) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -5578,19 +3667,11 @@ export async function moveOpportunity(args: {
   }
   steps.push("preflight");
 
-  // Division follows the pipeline — only when the pipeline actually changes
-  // (a stage-only move within the same pipeline must not touch it).
   const pipelineChanged = args.toPipelineId !== current.pipelineId;
   const divisionCf = pipelineChanged
     ? await divisionCustomField(dest.name)
     : [];
 
-  // ---- SIMPLE MOVE (owner unchanged) ----
-  // ITEM 2: the reason and the note used to be written ONLY on the transfer
-  // path, so this early return dropped both. The real gate was `isTransfer`
-  // (owner changed) — NOT the division, which is why a same-division move that
-  // also changed the owner appeared to "work". A reason the rep typed must
-  // ALWAYS be written, so it is recorded here too.
   if (!isTransfer) {
     await putOpportunityVerified(
       args.oppId,
@@ -5604,12 +3685,10 @@ export async function moveOpportunity(args: {
     steps.push(
       `moved pipeline+stage${divisionCf.length ? " + Division" : ""}`,
     );
-    // Note the move (with the reason) whenever anything actually changed.
+
     if (current.contactId && (pipelineChanged || args.reason?.trim())) {
       try {
-        // ITEM 2 — the SYSTEM half and the rep's words are written as separate
-        // parts, FLAGGED as a Move note at creation. The author may later edit
-        // or withdraw their reason; the system sentence is protected.
+
         const system = pipelineChanged
           ? `Moved from ${
               pipelines.find((p) => p.id === current.pipelineId)?.name || "—"
@@ -5628,7 +3707,7 @@ export async function moveOpportunity(args: {
         );
         steps.push("note written");
       } catch (e) {
-        // The move itself succeeded; don't fail it because the note didn't land.
+
         // eslint-disable-next-line no-console
         console.error("[move] note failed on simple move:", await explainGhlError(e));
       }
@@ -5636,7 +3715,6 @@ export async function moveOpportunity(args: {
     return { transferred: false, steps };
   }
 
-  // ---- TRANSFER ----
   const defs = await getFieldDefinitions();
   const fromDef = findDefByName(defs, "Transferred From");
   const dateDef = findDefByName(defs, "Transferred Date");
@@ -5644,9 +3722,6 @@ export async function moveOpportunity(args: {
   const sourceName =
     pipelines.find((p) => p.id === current.pipelineId)?.name || "";
 
-  // ITEM 1 — say out loud which stamp fields resolved. If a name lookup misses,
-  // the entry is never built, and "the field didn't land" is then a LOCAL fact
-  // (we never sent it), not a GHL one. That distinction was unavailable before.
   if (!fromDef || !dateDef) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -5656,7 +3731,7 @@ export async function moveOpportunity(args: {
 
   const customFields: { id: string; value: unknown }[] = [];
   if (fromDef && sourceName) {
-    // SINGLE_OPTIONS — must send an EXISTING option value.
+
     const opts = optionStrings(fromDef);
     const matched = opts.length ? matchOption(opts, sourceName) : sourceName;
     if (matched) customFields.push({ id: fromDef.id, value: matched });
@@ -5664,23 +3739,17 @@ export async function moveOpportunity(args: {
   if (dateDef)
     customFields.push({
       id: dateDef.id,
-      // Full ISO 8601 — the one shape proven to store (a bare "2026-08-27" is
-      // not). Routed through toGhlDate so Move, the panel and the importer all
-      // send DATE the same way.
+
       value: toGhlDate(new Date().toISOString()),
     });
   if (reasonDef && args.reason?.trim())
     customFields.push({ id: reasonDef.id, value: args.reason.trim() });
 
-  // 1. Owner + stamps in ONE atomic write (fails => nothing written).
   try {
     await putOpportunityVerified(
       args.oppId,
       {
-        // ITEM 4 — clearing the owner is sent as NULL, not "". null is the shape
-        // the panel's own save route has always used to unassign
-        // (`assignedTo = body.assignedTo ? body.assignedTo : null`), so the two
-        // paths now clear an owner identically instead of one of them guessing.
+
         assignedTo: unassigning ? null : args.newOwnerId,
         ...(customFields.length ? { customFields } : {}),
       },
@@ -5692,70 +3761,25 @@ export async function moveOpportunity(args: {
       transferred: false,
       steps,
       failedStep: "owner change",
-      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+
       error: await explainGhlError(e),
     };
   }
 
-  // 2. Clear followers — all except the new owner (G1).
-  // removeOpportunityFollowers sends ONE DELETE with the whole array (no loop),
-  // so we never partially clear from this side. GHL's server-side handling of a
-  // failed batch is unverified, so on failure we report exactly which ids were
-  // ATTEMPTED — any still attached keep shared access until cleared manually.
   const toRemove = current.followerIds.filter((f) => f !== args.newOwnerId);
   try {
     if (toRemove.length) {
       await removeOpportunityFollowers(args.oppId, toRemove);
       steps.push(`cleared ${toRemove.length} follower(s)`);
     }
-    // 🔴 THE SENDER IS KEPT ONLY BY THE TOGGLE — NEVER BY A REASSIGN.
-    //
-    // This read `(unassigning || args.addSenderAsFollower)`. The ITEM 4
-    // reasoning behind that `unassigning` clause was: after an unassigned move
-    // the sender is neither owner nor follower, so the record vanishes from
-    // their dashboard — keep them as a follower so it doesn't.
-    //
-    // ⚠️ THAT REASONING IS NOW REVERSED, DELIBERATELY. A reassign MEANS giving
-    // the case up. Keeping the previous owner attached means it never actually
-    // leaves them: it stays in their list as shared, which is the opposite of
-    // what handing a case on is for. Confirmed live on v70 — the previous owner
-    // was appearing in the followers beside the master-view holders.
-    //
-    // ⚠️ AND THE CLAUSE HAD SILENTLY WIDENED. It was written when `unassigning`
-    // required an owner CHANGE, so it only fired on a transfer-to-nobody.
-    // Report 71 corrected `unassigning` to mean "the request sent an empty
-    // owner" — right in itself, but it made this clause fire on EVERY reassign.
-    // The two are now decoupled: `unassigning` decides the reassign path,
-    // `addSenderAsFollower` alone decides whether a sender stays.
-    //
-    // The toggle ("Keep me on this lead", Move dialog → transfers only) is the
-    // ONLY thing that keeps a sender attached. `ReassignDialog` never sends it.
+
     const keepSender = args.addSenderAsFollower === true && !!current.ownerId;
 
-    // ITEM 5b — 🔴 FOLLOWERS GO ON **BEFORE** THE STAGE CHANGE.
-    //
-    // The stage change into REASSIGN is what fires the GoHighLevel workflow that
-    // notifies "Followers". Added afterwards, that workflow has already run and
-    // notified an empty list — the record sits there and nobody is told. The
-    // pipeline/stage write is the LAST step of this function, so everything here
-    // is safely ahead of it.
-    //
-    // The list is read LIVE from the request-scoped access map (see
-    // getMasterUsers): anyone granted the Master view before this moment is in
-    // this reassign's followers, with no backfill.
     const wanted = new Set<string>();
     if (keepSender) wanted.add(current.ownerId!);
     if (unassigning)
       for (const u of args.masterUsers || []) if (u) wanted.add(u);
-    // Never re-add someone already on the record: we must be able to tell OUR
-    // additions apart from a follower who was there first, or claiming the case
-    // would strip a person who has nothing to do with the reassign.
-    //
-    // 🔴 MEASURED AFTER THE REMOVAL ABOVE, not before it. `toRemove` has just
-    // been DELETED, so anyone in it is no longer following — treating them as
-    // "already there" would skip re-adding them. On a RE-reassign that is
-    // exactly the master-view holders: cleared a moment ago, then judged
-    // already-present and never restored, leaving the queue watched by nobody.
+
     const removed = new Set(toRemove);
     const already = new Set(
       current.followerIds.filter((f) => !removed.has(f)),
@@ -5769,10 +3793,7 @@ export async function moveOpportunity(args: {
           ? `added ${added.length} follower(s) BEFORE the stage change (sender + master-view holders) so the GHL workflow notifies a real list`
           : "kept sender as follower",
       );
-      // ITEM 5c — recorded IMMEDIATELY after the additions it describes, and
-      // before the stage change, so a later failure still leaves an accurate
-      // list rather than followers with no record of who put them there.
-      // ONLY the ids we added — anyone already following is deliberately absent.
+
       if (unassigning) {
         try {
           const stored = await setReassignFollowers(args.oppId, added);
@@ -5782,9 +3803,7 @@ export async function moveOpportunity(args: {
               : `could NOT record the added followers (no "${REASSIGN_FOLLOWERS_FIELD}" field) — a claim will remove none`,
           );
         } catch (e) {
-          // Not fatal: the reassign itself is correct and the record is where
-          // it should be. The cost is that the claim removes nothing, which is
-          // the safe direction — it never strips the wrong person.
+
           // eslint-disable-next-line no-console
           console.error("[reassign] could not record added followers:", e);
           steps.push("recording the added followers FAILED (claim will remove none)");
@@ -5796,18 +3815,15 @@ export async function moveOpportunity(args: {
       transferred: true,
       steps,
       failedStep: "clear followers",
-      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+
       error: await explainGhlError(e),
       attemptedFollowerRemovals: toRemove,
     };
   }
 
-  // 3. Note — only now, when the transfer is real.
   try {
     if (current.contactId) {
-      // "New owner: ." is what this produced for an unassigned move. Say what
-      // actually happened — the receiving department reads this note to work out
-      // why the record landed on them.
+
       const toName = unassigning
         ? "Unassigned — for the receiving team to claim"
         : (await getUserMap()).get(args.newOwnerId!) || args.newOwnerId!;
@@ -5830,17 +3846,11 @@ export async function moveOpportunity(args: {
       transferred: true,
       steps,
       failedStep: "note",
-      // Full reason, with GHL's pipeline-permission 400 resolved to names.
+
       error: await explainGhlError(e),
     };
   }
 
-  // 4. Pipeline + TRANSFERRED IN — after the owner change (GHL constraint).
-  // This is the step whose failure STRANDS the record: the owner has already
-  // changed and followers are cleared, but the record is still in the SOURCE
-  // pipeline — which is not in the new owner's home set, so they see it only as
-  // "shared", and the previous owner cannot see it at all. Nobody finds it by
-  // browsing. Retry a couple of times before giving up, then flag it loudly.
   let lastErr: unknown = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -5849,7 +3859,7 @@ export async function moveOpportunity(args: {
         {
           pipelineId: args.toPipelineId,
           pipelineStageId: destStageId,
-          // Division rides along with the pipeline change (same PUT).
+
           ...(divisionCf.length ? { customFields: divisionCf } : {}),
         },
         "transfer-pipeline",
@@ -5858,52 +3868,15 @@ export async function moveOpportunity(args: {
         `moved pipeline+stage (${unassigning ? REASSIGN_STAGE_NAME : "TRANSFERRED IN"})${divisionCf.length ? " + Division" : ""}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
       );
 
-      // ═══ TASK 1 · HOOK 2 OF 2 — AFTER THE PIPELINE MOVE, DELIBERATELY ═════
-      //
-      // 🔴 RULE C IN ORDER. Step 2 above cleared EVERY follower but the new
-      // owner — that is the transfer's removal and it belongs to the transfer.
-      // This adds the new owner's managers back, afterwards, and the two
-      // mechanisms never consult each other.
-      //
-      // ⚠️ AFTER THE PIPELINE MOVE RATHER THAN AFTER THE CLEAR. The move is the
-      // step whose failure strands the record — see the comment above — and
-      // managers following a case still sitting in the source pipeline is the
-      // worse of the two half-states.
-      //
-      // ⚠️ ONLY THE TRANSFER PATH REACHES THIS. A simple move does not change
-      // the owner, so nothing recomputes: the owner is the only input.
       if (!unassigning && args.newOwnerId) {
         const cm = await applyCaseManagers(args.oppId, args.newOwnerId);
         if (!cm.skipped && (cm.added.length || cm.removed.length))
           steps.push(`case managers: ${cm.steps.join("; ")}`);
       }
 
-      // 5. Tag the CONTACT. Written only HERE — after the pipeline move actually
-      // landed — so the tag can never claim a transfer that stopped half way.
-      // A failure is logged and swallowed: the transfer is complete and correct
-      // at this point, and failing it over a tag would be worse than the missing
-      // tag. The step list records whether it made it.
       if (current.contactId) {
         const destLabel = normalizeTag(divisionLabel(dest.name) || dest.name);
-        // ITEM C — HOW THE RECORD GOT HERE. An ordinary transfer and a reassign
-        // hand-off both land in Sent out and, until now, wrote the SAME tag —
-        // so the card could not say which had happened. The reassign path
-        // (`unassigning`: a transfer whose new owner is nobody) now writes a
-        // second, distinct tag beside it.
-        //
-        // Chosen over the note text (editable by its author, so the marker can
-        // be edited away) and over a new field. A field WAS considered: the
-        // existing "Reassign Followers" field is written on this path — but
-        // `clearReassignFollowers` wipes it when the case is CLAIMED, and a card
-        // only becomes Sent out after a claim, so it is gone exactly when this
-        // needs it.
-        //
-        // ⚠️ KNOWN LIMIT, ACCEPTED. Tags are CONTACT-scoped, not
-        // opportunity-scoped. A contact reassigned once and transferred later
-        // carries both tags, and a card cannot then tell which event was its
-        // own. The existing `transferred-to-` tag already has that limit, so
-        // this is no worse — but it is not exact, and the UI says so rather
-        // than hiding it. Only an opportunity-scoped field would be exact.
+
         const tag = `transferred-to-${destLabel}`;
         const tags = unassigning ? [tag, `reassigned-from-${normalizeTag(divisionLabel(current.pipelineName) || current.pipelineName)}`] : [tag];
         try {
@@ -5933,54 +3906,6 @@ export async function moveOpportunity(args: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Followers (Task 5) — dedicated add/remove endpoints (no full-opportunity PUT).
-// GHL sends NO native notification to a newly added follower.
-//
-// ═══ ROUND 151 · 🔴 A 200 HERE CAN MEAN "ACCEPTED AND STORED NOTHING" ═══════
-//
-// The shape was never the problem and `scripts/followers-probe.mjs` confirming
-// it live proved less than it looked like. Probed four ways against the account:
-//
-//   {followers:[…]}           200 — and stored NOTHING
-//   {followers, locationId}   422  "property locationId should not exist"
-//   {followerIds:[…]}         422  "property followerIds should not exist"
-//   bare array                400  not valid JSON
-//
-// GoHighLevel validates that exact key, so the shape is right. It still wrote
-// nothing, because the record's PIPELINE was set to "Share with selected users"
-// and the people being added were not among them.
-//
-// 🔴 THE RESTRICTION IS INVISIBLE FROM EVERY ENDPOINT WE HAVE. It lives on the
-// pipeline in the GoHighLevel UI and is not in the pipelines API (`showInFunnel`,
-// `showInPieChart`, `colorRenderMode` — nothing about users). The user objects
-// are identical for a permitted and a refused user: 139 scopes,
-// `opportunitiesEnabled: true`, `assignedDataOnly: false`. Nothing the dashboard
-// can read distinguishes them.
-//
-// ⚠️ AND THE PIT's LOCATION RIGHTS DO NOT OVERRIDE IT. Reading is unaffected;
-// WRITING an owner or a follower is an assertion about a USER's relationship to
-// a record, and GoHighLevel validates that against the user's own access
-// whatever token asked. Owner writes fail loudly (400, and explainGhlError
-// turns it into a sentence). Follower writes fail silently. That asymmetry is
-// what cost an hour to find, and it is why the echo is now asserted.
-//
-// ⚠️ THE FIX IS A TOGGLE IN SOMEBODY ELSE'S UI. "Share with all users" is not
-// visible to this code and nothing here would notice it being undone. The
-// caller reading the body is the only defence that survives a re-share.
-// ---------------------------------------------------------------------------
-
-/**
- * Every follower id GoHighLevel echoed back, from whichever key it used.
- *
- * 🔴 `followersAdded` IS NESTED — `string[][]`, not `string[]`. Live:
- *   success  {"followers":[…], "followersAdded":[["V0gY…","WiFU…"]]}
- *   refusal  {"followers":[],  "followersAdded":[[]]}
- * The old declared type said `string[]`, which was latent only because
- * `followers` is always present and `??` never fell through to it. Flattened
- * here rather than trusted, so neither nesting nor a key swap can put an array
- * where an id belongs.
- */
 function echoedFollowers(j: unknown): Set<string> {
   const o = (j ?? {}) as Record<string, unknown>;
   const out = new Set<string>();
@@ -6006,11 +3931,6 @@ export async function addOpportunityFollowers(
   const echoed = echoedFollowers(res);
   const landed = userIds.filter((u) => echoed.has(u));
 
-  // 🔴 NONE OF THEM CAME BACK — that is the refusal signature above, and it is
-  // the ONE case this can call with certainty. A partial echo is left to the
-  // caller's read-back rather than guessed at: we have no probe saying GHL ever
-  // returns a partial, and inventing a meaning for one would be the same
-  // mistake as a fake that answers what GoHighLevel refuses.
   if (!landed.length)
     throw new GhlError(
       "GoHighLevel stored no followers.",
@@ -6030,34 +3950,13 @@ export async function removeOpportunityFollowers(
   userIds: string[],
 ): Promise<string[]> {
   if (!userIds.length) return [];
-  // ITEM 1 — through ghlDelete, which DOES take a body. Round 117's note here
-  // said ghlSend excludes DELETE "because a DELETE has none"; this call site is
-  // the counter-example that was sitting three lines below it.
+
   const j =
     (await ghlDelete<{ followers?: string[]; followersRemoved?: string[][] }>(
       `/opportunities/${encodeURIComponent(oppId)}/followers`,
       { body: { followers: userIds }, what: "the followers" },
     )) ?? {};
 
-  // ═══ ROUND 156 — NOW ASSERTED, BECAUSE THE PROBE CAME BACK ════════════════
-  //
-  // Round 151 left this unasserted on purpose: the add's success AND refusal
-  // shapes were both known, the DELETE's success shape was not, and guessing it
-  // would have thrown on every working remove. The probe settles it:
-  //
-  //     DELETE /opportunities/{id}/followers  {followers:["<id>"]}
-  //     → 200 {"followers":[],"followersRemoved":["<id>"]}
-  //
-  // 🔴 ASSERTED ON `followersRemoved` ALONE, NOT ON THE UNION, and that
-  // narrowness is the point. `echoedFollowers` also reads `followers`, and the
-  // REFUSAL shape for a DELETE was not probed. If a refused removal answers
-  // `{"followers":["<id>"]}` — the id still present, because it was not
-  // removed — the union would find it and call that a success. Reading only
-  // the key the probe showed carrying removals cannot be fooled that way.
-  //
-  // ⚠️ AND AN ABSENT `followersRemoved` IS "CANNOT TELL", NOT "FAILED". An
-  // account or version that omits the key falls through to the old behaviour —
-  // no throw — rather than breaking every removal on a shape nobody has seen.
   const removedEcho = Array.isArray(j.followersRemoved)
     ? new Set(j.followersRemoved.flat(2).filter((x): x is string => typeof x === "string" && !!x))
     : null;
@@ -6074,54 +3973,10 @@ export async function removeOpportunityFollowers(
   return [...echoedFollowers(j)].filter((u) => userIds.includes(u));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🔴 TASK 1 — A CASE MANAGER FOLLOWS EVERY CASE OWNED BY A REP THEY SUPPORT.
-//
-// One rule, applied wherever an owner is set. The OWNER ID IS THE ONLY INPUT:
-// no division logic, no transfer-specific branch, no pipeline test. A case
-// changing pipelines with the same owner keeps the same managers and nothing
-// recomputes, because nothing about the answer depended on the pipeline.
-//
-// Visibility follows from the follower alone — `canSeeRecord` tests
-// `followerIds` on line 35, BEFORE any pipeline or grant test, and
-// `applyAccess` admits a follower in a non-home pipeline as `shared: true`.
-// Nothing here needs to grant anything.
-//
-// ── THE THREE RULES THIS MUST HOLD ────────────────────────────────────────
-//
-// A · A REP NOT IN THE MAP IS NOT AN ERROR. Add nothing, remove nothing, leave
-//     the field alone. Most of the 26 users on this account are in that state,
-//     and treating "unmapped" as "no managers" would blank a field on every one
-//     of their cases at every owner change.
-//
-// B · REMOVAL IS ONLY EVER FROM THIS FUNCTION'S OWN STORED RECORD — the
-//     "Case Manager Followers" field, written by this function and read by this
-//     function. NEVER inferred from the live followers (which include people a
-//     human added) and never from the access map. No field means remove
-//     NOTHING, inherited deliberately from `setReassignFollowers`.
-//
-//     🔴 AND IT IS A SEPARATE FIELD FROM "Reassign Followers" ON PURPOSE. The
-//     reassign claim CLEARS that one wholesale; a shared field would have each
-//     mechanism wiping the other's list, which is the failure that made the
-//     reassign field exist in the first place.
-//
-// C · TWO REMOVALS, TWO TRIGGERS, NEVER MERGED. `moveOpportunity` clears every
-//     follower but the new owner on a transfer — that is the transfer's
-//     removal, it runs on transfer, and this function's add runs after it. This
-//     function's OWN removal fires when a mapping changes, on cases that were
-//     never transferred. They do not know about each other and must not.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** The name written to the record. Resolved by name; there is no id in this repo. */
 export const CASE_MANAGER_FIELD = "Case Manager";
-/** Rule B's own record: the ids THIS function added. Never the live list. */
+
 export const CASE_MANAGER_FOLLOWERS_FIELD = "Case Manager Followers";
 
-// ═══ ROUND 159/163/165 — THE STAGE RECORDER ═══════════════════════════════
-//
-// The ROW FORMAT now lives in lib/stageHistory.ts, which imports nothing — see
-// the banner there for why it had to leave this file. Re-exported so every
-// existing caller and proof keeps its import path.
 export {
   STAGE_HISTORY_FIELD,
   parseStageHistory,
@@ -6143,19 +3998,6 @@ export interface StageRecordResult {
   rows?: number;
 }
 
-/**
- * Append one transition for `oppId`.
- *
- * 🔴 THE STAGE COMES FROM THE RECORD, NOT THE PAYLOAD. GoHighLevel's workflow
- * webhook sends `pipleline_stage` — its own typo, and a stage NAME. Names get
- * edited; ids do not. The record has to be read anyway for the owner, so the
- * id comes from there and the payload field is used for nothing.
- *
- * 🔴 MANAGERS ARE FROZEN AT THE MOMENT OF THE MOVE. The map changes — a manager
- * joined this morning — so resolving at read time would credit them with moves
- * they were not watching. Same rule as `Case Manager Followers` recording what
- * this system DID rather than what the map says.
- */
 export async function appendStageHistory(oppId: string): Promise<StageRecordResult> {
   const rec = await getOpportunityByIdUncached(oppId);
   if (!rec) return { recorded: false, why: "the record could not be read back" };
@@ -6172,10 +4014,7 @@ export async function appendStageHistory(oppId: string): Promise<StageRecordResu
   if (!to) return { recorded: false, why: "the record has no stage id" };
 
   const rows = parseStageHistory(rec.cf[def.id]);
-  // 🔴 IDEMPOTENT, BECAUSE GOHIGHLEVEL RETRIES. A redelivery of the same event
-  // finds the record already in that stage with that stage as the last row, and
-  // writes nothing. A genuine A→B→A still records: the last row is B when the
-  // second move arrives.
+
   const last = rows[rows.length - 1];
   if (last && last.to === to)
     return { recorded: false, why: `already the last recorded stage (${to})`, rows: rows.length };
@@ -6188,63 +4027,30 @@ export async function appendStageHistory(oppId: string): Promise<StageRecordResu
   return { recorded: true, why: `${rows.length ? "appended" : "first row"} for ${oppId}`, row, rows: rows.length + 1 };
 }
 
-// ═══ ROUND 181 — "NEW LEAD" UNTIL SOMEBODY OPENS IT ════════════════════════
-// The rule and the value format live in lib/newLead.ts (no imports, so the
-// browser can use them). This is the one place that WRITES the field.
-
-/**
- * Does this account have the "First Opened" field? No field = no tracking.
- *
- * 🔴 ROUND 182 — A FIELD CREATED AFTER THE SERVER STARTED MUST BE SEEN.
- * Field definitions are cached for the life of a warm server instance, which on
- * Vercel can be hours. The field is created in GoHighLevel (by hand, or by
- * live-check-181.mjs) while instances are already warm, so a plain cache read
- * kept saying "no field" — no label anywhere — for as long as that instance
- * lived. When the cached list LACKS the field, it is re-read from GoHighLevel,
- * at most once a minute per instance (FIRST_OPENED_RECHECK_MS) so a missing
- * field does not cost a GoHighLevel call on every board load.
- *
- * ⚠️ ONLY THE MISS IS RE-READ. Once found, the id is cached like everything
- * else: an id does not change, and deleting the field is not a case to optimise.
- */
 export const FIRST_OPENED_RECHECK_MS = 60_000;
 let firstOpenedLastRecheck = 0;
 export async function firstOpenedFieldId(): Promise<string | null> {
   let def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
   if (!def && Date.now() - firstOpenedLastRecheck >= FIRST_OPENED_RECHECK_MS) {
     firstOpenedLastRecheck = Date.now();
-    // ⚠️ fieldDefs only. The id→name map (cache.fieldMap) stays as it was —
-    // the board reads First Opened BY ID (app/api/opportunities/route.ts) for
-    // exactly that reason, so nothing here depends on the map being current.
+
     cache.fieldDefs = undefined;
     def = findDefByName(await getFieldDefinitions(), FIRST_OPENED_FIELD);
   }
   return def?.id ? String(def.id) : null;
 }
-/** Proofs only: forget the last re-check, so a test can create the field and look again. */
+
 export function resetFirstOpenedRecheck(): void {
   firstOpenedLastRecheck = 0;
 }
 
 export interface FirstOpenedResult {
   recorded: boolean;
-  /** What the field holds now — ours, or the earlier opener's. */
+
   value: string | null;
   why: string;
 }
 
-/**
- * Record the FIRST open of `oppId` by `userId`. Writes at most once per case.
- *
- * 🔴 READ FIRST, FROM GOHIGHLEVEL, UNCACHED. Two people opening the same new
- * lead a second apart both reach this; the second must find the first one's
- * value and leave it alone, so the record — not the browser's copy — decides.
- * The window between this read and the write is the one race left, and losing
- * it costs only WHICH of two openers is named, never a lost open.
- *
- * ⚠️ NEVER THROWS FOR "NOTHING TO DO". No field and already-opened are normal
- * answers with `recorded: false`; only a failed GoHighLevel call throws.
- */
 export async function markFirstOpened(oppId: string, userId: string): Promise<FirstOpenedResult> {
   const fieldId = await firstOpenedFieldId();
   if (!fieldId)
@@ -6262,33 +4068,20 @@ export async function markFirstOpened(oppId: string, userId: string): Promise<Fi
 }
 
 export interface CaseManagerResult {
-  /** True when rule A applied — no entry in the map, so nothing was touched. */
+
   skipped: boolean;
   why: string;
   added: string[];
   removed: string[];
-  /** What the Case Manager field now holds, or null when it was left alone. */
+
   fieldValue: string | null;
-  /** Rule B could not run: no "Case Manager Followers" field on this account. */
+
   noRecordField: boolean;
-  /**
-   * 🔴 ROUND 151 — WHAT THE READ-BACK FOUND, IN THE RETURN VALUE.
-   *
-   * The read-back has existed since task 1 and it caught this live, but it only
-   * ever reached `steps` and the log. A caller asking "did it work?" got
-   * `skipped:false` and a full `added` array — so the webhook printed
-   * `ACTED — +2 manager(s)` while GoHighLevel had stored none of them.
-   *
-   * `missing`   should be following and is not (a refused or lost add)
-   * `lingering` we removed it and it is still there (a refused remove)
-   *
-   * null when the read-back ran and agreed, or when there was nothing to verify.
-   */
+
   mismatch: { missing: string[]; lingering: string[] } | null;
   steps: string[];
 }
 
-/** The ids this function previously added, from its OWN field. Never inferred. */
 function readOwnRecord(
   rec: { cf: Record<string, unknown> },
   def: FieldDefinition | undefined,
@@ -6299,44 +4092,13 @@ function readOwnRecord(
   return text.split(",").map((x) => x.trim()).filter(Boolean);
 }
 
-/**
- * 🔴 NEVER THROWS. Every caller is a hook on a write that has ALREADY
- * SUCCEEDED — the owner changed, and it changed correctly. A follower failure
- * must not make a completed save report itself as failed. Everything that goes
- * wrong comes back in `steps` and in the log, and the owner change stands.
- */
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 175 — SET A CASE'S OWN OWNER.
-//
-// 🔴 WHY THIS EXISTS NOW AND DID NOT BEFORE. GoHighLevel's "Allow different
-// owners for primary contacts and opportunities" was OFF, so contact and
-// opportunity owners were synced and a family could have exactly ONE owner
-// across every case they held. Proven live 6 Oct: a family owned by Ern (OLTL)
-// answered the ODP ad, the ODP workflow moved the CONTACT to chris b, and both
-// the new ODP case AND the family's existing OLTL case became chris b's.
-//
-// With the setting on, each case keeps its own owner — and `Assign to user`
-// then writes only the contact, so a new case starts with whatever the contact
-// had. The dashboard sets the case owner. This is that write.
-//
-// ⚠️ IT IS ITS OWN FUNCTION AND NOT PART OF moveOpportunity. Move changes a
-// case's PIPELINE and stamps transfer fields; this changes one field on one
-// case and must not drag any of that in.
-//
-// 🔴 AND IT INVALIDATES BEFORE RETURNING, so the caller's read-back is a read
-// of GoHighLevel rather than of the 3-second burst cache. Without that the
-// verification would confirm the value we just sent, which proves nothing —
-// rule 11: a write's own response is evidence about that write; a later read is
-// evidence about the world.
-// ═══════════════════════════════════════════════════════════════════════════
 export async function setOpportunityOwner(
   oppId: string,
   userId: string,
 ): Promise<void> {
   if (!oppId) throw new GhlError("No opportunity id to set an owner on.", 400);
   await ghlSend("PUT", `/opportunities/${encodeURIComponent(oppId)}`, {
-    // ⚠️ `null` CLEARS, a string sets. Same shape the panel and Move use, so
-    // the three paths cannot disagree about what "no owner" looks like.
+
     assignedTo: userId || null,
   });
   invalidateOpportunity(oppId);
@@ -6345,13 +4107,7 @@ export async function setOpportunityOwner(
 export async function applyCaseManagers(
   oppId: string,
   ownerId: string,
-  /**
-   * The record, when the caller already holds a FRESH one. `updateOpportunity`
-   * reads uncached immediately after its PUT, so passing it there makes the
-   * unmapped-and-unrecorded case cost nothing at all. `moveOpportunity` must
-   * NOT pass its copy: that one predates the transfer's follower clear by two
-   * steps, and acting on it would re-add people the transfer just removed.
-   */
+
   known?: OpportunityRecord | null,
 ): Promise<CaseManagerResult> {
   const steps: string[] = [];
@@ -6360,70 +4116,11 @@ export async function applyCaseManagers(
     noRecordField: false, mismatch: null, steps, ...r,
   });
 
-  // ── RULE A, IN ITS RESOLVED FORM ────────────────────────────────────────
-  //
-  // 🔴 UNMAPPED DOES NOT MEAN UNTOUCHED — IT MEANS WE REMOVE WHAT WE ADDED AND
-  // NOTHING ELSE.
-  //
-  // The first version returned here the moment the owner had no entry, and that
-  // left a real leak: a case owned by a managed rep, reassigned to an unmapped
-  // one, kept the old managers following it forever. Rule A was never "do not
-  // touch a case whose owner is unmapped" — it was "never touch a follower this
-  // function did not add", and rule B's own stored field answers that exactly.
-  //
-  // ⚠️ SO THE TEST IS THE STORED RECORD, NOT THE MAP. Removing a follower named
-  // in our own field is READING, not inferring; the rule being protected — never
-  // touch the live follower list or the access map — is untouched by it.
-  //
-  //   no key · no stored record    nothing touched, no write
-  //   no key · stored record       remove what we added, clear the field
-  //   []     · either              remove what we added, clear the field
-  //   [ids]                        reconcile to the map
-  //
-  // ⚠️ `null` AND `[]` STILL MEAN DIFFERENT THINGS TO THE TAB — never mapped
-  // versus deliberately emptied. They converge on one behaviour only here, and
-  // only when we hold a record.
   try {
-    // 🔴 READ FRESH UNLESS THE CALLER HANDS ONE OVER. On the transfer path the
-    // caller's copy is the PRE-write one whose followers were cleared two steps
-    // ago, so that path always re-reads.
+
     const rec = known ?? (await getOpportunityByIdUncached(oppId));
     if (!rec) return out({ skipped: true, why: "the record could not be read back" });
 
-    // ═══ ROUND 149 — CLIENT PIPELINES ONLY, AND IT ROUTES THROUGH RULE A ═════
-    //
-    // 🔴 A CASE MANAGER SUPERVISES ENROLMENTS; A RECRUITER SCREENS APPLICANTS.
-    // The product keeps those apart by construction and this rule did not: the
-    // map keys on the REP and nothing else, so a caregiver applicant assigned
-    // to an OLTL sales rep would have been followed by that rep's two case
-    // managers. Wrong division AND wrong kind of record — found live when a
-    // Private Pay caregiver applicant landed on an OLTL rep through a
-    // placeholder assignment.
-    //
-    // ⚠️ `scope` IS THE TEST BECAUSE IT IS ALREADY THE DISTINCTION. It is the
-    // field that separates the two boards, set deliberately on the screen that
-    // owns every other per-pipeline decision — the same argument that settled
-    // `role` and `group`. Every alternative was worse: the Case Manager field
-    // is location-wide so its presence proves nothing; `divisionLabel` mangles
-    // every caregiver pipeline name (see lib/division.ts); and a per-pipeline
-    // opt-in would do nothing until an admin visited a settings screen, which
-    // the `role` comment argues against in its own words.
-    //
-    // 🔴 IT SETS `mapped` TO null RATHER THAN RETURNING EARLY, AND THAT IS THE
-    // WHOLE POINT. An early return would strand a record that gained managers
-    // on a client pipeline and was later MOVED to a caregiver one — they would
-    // follow it for ever. `null` is already the rule-A state meaning "not
-    // managed by this system", and its four cases then do exactly the right
-    // thing with no new branch:
-    //
-    //   caregiver pipeline · no stored record    nothing touched, no write
-    //   caregiver pipeline · stored record       remove what we added, clear
-    //
-    // ⚠️ AND IT FAILS CLOSED. If the scope cannot be established the answer is
-    // "not client", because adding a manager to an applicant is the leak this
-    // closes while failing to add one is recoverable and visible. In practice
-    // getSelectedPipelines falls back to the env list rather than returning
-    // nothing, so a config blip does not reach this.
     let onClientPipeline = false;
     try {
       const clientPipes = await getSelectedPipelines("client");
@@ -6451,41 +4148,25 @@ export async function applyCaseManagers(
     const mine = readOwnRecord(rec, recordDef);
     const current = new Set(rec.followerIds);
 
-    // 🔴 TRUE RULE A: no entry AND nothing of ours on the record. There is
-    // nothing to add and nothing we are entitled to remove, so not one write is
-    // sent — which is the state 21 of the 26 users on this account are in.
     if (mapped === null && mine.length === 0)
       return out({
         skipped: true,
-        // ⚠️ THREE REASONS, NOT TWO. "Unmapped" and "not a client pipeline"
-        // both arrive here as `mapped === null`, and an operator reading the
-        // log has to be able to tell them apart — one is 21 of 26 users, the
-        // other is a setting somebody can change on the Pipelines screen.
+
         why: !ownerId
           ? "the record has no owner"
           : !onClientPipeline
             ? "this pipeline is not client-scoped, so case managers do not apply to it"
-            // 🔴 ROUND 170 — THE OWNER IS NAMED, AND THEIR ID IS BESIDE IT.
-            // This read "that owner has no entry in the map", which is the most
-            // common line in the webhook log (21 of 26 users are unmapped) and
-            // told whoever read it nothing they could act on. The NAME is who
-            // to ask about; the ID is what the Access tab's map is keyed on, so
-            // it is what somebody adding the entry actually needs. Both, because
-            // a name alone cannot be looked up and an id alone cannot be
-            // recognised.
+
             : `${rec.rep || "that owner"} (${ownerId}) has no entry in the case-manager map, so this function added nothing to this record`,
         noRecordField,
       });
 
     const added = want.filter((u) => u && u !== rec.ownerId && !current.has(u));
-    // 🔴 RULE B. Only from `mine`. A co-rep a human added is not in `mine`, so
-    // it can never appear here however the mapping changes.
+
     const removed = noRecordField
       ? []
       : mine.filter((u) => u && !want.includes(u) && current.has(u));
 
-    // Remove first, then add — the same order the human followers route uses,
-    // "so a same-tick add wins if both are sent".
     if (removed.length) {
       await removeOpportunityFollowers(oppId, removed);
       steps.push(`removed ${removed.length} follower(s) this function had added`);
@@ -6497,11 +4178,6 @@ export async function applyCaseManagers(
     if (noRecordField && mine.length === 0 && !removed.length)
       steps.push(`⚠️ no "${CASE_MANAGER_FOLLOWERS_FIELD}" field — nothing was removed`);
 
-    // ── THE TWO FIELD WRITES ────────────────────────────────────────────────
-    // ⚠️ The Case Manager field is REWRITTEN FROM THE MAP, always — it is
-    // system-owned and there is no human value to preserve. An entry that is
-    // deliberately empty clears it; rule A above already returned for the
-    // absent-entry case, so this is never reached for an unmapped rep.
     let fieldValue: string | null = null;
     if (nameDef) {
       const users = await getUserMap();
@@ -6515,42 +4191,7 @@ export async function applyCaseManagers(
     } else {
       steps.push(`⚠️ no "${CASE_MANAGER_FIELD}" field on this account — the name was not written`);
     }
-    // 🔴 WHAT WE ADDED, NOT WHAT THE MAP SAYS. These differ in exactly one
-    // case, and storing `want` here would have let rule B be broken through the
-    // back door:
-    //
-    //   a human adds Carla as a co-rep on Ern's case
-    //   Ern's mapping later GAINS Carla   → `added` excludes her (already
-    //                                       following), so we added nothing …
-    //                                     → but `want` would record her as OURS
-    //   Ern's mapping later DROPS Carla   → 🔴 we remove a follower a human added
-    //
-    // `removed` reads this field and nothing else, so a name that reaches it
-    // wrongly becomes a removal we are not entitled to make — one run later,
-    // when the evidence is gone. The live follower list is never consulted for
-    // removal; that is the whole of rule B, and this is the only line that can
-    // put a name in front of it.
-    //
-    // ⚠️ `mine` IS KEPT, NOT JUST `added`. Somebody already ours and still
-    // wanted appears in neither `added` (they are following) nor `removed`
-    // (still in `want`) — dropping them would disown a manager we really did
-    // add, and the next mapping change would leave them following forever.
-    // 🔴 A 200 IS NOT A SUCCESS. Read back and check the managers are actually
-    // following before this reports itself done.
-    //
-    // ═══ ROUND 151 — AND IT NOW RUNS BEFORE THE RECORD WRITE ═══════════════
-    //
-    // 🔴 THE ORDER WAS THE BUG, AND IT IS A PERMANENT LEAK ON A 200. The record
-    // below is the ONLY thing rule B consults when deciding whom it may remove.
-    // Written before the read-back, a silently refused REMOVE dropped the name
-    // from it while the person was still following — so we disowned a follower
-    // this function had added, and no later run could ever take them off. One
-    // success response, one follower on a case for ever.
-    //
-    // ⚠️ THAT IS WHY THE REMOVE ECHO IS NOT ASSERTED and does not need to be.
-    // The ordering closes it whatever the DELETE answers: a removal that did
-    // not take leaves the name in `lingering`, which is kept in the record and
-    // stays removable next time.
+
     let missing: string[] = [];
     let lingering: string[] = [];
     let verified: Set<string> | null = null;
@@ -6575,39 +4216,11 @@ export async function applyCaseManagers(
       }
     }
 
-    // ⚠️ `lingering` IS ADDED BACK, NOT DROPPED. `want` excludes anyone we just
-    // removed, so the plain filter would disown a removal that did not take.
-    // And the whole set is then narrowed to who is ACTUALLY following, so an
-    // add that did not land is never recorded as ours.
     const claimed = new Set([
       ...want.filter((u) => added.includes(u) || mine.includes(u)),
       ...lingering,
     ]);
-    // ═══ ROUND 156 — THE READ-BACK NO LONGER NARROWS THIS ════════════════════
-    //
-    // 🔴 IT WAS `[...claimed].filter((u) => verified.has(u))` AND THAT WAS A
-    // TRAP OF MY OWN MAKING. GoHighLevel applies some writes asynchronously —
-    // 17 of 27 permission writes read back UNCHANGED one second after a 200 and
-    // all 27 were correct minutes later. If a follower read-back is stale the
-    // same way, `verified` is the PRE-write set, the narrowing drops both
-    // managers, and the record is written EMPTY while they are really
-    // following. Rule B then has no name to remove and they follow the case for
-    // ever — the exact permanent leak round 151 existed to close, re-entering
-    // through 151's own fix.
-    //
-    // ⚠️ THE ASYMMETRY IS WHAT MAKES THIS SAFE, AND IT IS WHY ONLY HALF WENT.
-    // `lingering` stays: it can only ADD a name to the record. A stale read
-    // after a removal shows the person still present, so we keep them, and if
-    // the removal really did land the next run finds them absent from `current`
-    // and the record cleans itself. Self-correcting, and it errs towards
-    // keeping a name we are entitled to remove. The narrowing erred the other
-    // way — towards dropping a name we could then never remove.
-    //
-    // 🔴 THE PRICE IS SMALL AND WORTH NAMING: an add that GoHighLevel really
-    // did refuse now gets recorded as ours. Rule B only ever REMOVES what this
-    // field names, and removing somebody who is not following is a no-op, so
-    // the cost is one wasted name in a field. The cost of the other direction
-    // was a follower nobody can take off.
+
     const nowOurs = [...claimed];
     if (recordDef) {
       await putOpportunityVerified(
@@ -6625,11 +4238,7 @@ export async function applyCaseManagers(
       mismatch: missing.length || lingering.length ? { missing, lingering } : null,
     });
   } catch (e) {
-    // ⚠️ THE DETAIL, NOT JUST THE MESSAGE. A GhlError's `message` is the one
-    // line ("GoHighLevel stored no followers."); everything actionable — which
-    // setting did this and where to change it — is in `detail`. Round 151's
-    // follower assertion throws exactly that error, and dropping the detail
-    // here would have thrown away the sentence it took an hour to learn.
+
     const why =
       e instanceof GhlError ? e.detail || e.message : e instanceof Error ? e.message : String(e);
     // eslint-disable-next-line no-console
@@ -6639,22 +4248,11 @@ export async function applyCaseManagers(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Resources upload (Task 1) — multipart to the GHL Media Library.
-// Server-only; the token never leaves this module. `parentId` targets the
-// OLTL Resources folder so uploads don't pollute the media root. NOTE: some
-// GHL tenants ignore parentId on upload and drop the file at root — the
-// probe (scripts/resources-upload-probe.mjs) verifies this live. If it lands
-// at root, listResources() (which filters by parentId) simply won't show it.
-// ---------------------------------------------------------------------------
 export async function uploadResource(file: {
   buffer: ArrayBuffer;
   filename: string;
   contentType: string;
-  // ITEM 6c — WHICH folder. With several visible folders "upload" alone is
-  // ambiguous, and defaulting to the env folder would quietly file a document in
-  // a folder the uploader wasn't looking at. When a folder is named, the env var
-  // is not required at all — that is why requireEnv is called conditionally.
+
   folderId?: string;
 }): Promise<{ id: string; url: string; name: string }> {
   const target = (file.folderId || "").trim();
@@ -6664,16 +4262,14 @@ export async function uploadResource(file: {
   const blob = new Blob([file.buffer], {
     type: file.contentType || "application/octet-stream",
   });
-  // GHL /medias/upload-file form fields.
+
   form.append("file", blob, file.filename);
   form.append("hosted", "false");
   form.append("name", file.filename);
   form.append("parentId", parentId);
 
   const url = `${BASE_URL}/medias/upload-file`;
-  // IMPORTANT: do NOT set Content-Type here — fetch derives the multipart
-  // boundary from the FormData automatically. `headers()` only sets auth +
-  // Version + Accept, which is exactly what we want.
+
   let res: Response;
   try {
     res = await fetch(url, { method: "POST", headers: headers(), body: form });
@@ -6689,7 +4285,7 @@ export async function uploadResource(file: {
     try {
       detail = ghlMessage(await res.text());
     } catch {
-      /* ignore */
+
     }
     if (res.status === 401)
       detail = `${detail} (The PIT likely needs the medias/media WRITE scope — add it to the Private Integration.)`;
@@ -6713,33 +4309,16 @@ export async function uploadResource(file: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Associations / relations (Task 4) — caregiver <-> client links.
-// The many-to-many association id is fixed for this tenant. Endpoint shapes
-// follow GHL v2; the probe (scripts/associations-probe.mjs) confirms the exact
-// query params + delete shape live. Every helper surfaces a clear GhlError so a
-// PIT that lacks associations access fails loudly, not silently.
-// ---------------------------------------------------------------------------
-// The caregiver_client association id is account-specific and is now read +
-// guarded via requireEnv({ caregiverAssociation: true }) at each point of use,
-// so it fails loudly when unset (no module-level const / stale fallback).
-
 export interface CaregiverRelation {
-  relationId: string; // used to DELETE the link
-  contactId: string; // the OTHER contact in the relation
+  relationId: string;
+  contactId: string;
   name: string;
-  // Which side the other contact is on. THE ASSOCIATION IS DIRECTIONAL and the
-  // dashboard used to ignore that: it took "whichever side isn't me" and called
-  // it a caregiver, so on a CAREGIVER's record their clients were listed under
-  // "Caregivers".
+
   role: "caregiver" | "client";
 }
 
-// What the association definition says about each slot. Read LIVE from GHL
-// rather than hardcoded, because the labels are the authority on direction and
-// this is exactly the thing that was assumed and got wrong.
 export interface AssociationDirection {
-  firstIsCaregiver: boolean; // firstRecordId holds the caregiver
+  firstIsCaregiver: boolean;
   firstLabel: string;
   secondLabel: string;
 }
@@ -6774,21 +4353,6 @@ const contactDisplay = (c: RawContact): string =>
   c.email?.toString().trim() ||
   "Unnamed contact";
 
-// ---------------------------------------------------------------------------
-// DIRECTION. The association definition names each slot:
-//
-//   firstObjectLabel  "Caregiver"   -> firstRecordId  is the caregiver
-//   secondObjectLabel "Client"      -> secondRecordId is the client
-//
-// so which side you are on decides what the OTHER side is:
-//
-//   this record is firstRecordId   -> the other side is a CLIENT
-//   this record is secondRecordId  -> the other side is a CAREGIVER
-//
-// The labels are read live from GHL, not hardcoded, because a hardcoded guess
-// about direction is precisely what produced the bug. Cached per warm lambda;
-// a failed read is never cached.
-// ---------------------------------------------------------------------------
 let _assocDir: AssociationDirection | undefined;
 
 export async function getAssociationDirection(): Promise<AssociationDirection> {
@@ -6813,8 +4377,7 @@ export async function getAssociationDirection(): Promise<AssociationDirection> {
     );
     return { firstIsCaregiver: true, firstLabel: "Caregiver", secondLabel: "Client" };
   }
-  // Decide from the labels themselves. If neither says "caregiver" we keep the
-  // documented order rather than inventing one, and say so.
+
   const firstIsCaregiver = /caregiver/i.test(first)
     ? true
     : /caregiver/i.test(second)
@@ -6833,20 +4396,13 @@ export async function getAssociationDirection(): Promise<AssociationDirection> {
   return _assocDir;
 }
 
-// Every caregiver_client relation this contact is part of, with the direction
-// resolved. Works from EITHER side: pass a client and you get their caregivers,
-// pass a caregiver and you get their clients.
 export async function listCaregiverRelations(
   contactId: string,
 ): Promise<CaregiverRelation[]> {
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
   });
-  // GHL "get relations by record": the record id goes in the PATH, and the only
-  // accepted query params are locationId + skip + limit (both required). Passing
-  // recordId/associationId as query props returns 422 ("property should not
-  // exist"). The endpoint returns ALL of the record's relations across every
-  // association, so we filter to the caregiver_client association in code.
+
   const params = new URLSearchParams({
     locationId,
     skip: "0",
@@ -6866,7 +4422,7 @@ export async function listCaregiverRelations(
     const other = isFirst
       ? String(r.secondRecordId ?? "")
       : String(r.firstRecordId ?? "");
-    // I am in the caregiver slot  -> the other side is a client, and vice versa.
+
     const iAmCaregiver = isFirst === dir.firstIsCaregiver;
     return {
       relationId: rid,
@@ -6875,7 +4431,6 @@ export async function listCaregiverRelations(
     };
   });
 
-  // Resolve names (best-effort; a failed lookup still shows the id).
   const out: CaregiverRelation[] = [];
   for (const c of sides) {
     if (!c.contactId) continue;
@@ -6886,16 +4441,13 @@ export async function listCaregiverRelations(
       );
       if (cd.contact) name = contactDisplay(cd.contact);
     } catch {
-      /* keep id as name */
+
     }
     out.push({ ...c, name });
   }
   return out;
 }
 
-// Counts only, for the list/board badges. No contact lookups — the badge needs a
-// number, not names, and resolving names here would multiply the request count
-// by the number of relations.
 export async function countCaregiverRelations(
   contactId: string,
 ): Promise<{ caregivers: number; clients: number }> {
@@ -6918,52 +4470,13 @@ export async function countCaregiverRelations(
   return { caregivers, clients };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 171 · ITEM 1 — THE OTHER SIDE OF THE PICKER, AND IT IS NOT A RECORD
-// TYPE.
-//
-// 🔴 ON A CAREGIVER'S RECORD THE HEADING SAID "Clients" AND THE SEARCH RETURNED
-// CAREGIVERS. Reported in round 170 and unfixed then because the value that
-// identifies a client was unprobed. It is probed now and the answer is that
-// THERE IS NO SUCH VALUE: of 120 contacts holding a client case, 118 carry no
-// Record Type, two say "Caregiver", and NOT ONE says "Client". No path in this
-// codebase has ever written it — Add Lead writes no Record Type at all — so a
-// filter on Record Type = "Client" would return nobody, forever.
-//
-// ✅ SO THE TEST IS THE THING THAT ACTUALLY MAKES SOMEBODY A CLIENT: they hold
-// a case in a client pipeline. That is a fact the account maintains by itself,
-// it cannot be wrong, and nothing has to be backfilled for it to start working.
-//
-// 🔴 AND NOTHING HERE WRITES "Client" ONTO ANYBODY. The owner's instruction is
-// explicit — "Don't set or backfill Client" — and the reason is item 3's: a
-// Record Type written to make a list work removes that person from whichever
-// list their real one feeds.
-//
-// ⚠️ CACHED FOR A MINUTE, BECAUSE THIS IS A TYPEAHEAD. The sweep is ~8-13
-// searches (one per client pipeline, per page); paying that per keystroke
-// against a 100-per-10s budget is how round 152 produced 13,851 timeouts. One
-// sweep per warm instance per minute, shared by every keystroke in it.
-//
-// ⚠️ AND A MINUTE IS NOT A COMPROMISE HERE. GoHighLevel's own search takes just
-// over a minute to show a contact created moments ago (owner, 1 October), so a
-// fresher cache would not produce a fresher answer.
-// ═══════════════════════════════════════════════════════════════════════════
 const CLIENT_CASE_TTL_MS = 60_000;
 let clientCaseCache: { at: number; rows: OpportunityRecord[] } | null = null;
 
-/** Visible to proofs; never called in production. */
 export function resetClientCaseCache(): void {
   clientCaseCache = null;
 }
 
-/**
- * Every case in every client-scoped pipeline, for the Clients picker.
- *
- * 🔴 RETURNS THE RECORDS, NOT A PICKER LIST. The access filter belongs to the
- * route — it is the only layer that knows who is asking — and indexing belongs
- * to lib/peopleSearch.ts, which is pure and provable without a server. This
- * function is the transport and the cache, and nothing else.
- */
 export async function getClientCaseRows(): Promise<OpportunityRecord[]> {
   const now = Date.now();
   if (clientCaseCache && now - clientCaseCache.at < CLIENT_CASE_TTL_MS)
@@ -6973,51 +4486,6 @@ export async function getClientCaseRows(): Promise<OpportunityRecord[]> {
   return records;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 172 — THE CAREGIVERS PICKER, DELIBERATELY.
-//
-// 🔴 WHAT WAS WRONG, AND IT WAS WORSE THAN "the filter is loose".
-//
-//   1. THE FALLBACK SHOWED EVERYONE. The old body ended
-//        const list = filtered.length ? filtered : contacts;
-//      so when NO hit carried "Caregiver" the picker returned every match —
-//      clients included. With 118 of 120 client contacts carrying no Record
-//      Type at all (probed 1 October), that branch was the common one: typing
-//      a client's name returned that client, under a "Caregivers" heading, on
-//      a control whose entire job is to pick a caregiver.
-//
-//   2. THE TEST SCANNED EVERY CUSTOM FIELD.
-//        if (String(f?.value).toLowerCase() === "caregiver") return true;
-//      — any field whose value happened to read "Caregiver" passed. Attendee
-//      Profile is free text and "Caregiver" is an obvious thing to type in it.
-//
-//   3. SO THE RULE IN FORCE DEPENDED ON THE OTHER HITS. Two searches, two
-//      different behaviours, decided by whether somebody unrelated in the same
-//      response happened to be tagged. That is not a loose filter; it is no
-//      filter, intermittently.
-//
-// ✅ ROLES FROM FACTS, AS IN ROUND 171. A caregiver is somebody who
-//
-//      carries Record Type = "Caregiver"      — the label, read exactly, on
-//                                               the Record Type FIELD only
-//   OR holds a case in a caregiver-scoped pipeline
-//
-// and the second half is what makes the first half safe to tighten: an
-// applicant whose Record Type was never set is still found, by the case that
-// made them an applicant.
-//
-// 🔴 AND WHEN NOBODY MATCHES, NOBODY IS SHOWN. "No caregiver matches" is a
-// true sentence. A list of other people is not a lesser answer to the same
-// question — it is a confident answer to a different one, and it is the shape
-// that puts a client in a caregiver slot.
-//
-// ⚠️ ZERO REQUESTS PER KEYSTROKE. Both halves are cached lists and the match
-// runs in memory. The old version spent one `/contacts/search` per keystroke
-// against a 100-per-10-second budget; this spends none, and a cold instance
-// pays one paged search plus the caregiver board.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** The field and the value, named once — and the field is read BY NAME. */
 const CAREGIVER_RECORD_TYPE_FIELD = "Record Type";
 const CAREGIVER_RECORD_TYPE = "Caregiver";
 
@@ -7025,21 +4493,12 @@ const CAREGIVER_CASE_TTL_MS = 60_000;
 let caregiverCaseCache: { at: number; rows: OpportunityRecord[] } | null = null;
 let caregiverLabelCache: { at: number; rows: ContactByField[] } | null = null;
 
-/**
- * Visible to proofs; never called in production.
- *
- * ⚠️ IT DROPS THE FIELD DEFINITIONS TOO. The label half resolves "Record Type"
- * through `getEditableFieldDefs`, which is memoised for the life of the
- * process — so a proof that changes which fields the account has and only
- * clears the two caches here would be testing yesterday's definitions.
- */
 export function resetCaregiverPickerCache(): void {
   caregiverCaseCache = null;
   caregiverLabelCache = null;
   bustFieldCaches();
 }
 
-/** Every case in every caregiver-scoped pipeline. Cached, like the client side. */
 export async function getCaregiverCaseRows(): Promise<OpportunityRecord[]> {
   const now = Date.now();
   if (caregiverCaseCache && now - caregiverCaseCache.at < CAREGIVER_CASE_TTL_MS)
@@ -7049,14 +4508,6 @@ export async function getCaregiverCaseRows(): Promise<OpportunityRecord[]> {
   return records;
 }
 
-/**
- * Contacts whose **Record Type field** is exactly "Caregiver".
- *
- * 🔴 BY FIELD ID, NOT BY SCANNING VALUES. The field is resolved by NAME from
- * the account's own definitions, and only that field is read. `cfHasValue`
- * inside `ghlSearchContacts` then re-checks the value in code, so a filter
- * GoHighLevel ignores cannot pass itself off as a caregiver list.
- */
 async function caregiversByLabel(): Promise<ContactByField[]> {
   const now = Date.now();
   if (caregiverLabelCache && now - caregiverLabelCache.at < CAREGIVER_CASE_TTL_MS)
@@ -7077,52 +4528,19 @@ async function caregiversByLabel(): Promise<ContactByField[]> {
 export interface CaregiverHit {
   id: string;
   name: string;
-  /** Their applicant pipeline, or "" when they are known only by their label. */
+
   pipelineName: string;
   stage: string;
-  /** Applicant cases beyond the one shown. */
+
   more: number;
 }
 
 export interface CaregiverSearchResult {
   results: CaregiverHit[];
-  /**
-   * ⚠️ TRUE WHEN THE LABEL HALF COULD NOT BE READ. The case half still works,
-   * so the picker is narrower rather than broken — and the empty state has to
-   * be able to say which, or "no caregiver matches" would be a claim nobody
-   * checked. Round 155's rule, on this control.
-   */
+
   labelsUnavailable: boolean;
 }
 
-/**
- * The picker.
- *
- * 🔴 NO ACCESS FILTER HERE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
- *
- * The Clients picker on a caregiver's record IS scoped to the viewer's
- * pipeline grants (round 171), and the asymmetry is deliberate:
- *
- *   a CLIENT is somebody receiving care. Who may see them is the question the
- *     whole access map exists to answer, and a recruiter holding no client
- *     pipeline has no business reading a list of client names.
- *
- *   a CAREGIVER is staff. 🔴 REPS LINK CAREGIVERS THEY DO NOT RECRUIT — that
- *     is the normal case, not the edge one: the person staffing a case and the
- *     person who hired the caregiver are different people in different
- *     divisions. Scoping this list to the viewer's own applicant pipelines
- *     would leave a Private Pay rep unable to attach the caregiver actually
- *     doing the work, and they would create a duplicate contact instead.
- *
- * ⚠️ SO THE PROTECTION IS THE FIELDS, NOT THE ROWS. Name, applicant pipeline
- * and stage, and nothing else: no phone, no email, no compliance or health
- * detail. Those are withheld from the PAYLOAD and not merely from the screen
- * — round 155 settled that hiding a value in the component leaves it in the
- * response for anyone reading the network tab.
- *
- * ⚠️ AND IT IS STILL GATED. The route requires edit rights on the record the
- * picker was opened from, which is what stops it being a contact dump.
- */
 export async function searchCaregiverContacts(
   query: string,
 ): Promise<CaregiverSearchResult> {
@@ -7134,9 +4552,7 @@ export async function searchCaregiverContacts(
   try {
     labels = await caregiversByLabel();
   } catch {
-    // 🔴 NARROWER, NOT SILENT. The case half still answers; the caller is told
-    // the label half did not, so an empty picker cannot be reported as "nobody
-    // matches" when the truth is "half the question went unasked".
+
     labelsUnavailable = true;
   }
 
@@ -7153,8 +4569,7 @@ export async function searchCaregiverContacts(
     })),
   );
   const byId = new Map(holders.map((h) => [h.contactId, h]));
-  // A labelled caregiver with no case is still a caregiver — and has no
-  // pipeline or stage to show, which is the honest rendering of that.
+
   for (const l of labels)
     if (!byId.has(l.id))
       byId.set(l.id, { contactId: l.id, name: l.name, pipelineName: "", stage: "", more: 0 });
@@ -7173,51 +4588,14 @@ export async function searchCaregiverContacts(
 }
 
 export async function createCaregiverRelation(
-  /**
-   * 🔴 ROUND 170 — NAMED ARGUMENTS, BECAUSE THE POSITIONAL ONES WERE A LIE FROM
-   * ONE SIDE. This took `(clientContactId, caregiverContactId)` and every
-   * caller passed `(the open record's own contact, the picked contact)` — true
-   * on a CLIENT's panel and false on a caregiver's, where the open record is
-   * the caregiver. A parameter whose name is right half the time is how the
-   * slot order went unresolved for forty rounds: reading the signature told you
-   * the wrong thing and reading the caller told you nothing.
-   *
-   * The caller now has to say which is which, and the compiler asks.
-   */
+
   roles: { clientContactId: string; caregiverContactId: string },
 ): Promise<string> {
   const { clientContactId, caregiverContactId } = roles;
   const { locationId, caregiverAssociationId } = requireEnv({
     caregiverAssociation: true,
   });
-  // ═══ 🔴 ROUND 170 — SLOT ORDER IS RESOLVED, BY A LIVE WRITE ═══════════════
-  //
-  // The comment that stood here said the order was unresolved and named the two
-  // explanations that demanded opposite fixes:
-  //
-  //   (a) GoHighLevel normalises the slots on create;
-  //   (b) the one relation that read correctly had been made from the
-  //       CAREGIVER's record, so the roles were reversed by the user's action
-  //       and landed right by accident.
-  //
-  // 🔴 IT IS (b). Live: an applicant linked to a client FROM THE CLIENT'S
-  // PANEL, then /api/relations/counts for that client answered
-  // `{"caregivers":0,"clients":1}` — the client is in the CAREGIVER slot and
-  // the caregiver is in the client slot. GoHighLevel does not normalise
-  // anything; it stores exactly the order it is given.
-  //
-  // ⚠️ AND THE OLD COMMENT WAS RIGHT TO REFUSE THE FLIP. Report 29 changed this
-  // by reading one function; the evidence then available genuinely did not
-  // choose between (a) and (b), and guessing would have inverted the only
-  // relation that read correctly. What was missing was one write, which is now
-  // made.
-  //
-  // 🔴 AND IT IS PLACED BY `getAssociationDirection`, NOT BY A HARDCODED ORDER.
-  // That is the same function `countCaregiverRelations` reads to decide which
-  // slot means what, so the writer and the reader cannot disagree — which is
-  // the only thing that makes the round-29 flip-flop impossible to repeat. A
-  // literal `firstRecordId: caregiver…` here would be correct today and silent
-  // the day somebody re-creates the association with its labels the other way.
+
   const dir = await getAssociationDirection();
   const body = {
     locationId,
@@ -7233,25 +4611,6 @@ export async function createCaregiverRelation(
   return String(res.relation?.id ?? res.id ?? "");
 }
 
-// ---------------------------------------------------------------------------
-// Contact tags.
-//
-// Tags live on the CONTACT — opportunities don't carry them in GoHighLevel — so
-// this is contact-scoped by necessity, not by choice. That has one consequence
-// worth stating plainly: a contact with several opportunities gets one tag for
-// all of them, and the tag cannot say WHICH case moved. It answers "has this
-// person been transferred to ODP", not "which of their three cases went there".
-// The note and the Transferred From / Transferred Date fields remain the
-// per-record history; the tag is the GHL-side handle for smart lists and
-// workflows, which is exactly what it is for.
-//
-// GoHighLevel lowercases tags on its side regardless, so they are normalised
-// here too — otherwise the same tag looks like two different strings in our own
-// logs and comparisons.
-// ---------------------------------------------------------------------------
-// ONE implementation, in lib/batchTag.ts — the import wizard has to normalise
-// on the client to show what it will actually write, and this module is
-// server-only. Re-exported so every existing caller here is unchanged.
 export { normalizeTag };
 
 export async function addContactTags(
@@ -7268,16 +4627,6 @@ export async function addContactTags(
   return res.tags ?? clean;
 }
 
-/**
- * Every tag defined on the location, for the import wizard's suggestions.
- *
- * ⚠️ SUGGEST, NEVER RESTRICT. This exists so nobody types "google ads" beside an
- * existing "google-ads" — it is not a vocabulary. A brand-new tag is the normal
- * case and must stay one keystroke away.
- *
- * ⚠️ It says nothing about which tags fire workflows. The API does not expose
- * that; the deny-list in lib/batchTag.ts does that job.
- */
 export async function getLocationTags(): Promise<string[]> {
   const { locationId } = requireEnv();
   const data = await ghlGet<{ tags?: { name?: unknown }[] }>(
@@ -7289,7 +4638,6 @@ export async function getLocationTags(): Promise<string[]> {
   return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
-// Fetch a contact's display name + email (for email recipients).
 export async function getContactBrief(
   contactId: string,
 ): Promise<{ id: string; name: string; email: string }> {
@@ -7304,25 +4652,17 @@ export async function getContactBrief(
   };
 }
 
-// The Version header the email endpoints want. GHL's outbound-message +
-// templates endpoints are documented against 2021-04-15 (different from the
-// 2021-07-28 the rest of the v2 API uses). Overridable per tenant without a code
-// change; the probe confirms which this location accepts.
 const EMAIL_API_VERSION = (
   process.env.GHL_EMAIL_API_VERSION || "2021-04-15"
 ).trim();
 
-// A verified sending address is required by GHL for outbound email; it must
-// belong to the authenticated sub-account domain. Set once the domain is
-// authenticated (Jack/DNS). When blank we omit it and let GHL use the
-// sub-account default.
 const EMAIL_FROM = (process.env.GHL_EMAIL_FROM || "").trim();
 
 export interface EmailTemplateLite {
   id: string;
   name: string;
   subject: string;
-  body: string; // HTML (GHL email-builder output) or plain text
+  body: string;
 }
 
 interface RawTemplate {
@@ -7338,9 +4678,6 @@ interface RawTemplate {
   [key: string]: unknown;
 }
 
-// Step 1 — pull the sub-account's EMAIL templates from GHL so Jack's team can
-// manage them in the native builder (no code change to add/edit). Shape varies
-// across tenants; normalize permissively. Uses the email Version header.
 export async function listEmailTemplates(): Promise<EmailTemplateLite[]> {
   const { locationId } = requireEnv();
   const params = new URLSearchParams({
@@ -7370,7 +4707,7 @@ export async function listEmailTemplates(): Promise<EmailTemplateLite[]> {
     try {
       detail = ghlMessage(await res.text());
     } catch {
-      /* ignore */
+
     }
     if (res.status === 401)
       detail = `${detail} (The PIT likely needs the templates READ scope.)`;
@@ -7395,29 +4732,23 @@ export async function listEmailTemplates(): Promise<EmailTemplateLite[]> {
     .filter((t) => t.id);
 }
 
-// Task 5 — send an email to a contact via the Conversations outbound endpoint.
-// Option B (default): send the composer's edited HTML as `emailBody`. Option A:
-// pass `templateId` to let GHL render a template directly. Confirm shape with
-// scripts/email-templates-probe.mjs. NOTE: deliverability depends on the sending
-// domain being authenticated + a verified emailFrom — until then messages may
-// land in spam even on a 2xx here.
 export async function sendEmail(args: {
   contactId: string;
   subject: string;
-  html?: string; // Option B — rendered/edited HTML body
-  templateId?: string; // Option A — send by GHL template id
+  html?: string;
+  templateId?: string;
   cc?: string[];
 }): Promise<string> {
   const body: Record<string, unknown> = {
     type: "Email",
     contactId: args.contactId,
     emailSubject: args.subject,
-    subject: args.subject, // harmless duplicate for tenants reading `subject`
+    subject: args.subject,
   };
   if (args.templateId) body.templateId = args.templateId;
   if (args.html) {
     body.emailBody = args.html;
-    body.html = args.html; // duplicate for tenants reading `html`
+    body.html = args.html;
   }
   if (EMAIL_FROM) body.emailFrom = EMAIL_FROM;
   if (args.cc?.length) body.emailCc = args.cc;
@@ -7443,7 +4774,7 @@ export async function sendEmail(args: {
     try {
       detail = ghlMessage(await res.text());
     } catch {
-      /* ignore */
+
     }
     throw new GhlError(
       `GoHighLevel returned ${res.status} for POST /conversations/messages/outbound.`,
@@ -7463,96 +4794,29 @@ export async function deleteCaregiverRelation(
   relationId: string,
 ): Promise<void> {
   const { locationId } = requireEnv();
-  // ITEM 1 — through ghlDelete. ⚠️ `goneOk`: a relation that is already gone is
-  // the state the caller wants. This one runs during a transfer, where failing
-  // on an already-removed link would strand the record mid-move.
+
   await ghlDelete(
     `/associations/relations/${encodeURIComponent(relationId)}?locationId=${encodeURIComponent(locationId)}`,
     { what: "the association", goneOk: /\bnot found\b|\bdoes ?n[o']?t exist\b|\bis deleted\b/i },
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════════
-// ITEM 3 — CONTACT CUSTOM FIELDS
-//
-// The caregiver field block (Application 18 / Compliance 16 / Availability 6)
-// and the client's Client Care Needs (25) all live on the CONTACT, not the
-// opportunity. These are the read and write halves; the definitions come from
-// getEditableFieldDefs("contact").
-//
-// ⚠️ A CONTACT CAN HOLD SEVERAL OPPORTUNITIES. Writing one of these changes it
-// for every one of them. That is correct — the value describes the PERSON, not
-// the case — but it is why the read below also returns how many opportunities
-// the contact has, so the panel can say so instead of implying case scope.
-// ═════════════════════════════════════════════════════════════════════════
-
 export interface ContactFieldsRead {
   contactId: string;
-  /** fieldId -> raw stored value. Codes, never labels — see the note below. */
+
   values: Record<string, unknown>;
-  /**
-   * 🔴 GHL's `dateUpdated` — CONTACTS DO NOT HAVE `updatedAt` AT ALL.
-   *
-   * VERIFIED LIVE: `"dateUpdated": "2026-09-01T14:39:06.979Z"`, with no
-   * `updatedAt` key in the response. Opportunities are the other way round
-   * (normalizeOpportunity reads `updatedAt` first), so a guard written against
-   * the opportunity spelling finds NOTHING on a contact — and `isStale()`
-   * treats a missing stored version as "go ahead". The concurrency check would
-   * then silently no-op: precisely the failure it exists to prevent, with no
-   * error to notice. Read `dateUpdated` FIRST and keep it that way.
-   */
+
   version: string;
-  /**
-   * 🔴 ROUND 131 — THE PERSON'S OWN NAME, read back so a rename can be CHECKED.
-   *
-   * ⚠️ NATIVE, NOT A CUSTOM FIELD. It is not in `values` and never will be:
-   * `values` is keyed by custom-field id, and these two have no id. Anything
-   * that tries to save them through the custom-field path is writing to a field
-   * that does not exist — a 200 and nothing stored.
-   */
+
   firstName: string;
   lastName: string;
-  /**
-   * 🔴 ROUND 150 — THE CONTACT'S OWNER, AND IT IS THE WEBHOOK'S WHOLE INPUT.
-   *
-   * GoHighLevel's workflow webhook carries `user { firstName, lastName, email }`
-   * and `owner` as a display string — NO USER ID ANYWHERE, confirmed across
-   * three payloads from two workflows and three pipelines. So the handler has
-   * to resolve the owner itself, and this is it.
-   *
-   * ⚠️ THE CONTACT'S, NOT THE OPPORTUNITY'S. The Assign step in those workflows
-   * writes the CONTACT owner and leaves the opportunity unassigned — proven on
-   * a live record, not inferred. A handler reading the opportunity finds nothing
-   * on every form-created lead, which is the common case.
-   *
-   * ⚠️ IT COSTS NOTHING EXTRA: this function already GETs the whole contact.
-   */
+
   assignedTo: string;
-  /**
-   * 🔴 ROUND 133 — THE TWO FIELDS THAT DECIDE WHETHER A PERSON CAN EXIST AT ALL.
-   *
-   * GoHighLevel will not create a contact without one of them: `/contacts/upsert`
-   * answers 400 "Pass at least one of number, email query parameter". A
-   * cross-account transfer recreates the person first, so a contact with neither
-   * cannot be transferred — and that is knowable before anybody clicks.
-   *
-   * ⚠️ READ FROM THE CONTACT, NOT FROM THE OPPORTUNITY'S EMBEDDED COPY.
-   * `OpportunityRecord.contactEmail` comes from the opportunities SEARCH index,
-   * which lags. A refusal built on a stale copy would block the transfer of
-   * somebody whose email was added an hour ago.
-   */
+
   email: string;
   phone: string;
 }
 
-/**
- * Read a contact's custom-field values.
- *
- * ⚠️ VALUES ARE CODES, NOT LABELS — "PAID", "LIVE_IN", "DRIVE_CLIENTS". The
- * application form's routing conditions on these exact strings. Nothing here
- * transliterates, title-cases or trims them into something friendlier: a
- * display map belongs in the UI, and the stored value must stay the code.
- */
 export async function getContactCustomFields(
   contactId: string,
 ): Promise<ContactFieldsRead> {
@@ -7566,16 +4830,11 @@ export async function getContactCustomFields(
     for (const f of raw as Record<string, unknown>[]) {
       const id = String(f.id ?? f.customFieldId ?? "");
       if (!id) continue;
-      // ✅ `value` FIRST — that is what a CONTACT returns (verified live). The
-      // rest are tolerated fallbacks for field types seen to differ; do not
-      // reorder them to match the opportunity path.
+
       values[id] = f.value ?? f.field_value ?? f.fieldValue ?? f.selectedOptions ?? "";
     }
   }
-  // ⚠️ SPLIT `name` ONLY WHEN THERE IS NOTHING ELSE. A contact created from a
-  // single "name" column has no firstName/lastName, and an editor seeded from
-  // two empty boxes would blank the person on save. Splitting on the FIRST
-  // space matches `normalizeOpportunity`, so the panel and the board agree.
+
   const rc = c as Record<string, unknown>;
   let firstName = String(rc.firstName ?? "").trim();
   let lastName = String(rc.lastName ?? "").trim();
@@ -7596,7 +4855,6 @@ export async function getContactCustomFields(
   };
 }
 
-/** How many opportunities this contact holds — the scope the panel must state. */
 export async function countContactOpportunities(contactId: string): Promise<number> {
   const { locationId } = requireEnv();
   const params = new URLSearchParams({
@@ -7610,17 +4868,11 @@ export async function countContactOpportunities(contactId: string): Promise<numb
     );
     return res.meta?.total ?? (res.opportunities?.length || 0);
   } catch {
-    // Best-effort. The panel says "all of this person's records" rather than a
-    // number when this fails — never blocks the read.
+
     return 0;
   }
 }
 
-/**
- * Write custom-field values onto a contact.
- *
- * The value is sent AS GIVEN. See the codes-not-labels note above.
- */
 export async function updateContactCustomFields(
   contactId: string,
   entries: { id: string; value: unknown }[],
@@ -7629,51 +4881,17 @@ export async function updateContactCustomFields(
   await ghlSend(
     "PUT",
     `/contacts/${encodeURIComponent(contactId)}`,
-    // 🔴 `value`, NOT `field_value`. VERIFIED LIVE: contacts speak
-    // { id, value }; opportunities speak { id, field_value }. This originally
-    // sent the OPPORTUNITY spelling — the exact "assume the shapes match"
-    // mistake. The read side below was already `value`-first; the write was not.
-    //
-    // ✅ VERIFIED LIVE: a PARTIAL customFields array UPDATES, it does not
-    // replace. Writing one field left Record Type (and every other unlisted
-    // field) intact. So the panel sends ONLY the field that changed — no
-    // read-modify-write, and no risk of a stale read blanking a field someone
-    // else set in between.
+
     { customFields: entries.map((e) => ({ id: e.id, value: e.value })) },
   );
 }
 
-/**
- * 🔴 ROUND 131 — RENAME THE PERSON. NATIVE FIELDS, SO THE CUSTOM-FIELD PATH
- * DOES NOT APPLY AND MUST NOT BE REUSED.
- *
- * ⚠️ THIS IS THE `monetaryValue` LESSON IN ITS OTHER FORM. There, a native
- * field was missing from a parameter list and a spread hid it from TypeScript,
- * so the write compiled and dropped the value. Here the hazard is the same one
- * from the API's side: GoHighLevel answers 200 to a PUT carrying keys it does
- * not recognise. A typo'd key, a `customFields` wrapper, the wrong casing —
- * every one of them looks like a successful save and stores nothing.
- *
- * 🔴 SO THE CALLER MUST READ BACK AND COMPARE. This function writes; the route
- * re-reads the contact and refuses to report success unless the stored name is
- * the one that was sent.
- *
- * ⚠️ `name` IS SENT TOO, DELIBERATELY. GoHighLevel keeps a composed `name`
- * alongside the two parts, and several of its own surfaces (and our own
- * `contactDisplay`) prefer it. Writing only firstName/lastName would leave the
- * old spelling sitting in `name` — a rename that looks done here and is still
- * wrong everywhere else.
- */
 export async function updateContactNative(
   contactId: string,
   n: { firstName?: string; lastName?: string; email?: string; phone?: string },
 ): Promise<void> {
   const body: Record<string, unknown> = {};
 
-  // ── THE NAME PAIR ────────────────────────────────────────────────────────
-  // Sent together or not at all: `name` is composed from both, so writing one
-  // half from a patch that only carries the other would compose a name out of
-  // a value this call was never given.
   if (n.firstName !== undefined || n.lastName !== undefined) {
     const firstName = (n.firstName ?? "").trim();
     const lastName = (n.lastName ?? "").trim();
@@ -7683,13 +4901,6 @@ export async function updateContactNative(
     body.name = [firstName, lastName].filter(Boolean).join(" ");
   }
 
-  // ── ROUND 134 · HOW TO REACH THEM ────────────────────────────────────────
-  // ⚠️ `e164()` FOR THE PHONE, NOT A SECOND RULE WRITTEN HERE. lib/phone.ts is
-  // explicit that a second copy is a second rule that can drift, and it is
-  // already the rule the import wizard and the duplicate check use: a US
-  // 10- or 11-digit number becomes +1XXXXXXXXXX, and ANYTHING ELSE is written
-  // exactly as typed. A UK mobile or a number with an extension may be
-  // perfectly correct, and code does not get to decide otherwise.
   if (n.email !== undefined) body.email = n.email.trim();
   if (n.phone !== undefined) body.phone = n.phone.trim() ? e164(n.phone).value : "";
 
@@ -7697,62 +4908,18 @@ export async function updateContactNative(
   await ghlSend("PUT", `/contacts/${encodeURIComponent(contactId)}`, body);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 168 — THE RECORD FOOTER: CREATED, CREATED BY, UPDATED, RECORD ID.
-//
-// 🔴 `internalSource` IS ONLY ON THE SINGLE-RECORD ENDPOINT. The board is built
-// from `/opportunities/search`, which does not carry it — probed live on
-// William Yost (yNdWocl4xWXtIwwU5Nsr), where the single read returns
-// `{ type: "CREATED", source: "WORKFLOW_NEW", id: "cb82ab6e-…" }` and the
-// search returns nothing of the sort. So "Created by" cannot come from the
-// payload the panel already has, and that is why this exists.
-//
-// ⚠️ ONE READ, SERVING BOTH THE GATE AND THE FOOTER. The route has to check
-// `canSeeRecord`, which needs the mapped record (owner, followers, pipeline),
-// and the footer needs a field the mapper does not keep. Returning both from a
-// single GET is one request per panel open; calling `getOpportunityById` and
-// then reading again would be two for the same bytes.
-//
-// 🔴 AND `internalSource` IS NOT ADDED TO OpportunityRecord. That type is every
-// row of the board — several hundred of them — and a field that only exists on
-// a different endpoint would imply the board has it. The next person to read
-// `rec.internalSource` on a list record would get `undefined` and no
-// explanation. It stays out here, where its provenance is written down.
-// ═══════════════════════════════════════════════════════════════════════════
-
 export interface OppFooter {
   createdAt: string;
   updatedAt: string;
-  /** Raw, exactly as GoHighLevel sent it. Labelled on the client. */
+
   sourceType: string;
   sourceValue: string;
-  /** A GHL user id when a PERSON created the record, else "". */
+
   sourceUserId: string;
-  /**
-   * 🔴 ROUND 169 — `internalSource.id`, RAW, AND IT MEANS A DIFFERENT THING PER
-   * SOURCE. Round 168 discarded it, correctly, because the only sample was a
-   * WORKFLOW_NEW whose id is a uuid naming the WORKFLOW — reading it as a user
-   * would have credited a workflow to whoever happened to match.
-   *
-   * ⚠️ 280 LIVE CASES LATER IT IS WORTH CARRYING, AND ONLY ONE SOURCE MAY READ
-   * IT AS A PERSON:
-   *
-   *     WORKFLOW_NEW  182   uuid           the workflow
-   *     BULK_ACTION    74   20 characters  MAY be a user — looked up
-   *     INTEGRATION    24   24-hex         an app id, NEVER a person
-   *
-   * The label layer decides; this just stops throwing the value away.
-   */
+
   sourceId: string;
 }
 
-/**
- * The footer fields plus the record the access gate needs, from ONE GET.
- *
- * `null` when the record does not exist. `footer` is present whenever the
- * record is, with empty strings for anything GoHighLevel did not send — the
- * client renders nothing for an empty value and never guesses.
- */
 export async function getOpportunityWithFooter(
   id: string,
 ): Promise<{ rec: OpportunityRecord; footer: OppFooter } | null> {
@@ -7768,14 +4935,6 @@ export async function getOpportunityWithFooter(
   const opp = data.opportunity;
   if (!opp) return null;
 
-  // ⚠️ MAPPED BY THE SAME FUNCTION THE REST OF THE APP USES, FROM THE RESPONSE
-  // ABOVE. The first version of this called `getOpportunityById(id)` here —
-  // which does its OWN GET, burst-cached or not — so the comment above claiming
-  // one read was describing two. `normalizeOpportunity` is the mapper
-  // `getOpportunityByIdUncached` itself ends with, and every lookup it needs is
-  // memoised per warm lambda, so this adds no request. Re-deriving the owner
-  // and followers by hand would be a second mapper, and `canSeeRecord` would
-  // then be testing a shape nothing else produces.
   const selected = await getPipelines();
   const stageNameByKey = new Map<string, string>();
   const pipelineNameById = new Map<string, string>();
@@ -7796,11 +4955,7 @@ export async function getOpportunityWithFooter(
       updatedAt: String(opp.updatedAt ?? opp.dateUpdated ?? ""),
       sourceType: src ? String(src.type ?? "") : "",
       sourceValue: src ? String(src.source ?? "") : "",
-      // ⚠️ `id` ON internalSource IS NOT A USER ID on the one sample we have —
-      // it is a uuid, and the source was WORKFLOW_NEW, so it names the
-      // WORKFLOW. It is read as a user id ONLY from a `userId` key, which is
-      // the only key that could mean one. Guessing that a uuid is a person is
-      // how a workflow ends up credited to whoever happens to match.
+
       sourceUserId: src && src.userId ? String(src.userId) : "",
       sourceId: src && src.id ? String(src.id) : "",
     },

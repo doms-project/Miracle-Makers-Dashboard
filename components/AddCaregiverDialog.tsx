@@ -12,8 +12,6 @@ import {
   type CgDivision,
 } from "@/lib/caregiverIntake";
 
-// The same fixed vocabulary the import wizard writes. Free text is how one
-// channel ends up counted twice.
 const SOURCE_OPTIONS = [
   "Indeed",
   "Facebook",
@@ -23,19 +21,6 @@ const SOURCE_OPTIONS = [
   "Other",
 ];
 
-/**
- * 🔴 NOT AddClientDialog UNDER A DIFFERENT NAME.
- *
- * app/page.tsx:4168 has warned since round A3 that pointing a renamed button at
- * the client dialog would file an applicant as a client, "in a pipeline they may
- * not even be able to see" — and that a button doing the wrong thing is worse
- * than no button. This is the separate piece of work that comment was holding
- * the button for: its own route, its own pipeline set, its own field set.
- *
- * ⚠️ EIGHT FIELDS. A recruiter completes compliance and availability as the
- * applicant progresses — 58 fields at the moment of entry is a form nobody
- * finishes.
- */
 export default function AddCaregiverDialog({
   ssoBlob,
   pipelines,
@@ -43,16 +28,10 @@ export default function AddCaregiverDialog({
   onAdded,
 }: {
   ssoBlob: string | null;
-  /** Caregiver pipelines only — scope:"caregiver" from the stored config. */
+
   pipelines: { id: string; name: string }[];
   onClose: () => void;
-  /**
-   * ⚠️ THE PIPELINE IT LANDED IN, round 123. Recruiting is filtered by group,
-   * and the division routing here does not read that filter — so an add can
-   * legitimately land outside what the screen is showing. The caller needs the
-   * id to follow it; without one the record is simply absent and nothing says
-   * why. Undefined when nothing was created (contact-only / REJECTED).
-   */
+
   onAdded: (pipelineId?: string) => void;
 }) {
   const [firstName, setFirst] = useState("");
@@ -67,10 +46,6 @@ export default function AddCaregiverDialog({
   const [err, setErr] = useState<unknown>(null);
   const [done, setDone] = useState("");
 
-  // 🔴 DIVISION DRIVES THE PIPELINE, and the destination is shown before it is
-  // committed. Asking both would invite a contradiction the record cannot
-  // resolve: an applicant marked PRIVATE_PAY sitting in ODP DSP Applicant is
-  // either a mis-tick or a deliberate exception, and nothing says which.
   const routing = useMemo(
     () => (division ? pipelineForDivision(division, pipelines) : null),
     [division, pipelines],
@@ -80,8 +55,7 @@ export default function AddCaregiverDialog({
     !!(firstName.trim() || lastName.trim()) &&
     !!(email.trim() || phone.trim()) &&
     !!division &&
-    // OLTL_CHC with no pipeline is blocked; REJECTED is deliberately allowed,
-    // because a rejected applicant still has to exist as a contact.
+
     (division === "REJECTED" || !!routing?.pipelines.length) &&
     !busy;
 
@@ -122,9 +96,7 @@ export default function AddCaregiverDialog({
   };
 
   return (
-    // ⚠️ THE SAME MODAL CHROME AS AddClientDialog — .previewmodal / .movebox /
-    // .previewhead / .movebody. Two dialogs with different frames would read as
-    // two apps; this is one app with two kinds of record.
+
     <div className="previewmodal" onClick={onClose}>
       <div
         className="movebox addbox cgadd"
@@ -199,8 +171,6 @@ export default function AddCaregiverDialog({
             </select>
           </div>
 
-          {/* 🔴 THE CONSEQUENCE, BEFORE IT IS COMMITTED. The division is the
-              only thing asked; where it lands is shown, not asked again. */}
           {routing ? (
             routing.contactOnly ? (
               <div className="cgroute contactonly">
@@ -225,9 +195,7 @@ export default function AddCaregiverDialog({
                 </select>
               </div>
             ) : (
-              // 🔴 OLTL_CHC. Said plainly rather than filed somewhere plausible
-              // — putting them in PP or ODP would invent a routing decision
-              // nobody has made.
+
               <div className="cgroute none">
                 <b>No pipeline exists for {CG_DIVISION_LABELS[division as CgDivision]}.</b>{" "}
                 {routing.why}

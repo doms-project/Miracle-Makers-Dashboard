@@ -9,14 +9,6 @@ import type { ContactMatch, EditableFieldDef } from "@/lib/types";
 
 const norm = (s: string): string => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// ITEM 3 — the three "more details" fields are NOT free text in GHL:
-//   Office                 MULTIPLE_OPTIONS  (Northeast Philly, Lansdowne, …)
-//   County                 SINGLE_OPTIONS
-//   Referral Source Type   SINGLE_OPTIONS
-// They were rendered as <input> here, which lets staff type a value no filter,
-// no report and no GHL workflow can read. Each now renders from its REAL field
-// definition — checkboxes for the multi, a select for the singles — exactly as
-// the record panel does, with the options read live from GHL.
 const DETAIL_FIELDS = ["Office", "County", "Referral Source Type"];
 
 function DetailField({
@@ -67,8 +59,6 @@ function DetailField({
       </select>
     );
 
-  // No options came back from GHL — free text is the honest fallback, but say
-  // so rather than silently pretending this is a text field.
   return (
     <>
       <input
@@ -85,14 +75,6 @@ function DetailField({
   );
 }
 
-// ITEM 3 — Add Lead (the route and this file keep their `client` names; see
-// the header button in app/page.tsx for why).
-//
-// A MODAL, not a tab: it is an action you complete and leave, the same shape as
-// Move. A tab would imply somewhere to return to.
-//
-// Everything the rep is prevented from doing here is ALSO enforced in
-// /api/clients — the locking below is convenience, the route is the boundary.
 export default function AddClientDialog({
   pipelines,
   stagesByPipeline,
@@ -118,7 +100,7 @@ export default function AddClientDialog({
   onClose: () => void;
   onCreated: (opportunityId: string) => void;
 }) {
-  // A rep may only create into their OWN pipelines; an admin gets all five.
+
   const allowed = useMemo(() => {
     if (isAdmin) return pipelines;
     const home = new Set(homePipelineIds);
@@ -136,22 +118,17 @@ export default function AddClientDialog({
   const [oppName, setOppName] = useState("");
   const [oppNameTouched, setOppNameTouched] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  // Keyed by field id, because the values are now driven by the real field
-  // definitions rather than three hardcoded text inputs.
+
   const [details, setDetails] = useState<Record<string, string | string[]>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
 
-  // Duplicate handling — search as they type a phone or email.
   const [matches, setMatches] = useState<ContactMatch[]>([]);
   const [searching, setSearching] = useState(false);
   const [chosen, setChosen] = useState<ContactMatch | null>(null);
-  // Set once they explicitly say "create a new one", so the prompt stops
-  // reappearing on every keystroke.
+
   const [dismissed, setDismissed] = useState(false);
 
-  // The real definitions for Office / County / Referral Source Type, resolved
-  // by NAME from what GHL returned — no hardcoded field ids.
   const detailDefs = useMemo(
     () =>
       DETAIL_FIELDS.map((n) =>
@@ -164,7 +141,6 @@ export default function AddClientDialog({
   const destName = allowed.find((p) => p.id === pipelineId)?.name || "";
   const division = divisionLabel(destName);
 
-  // Stage defaults to UNCATEGORIZED whenever the pipeline changes.
   useEffect(() => {
     const uncat = destStages.find(
       (s) => s.name.trim().toLowerCase().replace(/[^a-z0-9]/g, "") === "uncategorized",
@@ -172,17 +148,13 @@ export default function AddClientDialog({
     setStageId(uncat?.id || destStages[0]?.id || "");
   }, [pipelineId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Case name defaults to the client's name — and keeps tracking it until the
-  // user types their own. Free text like "samole lang ni" is what made two
-  // different cases look identical before.
   const defaultOppName = `${first} ${last}`.trim();
   useEffect(() => {
     if (!oppNameTouched) setOppName(defaultOppName);
   }, [defaultOppName, oppNameTouched]);
 
-  // Debounced contact search on phone / email / name.
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Which search is current — see the sequence guard in the effect below. */
+
   const searchSeq = useRef(0);
   useEffect(() => {
     if (chosen || dismissed) return;
@@ -192,10 +164,7 @@ export default function AddClientDialog({
       return;
     }
     if (timer.current) clearTimeout(timer.current);
-    // ⚠️ THE DEBOUNCE CLEARS THE TIMER, NOT AN IN-FLIGHT REQUEST. Once the 400ms
-    // has elapsed the fetch is away, and a slower answer for "joh" could land
-    // after a faster one for "john" and put the wrong matches under the typed
-    // text. Same stale-response shape as the round-111 loaders, one screen over.
+
     const seq = ++searchSeq.current;
     const isCurrent = () => seq === searchSeq.current;
     timer.current = setTimeout(async () => {
@@ -211,7 +180,7 @@ export default function AddClientDialog({
         if (!isCurrent()) return;
         setMatches(res.ok ? j.matches || [] : []);
       } catch {
-        if (isCurrent()) setMatches([]); // a failed search never blocks creating a lead
+        if (isCurrent()) setMatches([]);
       } finally {
         if (isCurrent()) setSearching(false);
       }
@@ -221,7 +190,6 @@ export default function AddClientDialog({
     };
   }, [phone, email, defaultOppName, chosen, dismissed, ssoBlob]);
 
-  // Pipelines the CHOSEN contact already occupies — GHL would refuse these.
   const blockedPipelines = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of chosen?.pipelines || [])
@@ -230,45 +198,16 @@ export default function AddClientDialog({
   }, [chosen]);
   const blocked = blockedPipelines.get(pipelineId) || null;
 
-  /**
-   * ═══ ROUND 167 — A WAY TO REACH THEM IS REQUIRED ══════════════════════════
-   *
-   * 🔴 THE DECISION, MADE RATHER THAN INHERITED. Round 166 found that
-   * GoHighLevel refuses a contact with neither a phone nor an email — 400
-   * "Pass at least one of number, email query parameter" — and left the
-   * question open: may a CLIENT exist with no way to contact them? The answer
-   * is no. A lead nobody can ring or email is a record that looks workable and
-   * is not, and it would sit in the pipeline being counted.
-   *
-   * ⚠️ SO THE DIALOG STOPS IT, AND THE ROUTE STOPS IT TOO
-   * (app/api/clients/route.ts). Without the route half, a direct call still
-   * reaches GoHighLevel's own wording about a query parameter this form does
-   * not have; without the dialog half, a rep fills in a whole form to be told
-   * no at the end.
-   */
   const reachable = !!phone.trim() || !!email.trim();
   const canSubmit =
     !!first.trim() && !!last.trim() && reachable && !!pipelineId && !!stageId && !blocked;
 
-  /**
-   * The assignment read-back. `waiting` while the workflow runs, then the
-   * answer — whichever it is.
-   */
   const [assign, setAssign] = useState<{
     oppId: string;
     state: "waiting" | "assigned" | "nobody";
     name?: string;
   } | null>(null);
 
-  /**
-   * 🔴 POLL ON A SCHEDULE THAT MATCHES THE THING BEING WAITED FOR.
-   *
-   * A GHL workflow usually assigns within a few seconds, occasionally longer.
-   * So: 2s, then 5, 10, 20, 30 — six reads over half a minute, front-loaded
-   * because the common case is fast. ⚠️ NOT a fixed interval: a 1s poll for 30
-   * seconds is thirty requests against a 100-per-10s budget to learn something
-   * that almost always arrives on the first one.
-   */
   const watchOwner = async (oppId: string) => {
     const waits = [2000, 3000, 5000, 10000, 10000];
     for (let i = 0; i <= waits.length; i++) {
@@ -286,14 +225,13 @@ export default function AddClientDialog({
           setAssign({
             oppId,
             state: "assigned",
-            // ⚠️ An id with no name still means SOMEBODY owns it — see the
-            // route's note. "Someone" is true; "nobody" would not be.
+
             name: j.ownerName || "Someone (their name could not be looked up)",
           });
           return;
         }
       } catch {
-        // A failed poll is not an answer. Keep trying; the loop ends by itself.
+
       }
     }
     setAssign({ oppId, state: "nobody" });
@@ -317,12 +255,11 @@ export default function AddClientDialog({
           email: email.trim() || undefined,
           pipelineId,
           stageId,
-          // Advisory only — the route forces a rep to themselves.
+
           assignedTo: isAdmin ? ownerId || undefined : undefined,
           oppName: oppName.trim() || undefined,
           contactId: chosen?.id,
-          // Sent by field id with the real option values, so what lands in GHL
-          // matches the picklist exactly.
+
           details: Object.fromEntries(
             Object.entries(details).filter(([, v]) =>
               Array.isArray(v) ? v.length : String(v).trim(),
@@ -341,19 +278,11 @@ export default function AddClientDialog({
         throw apiError(res, j);
       const oppId = j.opportunityId || "";
       onCreated(oppId);
-      // 🔴 ROUND 118 · ITEM 4 — SHOW WHAT HAPPENED, DO NOT PREDICT IT.
-      //
-      // The dashboard no longer names an owner; GoHighLevel's workflow does,
-      // and its API exposes no triggers or actions, so this cannot say in
-      // advance who that will be. It closed immediately, which meant the rep
-      // never learned the answer either way.
-      //
-      // ⚠️ AND THE FAILURE LINE IS THE POINT. 185 of 187 caregiver applicants
-      // are unassigned because nothing ever said "nobody was assigned."
+
       if (oppId && j.ownerAuthor === "workflow") {
         setAssign({ oppId, state: "waiting" });
         void watchOwner(oppId);
-        return; // stays open until the answer is in
+        return;
       }
       onClose();
     } catch (e) {
@@ -375,11 +304,7 @@ export default function AddClientDialog({
 
         <div className="movebody">
           <div className="imeta" style={{ marginTop: 0 }}>
-            {/* 🔴 "You'll be the owner." WAS NOT TRUE — round 118, item 4.
-                The route forced the creating rep as owner and GoHighLevel's
-                workflow then reassigned, so the one promise this screen made
-                about ownership was the one thing it could not keep. It now
-                says who decides, which is something it can. */}
+
             Creates the lead and their case. Who it is assigned to is decided by
             the pipeline&apos;s workflow in GoHighLevel
             {isAdmin ? ", unless you pick an owner below" : ""} — this screen
@@ -417,11 +342,7 @@ export default function AddClientDialog({
               />
             </div>
           </div>
-          {/* 🔴 ROUND 167 — WHY, NOT JUST "REQUIRED". The hint names the
-              consequence — a lead nobody can reach — because "one of these is
-              required" invites the reader to type anything into whichever box
-              is nearer. Shown only while it is unmet, so a filled form carries
-              no leftover warning. */}
+
           {!reachable ? (
             <div className="rfdhint rfdbad">
               ⚠️ Add a phone number or an email — we need a way to reach them.
@@ -430,7 +351,6 @@ export default function AddClientDialog({
             </div>
           ) : null}
 
-          {/* Search before creating. */}
           {searching && !chosen ? (
             <div className="imeta">Checking for an existing lead…</div>
           ) : null}
@@ -493,7 +413,7 @@ export default function AddClientDialog({
           <div className="irow" style={{ flexDirection: "column", alignItems: "stretch" }}>
             <label>Pipeline *</label>
             {allowed.length === 1 ? (
-              // A select with one option looks broken. Say it plainly instead.
+
               <div className="v ro">
                 {allowed[0].name}{" "}
                 <span className="readonly-note">your division</span>
@@ -607,7 +527,6 @@ export default function AddClientDialog({
 
           {err ? <ErrorMessage error={err} className="savemsg err" /> : null}
 
-          {/* 🔴 ROUND 118 · ITEM 4 — THE ANSWER, WHICHEVER IT IS. */}
           {assign ? (
             assign.state === "waiting" ? (
               <div className="savemsg ok">
@@ -618,10 +537,7 @@ export default function AddClientDialog({
                 <b>Created.</b> Assigned to <b>{assign.name}</b>.
               </div>
             ) : (
-              // ⚠️ NOT AN ERROR CARD. Nothing failed — the workflow simply did
-              // not name anybody, which is a fact about the account, not about
-              // this request. But it is said OUT LOUD, because the silence is
-              // what leaves 185 applicants ownerless.
+
               <div className="savemsg warn">
                 <b>Created, but nobody is assigned yet.</b> The workflow did not
                 name an owner within 30 seconds. Assign it on the record — an

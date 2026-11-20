@@ -7,13 +7,6 @@ import type { ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 11 — delete ONE file from a resources folder.
-//
-// Folders could already be deleted and the files inside them could not, so the
-// only way to remove a single document was to delete its whole folder.
-//
-// ADMIN ONLY, gated HERE. Hiding the button is convenience; this is the
-// boundary and it holds against a direct DELETE.
 export async function DELETE(request: Request) {
   try {
     const url = new URL(request.url);

@@ -27,21 +27,17 @@ export const runtime = "nodejs";
 interface PatchBody {
   ssoKey?: string;
   key?: string;
-  /**
-   * 🔴 ROUND 131 — THE CASE'S OWN NAME. Native, like `monetaryValue` and
-   * `status`; it is NOT a custom field and does not go through `customFields`.
-   */
+
   name?: string;
   stageId?: string;
   assignedTo?: string | null;
   status?: string;
   monetaryValue?: number;
   customFields?: { id: string; value: unknown }[];
-  // ITEM 5 — the version the client last read.
+
   expectedVersion?: string;
 }
 
-// Coerce a value to GHL's expected write format for the field's dataType.
 function formatValue(def: EditableFieldDef, value: unknown): unknown {
   const t = (def.dataType || "").toUpperCase();
   if (t === "MULTIPLE_OPTIONS" || t === "CHECKBOX") {
@@ -53,12 +49,7 @@ function formatValue(def: EditableFieldDef, value: unknown): unknown {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   }
-  // ITEM 1 — DATE had NO branch here, so it fell through to String(value) and a
-  // date field was written with whatever `<input type="date">` produces:
-  // "2026-08-28". A bare date is not the shape proven to store; a full ISO 8601
-  // string is. Without this, every DATE field in the panel — all ten Milestones
-  // included — writes a value GoHighLevel can drop, with a 200 and no error.
-  // An empty string is passed through unchanged so a date can still be CLEARED.
+
   if (t === "DATE") {
     if (value == null || String(value).trim() === "") return "";
     return toGhlDate(value);
@@ -75,7 +66,6 @@ async function patchHandler(
     const body = (await request.json().catch(() => ({}))) as PatchBody;
     const blob = body.ssoKey || body.key || null;
 
-    // ---- identity (server-derived; never trust a client-sent userId) ----
     let session: { userId: string; role?: string; type?: string } | null = null;
     const enforce = ssoConfigured();
     if (enforce) {
@@ -87,11 +77,10 @@ async function patchHandler(
         };
         return NextResponse.json(err, { status: 401 });
       }
-      const s = decryptSso(blob); // throws SsoError
+      const s = decryptSso(blob);
       session = { userId: s.userId, role: s.role, type: s.type };
     }
 
-    // ---- load target + re-check visibility (owner/follower or admin) ----
     const target = await getOpportunityById(id);
     if (!target) {
       return NextResponse.json({ error: "Opportunity not found." } as ApiError, {
@@ -107,15 +96,9 @@ async function patchHandler(
       return NextResponse.json(err, { status: 403 });
     }
 
-    // ITEM 5 — refuse rather than overwrite somebody else's change. Checked
-    // BEFORE the permission gate below only in the sense that both run before
-    // any write; order between them doesn't matter, since neither writes.
     const conflict = versionGuard(target, body.expectedVersion, "PATCH");
     if (conflict) return conflict;
 
-    // ITEM 14 — a follower may edit FIELDS but not the OWNER. Enforced HERE,
-    // server-side: hiding the dropdown is convenience, and this would hold
-    // against a direct PATCH.
     if (
       enforce &&
       session &&
@@ -134,17 +117,11 @@ async function patchHandler(
       );
     }
 
-    // ---- build the PUT body (strip blocklist, format per dataType) ----
     const defs = await getEditableFieldDefs();
     const defById = new Map(defs.map((d) => [d.id, d]));
 
     const put: Record<string, unknown> = {};
-    // 🔴 ROUND 131 — RENAME THE CASE.
-    //
-    // ⚠️ REFUSED EMPTY, BEFORE ANY WRITE. GoHighLevel will take a blank name and
-    // the record then shows as an empty row on every board — recoverable only by
-    // finding it by contact. "Nothing to update" would be the wrong answer here
-    // too: the rep typed something and deleted it, and silence reads as saved.
+
     const renamedTo =
       typeof body.name === "string" ? body.name.trim().slice(0, 200) : null;
     if (renamedTo !== null && !renamedTo)
@@ -160,10 +137,7 @@ async function patchHandler(
     if (renamedTo) put.name = renamedTo;
     if (typeof body.stageId === "string" && body.stageId)
       put.pipelineStageId = body.stageId;
-    // 🔴 ROUND 197 — NEW LEAD IS THE ARRIVAL STAGE, NOT ONE YOU PICK. The
-    // panel no longer offers it; this holds against a direct PATCH. A case
-    // already AT New lead may be saved with its own stage id (an unchanged
-    // dropdown), which is why the check is "into", not "at".
+
     if (
       typeof body.stageId === "string" &&
       body.stageId &&
@@ -198,7 +172,7 @@ async function patchHandler(
         continue;
       }
       if (!def.editable) {
-        // Read-only blocklist — strip server-side even if the UI sent it.
+
         rejected.push(def.name);
         continue;
       }
@@ -217,20 +191,8 @@ async function patchHandler(
       return NextResponse.json(err, { status: 400 });
     }
 
-    // ---- write + return the fresh record ----
     const record = await updateOpportunity(id, put);
 
-    // ═══ 🔴 THE READ-BACK, FOR THE NATIVE FIELD ONLY ════════════════════════
-    //
-    // ⚠️ THE CUSTOM-FIELD PATH ALREADY HAS ITS GUARD and it runs BEFORE the
-    // write: every id is checked against `defById` and an unknown one is
-    // rejected. A native key has no definition to check, so GoHighLevel takes
-    // the PUT, answers 200, and — if the key is wrong — stores nothing.
-    //
-    // `updateOpportunity` already re-reads uncached, so the check costs no
-    // extra call. It must FAIL the request: the panel reverts on a non-ok
-    // response, and a 200 carrying the old name would leave the new spelling on
-    // screen over the old one in GoHighLevel.
     if (renamedTo && record && (record.oppName || "") !== renamedTo)
       return NextResponse.json(
         {
@@ -241,32 +203,17 @@ async function patchHandler(
         { status: 502 },
       );
 
-    // ---- ITEM 5c: THE CLAIM -------------------------------------------------
-    // A record LEAVES the reassign queue the moment it has an owner and a real
-    // stage. That is the whole mechanism — no new state, no tag to clear — so
-    // the claim is detected here rather than being a separate action somebody
-    // has to remember to take.
     const wasReassign =
       (target.stage || "").trim().toUpperCase() === REASSIGN_STAGE_NAME;
     const nowOwned = !!(record?.ownerId || target.ownerId);
     const nowRealStage =
       !!record &&
       (record.stage || "").trim().toUpperCase() !== REASSIGN_STAGE_NAME;
-    // ⚠️ SETTING AN OWNER FROM THE RECORD PANEL IS ALSO A CLAIM.
-    //
-    // This used to require a real stage as well, so a rep who opened a
-    // reassigned card and simply assigned it to themselves left every
-    // dashboard-added follower attached — a second path that skipped the
-    // cleanup entirely. Either signal now counts: somebody has taken the case.
+
     const ownerJustSet = "assignedTo" in body && !!body.assignedTo && !target.ownerId;
     if (wasReassign && nowOwned && (nowRealStage || ownerJustSet)) {
       try {
-        // 🔴 THE LIST COMES FROM THE FIELD, AND ONLY FROM THE FIELD.
-        // `target` is the PRE-write read, so the field still holds what the
-        // reassign stored. If it is empty or the field is missing we remove
-        // NOTHING and say so: inferring the list from the current followers or
-        // from the access map would strip somebody who was following this
-        // record long before any reassign — the exact failure this guards.
+
         const added = await getReassignFollowers(target);
         if (!added.length) {
           // eslint-disable-next-line no-console
@@ -274,8 +221,7 @@ async function patchHandler(
             `[claim] ${id} left ${REASSIGN_STAGE_NAME} but "Reassign Followers" is empty or absent — removing NOTHING. Any dashboard-added followers stay until removed by hand, which is the safe direction.`,
           );
         } else {
-          // Never remove the new owner, even if they were on the added list —
-          // they are the claimer and belong on the record.
+
           const owner = record?.ownerId || "";
           const toRemove = added.filter((u) => u && u !== owner);
           if (toRemove.length) await removeOpportunityFollowers(id, toRemove);
@@ -286,16 +232,12 @@ async function patchHandler(
           );
         }
       } catch (e) {
-        // The claim itself SUCCEEDED — the owner and stage are written. Failing
-        // the request now would tell the rep their save didn't work when it did.
+
         // eslint-disable-next-line no-console
         console.error(`[claim] follower cleanup failed for ${id}:`, e);
       }
     }
 
-    // One event per FIELD, with its name and both values — a consumer shouldn't
-    // have to diff two record snapshots to learn what changed. `target` is the
-    // pre-write read, so the old values are genuinely old.
     for (const cf of customFields) {
       const def = defById.get(cf.id);
       await emit(
@@ -357,8 +299,7 @@ async function patchHandler(
     }
     if (e instanceof GhlError) {
       const status = e.status >= 400 && e.status < 600 ? e.status : 502;
-      // Surface GHL's own reason (e.g. the pipeline-permission 400 on an owner
-      // change), resolved to real names rather than raw ids.
+
       return NextResponse.json(
         {
           error: "Couldn't save.",
@@ -378,9 +319,6 @@ async function patchHandler(
   }
 }
 
-
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function PATCH(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -388,28 +326,6 @@ export async function PATCH(
   return withGrants(() => patchHandler(request, ctx));
 }
 
-/**
- * 🔴 ROUND 124 · ITEM 3 — DELETE THE CASE, NOT THE PERSON.
- *
- * This route exported PATCH alone. Mark lost and Move existed; delete did not,
- * so a test record, a duplicate or obvious junk could only be cleared in
- * GoHighLevel — and there are several on the account that nobody could remove
- * from here.
- *
- * ⚠️ ADMIN ONLY, AND SERVER-SIDE. A rep who wants a record gone should MARK IT
- * LOST WITH A REASON: a lost lead with a reason tells you why leads fail, and a
- * deleted one tells you nothing. Hiding the button is convenience; this is the
- * rule.
- *
- * ⚠️ `canEditRecord` IS NOT ENOUGH and is deliberately not reused. It admits
- * the owner and any follower, which is exactly the population this is being
- * withheld from.
- *
- * ⚠️ THE CONTACT IS NEVER TOUCHED, and there is no route that deletes one.
- * GoHighLevel is the right place for that — it has its own safeguards and its
- * own audit — and a dashboard that can erase a person is a dashboard somebody
- * erases a person from by accident.
- */
 async function deleteHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -442,9 +358,6 @@ async function deleteHandler(
         );
     }
 
-    // ⚠️ READ FIRST, SO THE ANSWER CAN NAME WHAT WENT. A 404 here is also the
-    // honest answer to "somebody already deleted it", and it costs one cached
-    // read rather than a blind write.
     const target = await getOpportunityById(id);
     if (!target)
       return NextResponse.json(
@@ -458,9 +371,7 @@ async function deleteHandler(
 
     const label = target.oppName || `${target.first} ${target.last}`.trim() || "the record";
     await deleteOpportunity(id);
-    // ⚠️ AFTER THE DELETE AND NEVER AWAITED INTO THE RESPONSE — emit() never
-    // throws, and a webhook endpoint being down must not make a completed
-    // delete look like a failure.
+
     void emit(
       "opportunity.deleted",
       { actor: { userId: session?.userId || "" }, opportunityId: id, contactId: target.contactId || "" },

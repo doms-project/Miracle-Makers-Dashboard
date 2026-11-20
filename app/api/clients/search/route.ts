@@ -12,18 +12,6 @@ import { withGrants } from "@/lib/withGrants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 3 — "search before creating".
-//
-// GET /api/clients/search?q=<phone|email|name>
-//
-// Returns matching contacts AND, for each, the pipelines where they already
-// have a case. That second half is the part that matters: it lets the modal grey
-// out the pipelines GHL would reject with OPPORTUNITY_NO_DUPLICATE, before the
-// staff member fills in the rest of the form.
-//
-// Any signed-in user may search — the point is to STOP a duplicate being
-// created, and hiding matches from a rep would defeat that. Only name, email,
-// phone and pipeline names are returned; no case details.
 async function getHandler(request: Request) {
   try {
     const url = new URL(request.url);
@@ -37,10 +25,9 @@ async function getHandler(request: Request) {
           { error: "Sign-in required.", status: 401 } as ApiError,
           { status: 401 },
         );
-      decryptSso(blob); // throws SsoError; identity itself isn't needed here
+      decryptSso(blob);
     }
 
-    // Two characters would match half the account and tell you nothing.
     if (q.length < 3)
       return NextResponse.json(
         { ok: true, matches: [] },
@@ -60,8 +47,7 @@ async function getHandler(request: Request) {
               stage: o.stage,
             }));
         } catch {
-          // A failed per-contact lookup must not sink the whole search — the
-          // match is still worth showing, we just can't grey out its pipelines.
+
         }
         return { ...c, pipelines };
       }),

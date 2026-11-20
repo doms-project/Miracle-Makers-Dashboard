@@ -94,7 +94,6 @@ function fail(e: unknown): NextResponse {
   );
 }
 
-// GET — recipients (client + caregivers, with emails) + templates for the composer.
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -106,14 +105,14 @@ async function getHandler(
     if (!a.ok) return a.res;
 
     const recipients: EmailRecipient[] = [];
-    // Client (the enrollment contact).
+
     try {
       const c = await getContactBrief(a.contactId);
       recipients.push({ ...c, contactId: c.id, role: "client" });
     } catch {
-      /* client brief best-effort */
+
     }
-    // Caregivers (from the Task 4 associations), with emails resolved.
+
     try {
       const rels = await listCaregiverRelations(a.contactId);
       for (const r of rels) {
@@ -121,7 +120,7 @@ async function getHandler(
         try {
           email = (await getContactBrief(r.contactId)).email;
         } catch {
-          /* keep blank */
+
         }
         recipients.push({
           contactId: r.contactId,
@@ -131,12 +130,9 @@ async function getHandler(
         });
       }
     } catch {
-      /* associations may be unavailable — client still emailable */
+
     }
 
-    // Prefer live GHL templates (Jack's team manages them in the native
-    // builder); fall back to the config templates if the call fails or returns
-    // none, so the composer never comes up empty.
     let templates = EMAIL_TEMPLATES as { id: string; name: string; subject: string; body: string }[];
     let templatesSource: "ghl" | "config" = "config";
     try {
@@ -146,7 +142,7 @@ async function getHandler(
         templatesSource = "ghl";
       }
     } catch {
-      /* keep config fallback */
+
     }
 
     return NextResponse.json(
@@ -158,7 +154,6 @@ async function getHandler(
   }
 }
 
-// POST { ssoKey?, recipientContactIds[], subject, html, cc? } — send per recipient.
 async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -189,8 +184,6 @@ async function postHandler(
         { status: 400 },
       );
 
-    // If the body already looks like HTML (GHL builder output), send it as-is;
-    // otherwise convert plain-text newlines to <br> for readable email.
     const looksHtml = /<[a-z][\s\S]*>/i.test(body.html);
     const html = looksHtml ? body.html : body.html.replace(/\n/g, "<br>");
     const cc = (body.cc || []).map((s) => s.trim()).filter(Boolean);
@@ -209,11 +202,11 @@ async function postHandler(
         results.push({ contactId, name, ok: true });
       } catch (e) {
         if (e instanceof GhlError && (e.status === 401 || e.status === 403))
-          return fail(e); // auth/scope problem is global — stop and surface it
+          return fail(e);
         try {
           name = (await getContactBrief(contactId)).name;
         } catch {
-          /* keep id */
+
         }
         results.push({
           contactId,
@@ -238,9 +231,6 @@ async function postHandler(
   }
 }
 
-
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -248,8 +238,6 @@ export async function GET(
   return withGrants(() => getHandler(request, ctx));
 }
 
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },

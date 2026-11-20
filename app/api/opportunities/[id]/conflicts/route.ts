@@ -13,18 +13,6 @@ import { withGrants } from "@/lib/withGrants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 4 — the Move dialog's duplicate pre-check.
-//
-// GoHighLevel enforces ONE opportunity per contact per pipeline. Moving a record
-// into a pipeline where the same contact already has a case fails with a 400
-// `OPPORTUNITY_NO_DUPLICATE` whose message reads "Can not create duplicate
-// opportunity for the contact" — misleading, because the request was an UPDATE.
-//
-// This route returns the contact's OTHER opportunities so the dialog can grey
-// out the destinations that would fail, with the reason, before anything is sent.
-//
-// Read-only, and gated by the same visibility rule as viewing the record: if you
-// can't see this case you can't enumerate its contact's other cases.
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -64,8 +52,7 @@ async function getHandler(
       );
 
     const all = await listContactOpportunities(target.contactId);
-    // Every case belonging to this contact EXCEPT the one being moved. A record
-    // staying in its own pipeline is not a conflict with itself.
+
     const conflicts = all
       .filter((o) => o.id !== id && o.pipelineId)
       .map((o) => ({

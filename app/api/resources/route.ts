@@ -16,29 +16,6 @@ import type { ApiError, ResourceFile } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Resources are not case-specific — available to ALL authenticated users
-// (reps + onboarding + admin), no per-record filtering. But a valid SSO session
-// is still required (don't leave it open) once SSO is configured. The list is
-// always fetched fresh so the signed-URL TTL is handled at display time.
-// ITEM 6c — SECTIONS PER VISIBLE FOLDER, not one shared folder.
-//
-// Which folders a viewer sees comes from the FOLDER grants in the access custom
-// value — their own scope, not derived from pipeline access, because a
-// compliance folder may belong to case managers who hold no pipeline at all.
-//
-// ⭐ One folder can be marked visible to EVERYONE (RESOURCES_PUBLIC_FOLDER_ID).
-// A MARKED folder, not a magic name: matching on a name like "Company Policies"
-// would silently change what the whole company can see the moment someone
-// renames a folder in GHL.
-//
-// 🔴 ORGANISATION, NOT SECURITY. This decides what people SEE listed.
-//
-// CORRECTED: an earlier note here said GHL media URLs were "publicly reachable
-// once known". They are not — they are Google Cloud Storage links, SIGNED and
-// TIME-LIMITED, tested and confirmed to expire. The file persists; only the
-// link does not, and GHL mints a fresh one when it serves the file. The old
-// wording was wrong and had knock-on effects: it is why the per-applicant
-// document upload feature was deferred.
 async function getHandler(request: Request) {
   try {
     let session: { userId: string; role?: string; type?: string } | null = null;
@@ -50,7 +27,7 @@ async function getHandler(request: Request) {
           { status: 401 },
         );
       }
-      const s = decryptSso(blob); // throws SsoError on bad/absent secret/blob
+      const s = decryptSso(blob);
       session = { userId: s.userId, role: s.role, type: s.type };
     }
     const isAdmin = !session || isAdminSession(session.role, session.type);
@@ -62,8 +39,6 @@ async function getHandler(request: Request) {
       (f) => isAdmin || granted.has(f.id) || (publicFolderId && f.id === publicFolderId),
     );
 
-    // Load each visible folder's files in parallel; one failing folder must not
-    // empty the whole tab.
     const sections = await Promise.all(
       visible.map(async (f) => {
         try {
@@ -78,15 +53,12 @@ async function getHandler(request: Request) {
       }),
     );
 
-    // The legacy single-folder env path still works when no folders are granted
-    // and RESOURCES_FOLDER_ID is set, so this deploy cannot empty the tab for
-    // anyone who was seeing files before the grants existed.
     let legacy: ResourceFile[] = [];
     if (!sections.length && RESOURCES_FOLDER_ID) {
       try {
         legacy = await listResources();
       } catch {
-        /* the sections answer is what matters */
+
       }
     }
 
@@ -124,8 +96,6 @@ async function getHandler(request: Request) {
   }
 }
 
-// Grants are loaded once per request so getUserFolders() sees the live custom
-// value rather than nothing.
 export async function GET(request: Request) {
   return withGrants(() => getHandler(request));
 }

@@ -16,8 +16,6 @@ import { listPipelines, stampDivision } from "@/lib/ghl";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Shared gate: resolve the target opp and confirm the caller may see it.
-// Returns the record on success, or a Response to return immediately.
 async function authorize(
   id: string,
   blob: string | null,
@@ -31,7 +29,7 @@ async function authorize(
         { status: 401 },
       );
     }
-    const s = decryptSso(blob); // throws SsoError
+    const s = decryptSso(blob);
     session = { userId: s.userId, role: s.role, type: s.type };
   }
   const record = await getOpportunityById(id);
@@ -79,7 +77,6 @@ function errorResponse(e: unknown): Response {
   );
 }
 
-// GET — list this opportunity's notes. SSO blob passed via header.
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -99,7 +96,6 @@ async function getHandler(
   }
 }
 
-// POST — add a note (author = the decrypted session's userId).
 async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -122,13 +118,9 @@ async function postHandler(
     const gate = await authorize(id, blob);
     if (gate instanceof Response) return gate;
 
-    // Author = the server-derived session userId (never a client-sent id). When
-    // SSO isn't configured (dev), fall back to no author.
     let userId = "";
     if (ssoConfigured() && blob) userId = decryptSso(blob).userId;
 
-    // Stamp the author's division AT WRITE TIME (ITEM 6). GHL's note object has
-    // no metadata field, so it goes in the body and is parsed back out on read.
     let division = "";
     if (userId) {
       try {
@@ -136,20 +128,16 @@ async function postHandler(
           userId,
           new Map((await listPipelines()).map((p) => [p.id, p.name])),
         ).join(" · ");
-        // ITEM 2 — same admin fallback as Move, so a manual note and a Move note
-        // written by the same person never disagree about their division.
+
         if (!division && ssoConfigured() && blob) {
           const s = decryptSso(blob);
           if (isAdminSession(s.role, s.type)) division = "Admin";
         }
       } catch {
-        /* unstamped rather than failing the note */
+
       }
     }
-    // ITEM 3 — say what was stamped and what was written. Two causes have
-    // already been found and fixed here (the users scope, then a client-side
-    // strip); if a third exists, this line names it instead of another round of
-    // guessing at which layer dropped it.
+
     const noteBody = stampDivision(text, division);
     // eslint-disable-next-line no-console
     console.log(
@@ -162,9 +150,7 @@ async function postHandler(
       { text, division, noteId: note.id },
     );
     return NextResponse.json(
-      // ITEM 2 — `division` is echoed on the note. addOpportunityNote parses it
-      // OFF the body for display, so without this the optimistic insert in the
-      // panel showed the new note with no division badge until a reload.
+
       { ok: true, note: { ...note, division } },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -173,9 +159,6 @@ async function postHandler(
   }
 }
 
-
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -183,8 +166,6 @@ export async function GET(
   return withGrants(() => getHandler(request, ctx));
 }
 
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },

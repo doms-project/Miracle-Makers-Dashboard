@@ -14,9 +14,6 @@ import type { ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 6a — resource folders. CREATE and DELETE are ADMIN ONLY, enforced HERE.
-// Hiding the buttons is convenience; this is the boundary, and it would hold
-// against a direct POST.
 function adminGate(
   request: Request,
   ssoKey?: string,
@@ -65,9 +62,6 @@ function fail(e: unknown): Promise<NextResponse> | NextResponse {
   );
 }
 
-// GET — every folder in the location, read LIVE. Any signed-in user may list
-// them; what they can SEE in the tab is decided by the folder grants, and the
-// admin grid needs the full list to grant against.
 export async function GET(request: Request) {
   try {
     if (ssoConfigured()) {
@@ -89,12 +83,6 @@ export async function GET(request: Request) {
   }
 }
 
-// POST { ssoKey?, name } — create.
-//
-// ⚠️ GHL AUTO-RENAMES ON COLLISION: asking for "OLTL" when one exists yields
-// "OLTL (1)" with NO error. The response reports the name GHL ACTUALLY assigned
-// and a `renamed` flag, so the UI can say so instead of showing a folder the
-// admin didn't think they made.
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as {
@@ -121,12 +109,6 @@ export async function POST(request: Request) {
   }
 }
 
-// DELETE ?id=… [&confirm=1]
-//
-// 🔴 DELETING A FOLDER REMOVES ITS CONTENTS. Without `confirm=1` this returns
-// the FILE COUNT and deletes nothing, so the UI can name the number in its
-// confirmation. The count is taken server-side: a client-supplied one could be
-// stale or simply wrong, and this is a destructive, irreversible call.
 export async function DELETE(request: Request) {
   try {
     const url = new URL(request.url);

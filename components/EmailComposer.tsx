@@ -9,9 +9,6 @@ import type {
 } from "@/lib/types";
 import type { EmailTemplate } from "@/lib/emailTemplates";
 
-// Task 5 — compose + send a templated email to the client and/or caregivers.
-// Server-side send, visibility-gated. Deliverability is domain-gated (see the
-// caveat banner): sends may land in spam until SPF/DKIM/DMARC are set up.
 export default function EmailComposer({
   opportunityId,
   ssoBlob,
@@ -61,7 +58,7 @@ export default function EmailComposer({
         setRecipients(recs);
         setTemplates(j.templates || []);
         setTemplatesSource(j.templatesSource === "ghl" ? "ghl" : "config");
-        // Pre-select the client by default.
+
         setSelected(
           new Set(recs.filter((r) => r.role === "client").map((r) => r.contactId)),
         );
@@ -206,14 +203,7 @@ export default function EmailComposer({
             </div>
           ) : confirming ? (
             <div>
-              {/* ⚠️ ROUND 132 — this carried `className="emailconfirm"`, a
-                  class defined in no stylesheet and queried by no proof. It
-                  styled nothing and read as though it did. Found by the
-                  sweep's new rule 11 on its first run; removing it is a
-                  provable no-op because nothing anywhere selects it.
-                  ⚠️ THE COMMENT IS INSIDE THE DIV, not above it: a ternary arm
-                  takes ONE element, and a comment placed beside it is a second
-                  child. That is what the first version of this did. */}
+
               <div className="istep">Confirm send</div>
               <div className="imeta" style={{ marginBottom: 8 }}>
                 To:{" "}
@@ -227,7 +217,7 @@ export default function EmailComposer({
                 {/^\s*<[a-z][\s\S]*>/i.test(body) ? (
                   <div
                     className="epbody ephtml"
-                    // Template HTML comes from GHL's builder / our config — trusted, internal use.
+
                     dangerouslySetInnerHTML={{ __html: body }}
                   />
                 ) : (
@@ -256,7 +246,7 @@ export default function EmailComposer({
             </div>
           ) : (
             <>
-              {/* recipients */}
+
               <div className="istep">Recipients</div>
               <div className="emailrecips">
                 {recipients.length === 0 ? (
@@ -286,7 +276,6 @@ export default function EmailComposer({
                 placeholder="relative@example.com, …"
               />
 
-              {/* template + message */}
               <div className="istep" style={{ marginTop: 14 }}>
                 Message
                 <span className="tplsrc">

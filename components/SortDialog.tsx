@@ -1,17 +1,5 @@
 "use client";
-// ---------------------------------------------------------------------------
-// ROUND 197 — "Sort [name]" (Enroll / Transfer from New Leads) and
-// "Assign [name]" (from Staffing needed lead). ONE component, two modes.
-//
-// 🔴 IT POSTS mode:"sort" | "assign" TO THE MOVE ROUTE, which sends it down
-// sortOpportunity — NOT the transfer path. So the stage chosen here is the
-// stage written, and no Transferred From/Date stamp is created: a first sort
-// is not a hand-over, and Master must not file it under "Sent out".
-//
-// ⚠️ THE SERVER DECIDES. Every limit drawn here (locked owner, send-only
-// pipelines, required stage) is re-checked by lib/sorting.ts on the server;
-// this only stops people from asking for something that will be refused.
-// ---------------------------------------------------------------------------
+
 import { useEffect, useMemo, useState } from "react";
 import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
@@ -50,10 +38,10 @@ export default function SortDialog({
   onDone,
 }: {
   mode: "sort" | "assign";
-  /** Which Sort-to button was pressed (sort mode only). */
+
   target?: "enroll" | "transfer";
   record: OpportunityRecord;
-  /** Every client pipeline the viewer may send to (names only for no-access ones). */
+
   targets: { id: string; name: string }[];
   homeIds: string[];
   isAdmin: boolean;
@@ -63,7 +51,7 @@ export default function SortDialog({
   users: { id: string; name: string; pipelineIds?: string[] }[];
   labels: TabLabels;
   ssoBlob: string | null;
-  /** Set when the viewer may use the cross-account transfer on this case. */
+
   peerLabel?: string | null;
   onPeerTransfer?: () => void;
   onClose: () => void;
@@ -75,7 +63,6 @@ export default function SortDialog({
   const nameOf = (pid: string) =>
     labels.pipelines[pid] || targets.find((p) => p.id === pid)?.name || "—";
 
-  // ---- the pipeline list, grouped by division, own division first ----
   const groups = useMemo(() => {
     const m = new Map<string, { id: string; name: string }[]>();
     for (const p of targets) {
@@ -87,7 +74,6 @@ export default function SortDialog({
     );
   }, [targets, myDivision]);
 
-  // ---- where the pressed button points ----
   const initialPipeline = useMemo(() => {
     if (mode === "assign") return record.pipelineId;
     const pick = target === "transfer" ? isTransferTarget : isEnrollTarget;
@@ -95,7 +81,7 @@ export default function SortDialog({
     if (own.some((p) => p.id === record.pipelineId && pick(p))) return record.pipelineId;
     return (
       own.find(pick)?.id ||
-      // Private Pay has no Transfer pipeline: point at another division's.
+
       targets.find((p) => pick(p) && canUse(p.id))?.id ||
       targets.find(pick)?.id ||
       record.pipelineId
@@ -106,7 +92,6 @@ export default function SortDialog({
   const changed = toPipelineId !== record.pipelineId;
   const sendOnly = !canUse(toPipelineId);
 
-  // ---- owner ----
   const ownerLocked = mode === "assign" && staffing === "self";
   const defaultOwner = () => {
     if (mode === "assign") return users.some((u) => u.id === viewerId) ? viewerId : "";
@@ -115,19 +100,17 @@ export default function SortDialog({
   };
   const [ownerId, setOwnerId] = useState<string>(defaultOwner);
   useEffect(() => {
-    // A pipeline the viewer can't see can only be sent to with no owner.
+
     if (sendOnly && !isAdmin) setOwnerId("");
   }, [sendOnly, isAdmin]);
   const lacks = (u: { pipelineIds?: string[] }) =>
     !!u.pipelineIds && !u.pipelineIds.includes(toPipelineId);
 
-  // ---- stage ----
   const stages = (stagesByPipeline[toPipelineId] || []).filter((s) => isPickableStage(s.name));
   const staysAtNewLead = mode === "sort" && !ownerId && changed;
   const [stageId, setStageId] = useState<string>("");
   useEffect(() => setStageId(""), [toPipelineId]);
 
-  // ---- one case per client per pipeline (same check the Move dialog makes) ----
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -140,7 +123,7 @@ export default function SortDialog({
         if (!cancelled && res.ok) setConflicts(j.conflicts || []);
       })
       .catch(() => {
-        /* the server refuses a duplicate anyway */
+
       });
     return () => {
       cancelled = true;
@@ -203,7 +186,7 @@ export default function SortDialog({
           mode,
           toPipelineId,
           toStageId: stageId || undefined,
-          // Unchanged owner is sent as "keep" (undefined), not re-written.
+
           newOwnerId: (ownerId || "") === (record.ownerId || "") ? undefined : ownerId,
           reason: reason.trim() || undefined,
         }),
@@ -385,5 +368,4 @@ export default function SortDialog({
   );
 }
 
-/** For callers: is this stage name the arrival stage? (re-exported for the page) */
 export { isNewLeadStage };

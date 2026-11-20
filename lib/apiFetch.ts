@@ -1,35 +1,10 @@
-// One place that turns a failed API call into a message you can act on.
-//
-// WHY THIS EXISTS. Every client fetch in this app did the same thing:
-//
-//   const j = await res.json().catch(() => ({}));
-//   if (!res.ok) throw new Error(j.detail || j.error || `HTTP ${res.status}`);
-//
-// which is fine when the server answers with JSON — and useless when it does
-// not. A Next.js 404 is an HTML page: `res.json()` throws, the catch swallows
-// it, `j` is `{}`, and every field is undefined, so the message collapses to a
-// bare "HTTP 404" that says nothing about WHERE or WHY. That exact shape has
-// slowed down diagnosis repeatedly on this project.
-//
-// A bare status is now impossible. Every failure carries: the status, the
-// method and path, the server's own error/detail when it sent JSON, and — when
-// it didn't — what it actually sent, plus a plain reading of what that means.
-
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly url: string,
     readonly body?: string,
-    /**
-     * 🔴 TRUE WHEN THE SERVER SAID IT DECLINED ON PURPOSE — round 119, item 3.
-     *
-     * Carried through from the response body's `refusal` flag, because the
-     * route is the only thing that can tell a deliberate decline ("12 records
-     * are in this pipeline") from a fault ("GoHighLevel returned 400"). A
-     * caller that renders errors can then show the first as an instruction
-     * instead of wrapping it in "Something went wrong".
-     */
+
     readonly refusal?: boolean,
   ) {
     super(message);
@@ -59,23 +34,14 @@ export async function apiFetch<T = unknown>(
       },
     });
   } catch (e) {
-    // 🔴 ROUND 152 — AN ABORT IS OURS, NOT THE NETWORK'S.
-    //
-    // `signal` already reaches `fetch` — RequestInit carries it and it rides
-    // through the spread above, so nothing here had to change for a caller to
-    // be able to cancel. What DID have to change is this message: an aborted
-    // fetch rejects into this catch, and telling somebody to "check your
-    // connection" because WE cancelled on a timeout is a fault report for a
-    // decision the app made. Same family as every other blank-dressed-as-an-
-    // answer in this project, pointed at the person instead of the data.
+
     if (e instanceof DOMException && e.name === "AbortError")
       throw new ApiError(
         `${method} ${url} was cancelled before it finished (timed out, or superseded).`,
         0,
         url,
       );
-    // Network-level: DNS, offline, CORS, a blocked request. `fetch` rejects
-    // here with a message browsers deliberately keep vague, so say what we know.
+
     throw new ApiError(
       `Couldn't reach the server for ${method} ${url} (${
         e instanceof Error ? e.message : String(e)
@@ -85,16 +51,13 @@ export async function apiFetch<T = unknown>(
     );
   }
 
-  // Read ONCE as text, then try to parse. Calling res.json() and later
-  // res.text() on the same response throws "body already read", which is how
-  // the original message ended up empty.
   const raw = await res.text().catch(() => "");
   let data: unknown = undefined;
   if (raw) {
     try {
       data = JSON.parse(raw);
     } catch {
-      /* not JSON — handled below */
+
     }
   }
 
@@ -111,7 +74,6 @@ export async function apiFetch<T = unknown>(
 
   const j = (data ?? {}) as { error?: string; detail?: string };
 
-  // The server answered in our own error shape — use its words.
   if (j.detail || j.error)
     throw new ApiError(
       [j.error, j.detail].filter(Boolean).join(" — "),
@@ -120,9 +82,6 @@ export async function apiFetch<T = unknown>(
       raw,
     );
 
-  // It didn't. Say what came back and what that most likely means, because
-  // "HTTP 404" alone is indistinguishable between "no such route" and
-  // "the route ran and something it needed was missing".
   if (res.status === 404 && (looksLikeHtml(raw) || !raw))
     throw new ApiError(
       `404 — no API route at ${url}. The route exists in the source, so the running build almost certainly predates it: redeploy, then retry. (The server returned ${
@@ -133,11 +92,6 @@ export async function apiFetch<T = unknown>(
       raw,
     );
 
-  // 🔴 A 405 WITH AN EMPTY BODY IS UNREADABLE — round 121, item 2. Next.js
-  // answers it before any handler runs, so nothing in this app can explain it,
-  // and "something went wrong" sends somebody hunting a GoHighLevel fault that
-  // does not exist. The cause is always the same: this dashboard called its own
-  // API with a method that route does not export.
   if (res.status === 405)
     throw new ApiError(
       `This dashboard called its own API the wrong way: ${method} ${pathOf(url)} ` +
@@ -159,24 +113,9 @@ export async function apiFetch<T = unknown>(
   );
 }
 
-// Drop-in replacement for the `j.detail || j.error || \`HTTP ${res.status}\``
-// line that appears at every existing call site.
-//
-// It cannot show the response BODY — by the time this runs the caller has
-// already consumed it via res.json() — but it can never produce a bare status,
-// which was the actual complaint. Prefer apiFetch() for new code; this exists so
-// the twenty existing call sites could be fixed without restructuring flows that
-// can't be runtime-tested from here.
-// Preferred over failureMessage(): returns the ERROR OBJECT rather than a
-// string, so status / url / body survive to the UI and <ErrorMessage> can map a
-// sentence and still show the verbatim detail. ApiError extends Error, so every
-// existing `catch (e) { e instanceof Error }` path keeps working unchanged.
 export function apiError(res: Response, j: unknown, raw?: string): ApiError {
   return new ApiError(
-    // ⚠️ A REFUSAL'S MESSAGE IS THE SENTENCE ALONE. `failureMessage` joins
-    // `error` and `detail` with an em dash, which is right for a fault — the
-    // detail is GoHighLevel's own words — and wrong for a refusal, where the
-    // `error` field already IS the instruction and there is nothing to append.
+
     (j as { refusal?: boolean } | null)?.refusal
       ? String((j as { error?: string }).error || failureMessage(res, j))
       : failureMessage(res, j),

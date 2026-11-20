@@ -2,9 +2,6 @@ import { NextResponse } from "next/server";
 import { decryptSso, SsoError } from "@/lib/sso";
 import { ssoProbeEnabled, ssoProbeLine } from "@/lib/ssoProbe";
 
-// Server-side SSO decryption endpoint. The frontend obtains the encrypted blob
-// from GHL (via postMessage) and POSTs it here as { key }. We decrypt with the
-// Shared Secret and return the session. The secret never leaves the server.
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -19,7 +16,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // Accept a few key names to be forgiving of the client shape.
   const b = body as Record<string, unknown>;
   const blob =
     (typeof b?.key === "string" && b.key) ||
@@ -29,14 +25,12 @@ export async function POST(request: Request) {
 
   try {
     const session = decryptSso(blob as string);
-    // ROUND 179 — the SSO role probe. Off unless SSO_PROBE=1; logs the
-    // DECRYPTED payload (email masked), never the blob. See lib/ssoProbe.ts.
+
     if (ssoProbeEnabled()) {
       // eslint-disable-next-line no-console
       console.log(ssoProbeLine(session));
     }
-    // Return only the fields the UI needs; the whole object is fine too since
-    // it is the viewer's own session, but keep it tidy.
+
     return NextResponse.json(
       {
         userId: session.userId,

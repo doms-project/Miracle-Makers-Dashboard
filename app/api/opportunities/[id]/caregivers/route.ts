@@ -17,8 +17,6 @@ export const runtime = "nodejs";
 
 type Session = { userId: string; role?: string; type?: string } | null;
 
-// Resolve the opportunity + re-check visibility (manage caregivers == edit the
-// record: own/follow, or admin). Returns the client contactId to operate on.
 async function authorize(
   id: string,
   blob: string | null,
@@ -71,9 +69,7 @@ async function authorize(
         { status: 400 },
       ),
     };
-  // ⚠️ ROUND 170 — THE PIPELINE TRAVELS WITH THE CONTACT. The POST has to know
-  // whether the record it is called on is a CLIENT or a CAREGIVER, and the
-  // pipeline is the server's own answer to that — see the note at the write.
+
   return { ok: true, contactId: target.contactId, pipelineId: target.pipelineId };
 }
 
@@ -100,7 +96,6 @@ function fail(e: unknown): NextResponse {
   );
 }
 
-// GET — list the caregivers linked to this opportunity's client contact.
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -120,7 +115,6 @@ async function getHandler(
   }
 }
 
-// POST { ssoKey?, caregiverContactId } — link an existing caregiver contact.
 async function postHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -139,32 +133,14 @@ async function postHandler(
         { error: "caregiverContactId is required." } as ApiError,
         { status: 400 },
       );
-    // ═══ 🔴 ROUND 170 — WHICH SIDE AM I ON? ══════════════════════════════
-    //
-    // This passed `(a.contactId, body.caregiverContactId)` into a function whose
-    // first parameter was called `clientContactId` — true on a client's panel
-    // and false on a caregiver's, where the open record IS the caregiver. The
-    // live result: an applicant linked from the CLIENT's panel stored the
-    // client in the caregiver slot, and /api/relations/counts answered
-    // `{"caregivers":0,"clients":1}` for that client.
-    //
-    // 🔴 DECIDED FROM THE PIPELINE, NOT FROM A ROLE THE CLIENT SENDS. The
-    // browser knows which side it is on (`selfRole` in CaregiversSection, "by
-    // WHICH PAYLOAD the record came from") — but a role posted by a browser is
-    // a claim, and getting it wrong writes a reversed link that nobody notices
-    // for forty rounds. The pipeline's recruiting group is the server's own
-    // answer and cannot be spoofed.
-    //
-    // ⚠️ AND IT IS `recruitingGroup`, WHICH HAD NO CALLERS UNTIL NOW. It was
-    // written in round 113/114 as the one place the caregiver/staff default
-    // lives, precisely so a rule each consumer remembers cannot drift.
+
     const cgPipes = await getSelectedPipelines("caregiver").catch(() => []);
     const openRecordIsCaregiver = cgPipes.some((p) => p.id === a.pipelineId);
     const relationId = await createCaregiverRelation(
       openRecordIsCaregiver
-        ? // The open record is the CAREGIVER, so the picked contact is the client.
+        ?
           { caregiverContactId: a.contactId, clientContactId: body.caregiverContactId }
-        : // The ordinary case: a client's panel, picking their caregiver.
+        :
           { clientContactId: a.contactId, caregiverContactId: body.caregiverContactId },
     );
     const caregivers = await listCaregiverRelations(a.contactId);
@@ -177,7 +153,6 @@ async function postHandler(
   }
 }
 
-// DELETE { ssoKey?, relationId } — remove a single caregiver link.
 async function deleteHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -207,9 +182,6 @@ async function deleteHandler(
   }
 }
 
-
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -217,8 +189,6 @@ export async function GET(
   return withGrants(() => getHandler(request, ctx));
 }
 
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -226,8 +196,6 @@ export async function POST(
   return withGrants(() => postHandler(request, ctx));
 }
 
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function DELETE(
   request: Request,
   ctx: { params: Promise<{ id: string }> },

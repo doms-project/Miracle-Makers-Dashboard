@@ -7,13 +7,6 @@ import type { ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ITEM 4 — add a name to a custom field's picklist. POST { ssoKey?, option }
-//
-// 🔴 ADMIN ONLY, enforced HERE. Hiding the "+ Add name…" row from reps is
-// convenience; this check is the boundary. Adding an option edits a LOCATION
-// -level object that every record and every GHL workflow reads, so it is a very
-// different act from picking one — which stays open to anyone who can edit the
-// record.
 async function postHandler(
   request: Request,
   ctx: { params: Promise<{ fieldId: string }> },

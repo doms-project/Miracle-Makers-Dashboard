@@ -20,7 +20,6 @@ import type { ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Admin-only, enforced SERVER-SIDE (not merely hidden in the UI).
 function gate(request: Request, ssoKey?: string): NextResponse | null {
   if (!ssoConfigured()) return null;
   const blob = ssoKey || request.headers.get("x-ghl-sso-key");
@@ -56,27 +55,11 @@ function fail(e: unknown): Promise<NextResponse> | NextResponse {
   );
 }
 
-// GET — everything the grid needs, all fetched LIVE:
-//   users     from GHL (new staff appear automatically)
-//   pipelines from GHL — ALL of them, each flagged whether the dashboard
-//             actually loads it, so granting access to a pipeline outside
-//             PIPELINE_IDS is visible rather than silently inert
-//   grants    from the custom value (null => the env fallback is in play)
 export async function GET(request: Request) {
   try {
     const denied = gate(request);
     if (denied) return denied;
 
-    // ITEM 6b — folders are a SECOND grid in this tab, from the same custom
-    // value under its own key. Fetched here so the admin grants pipelines,
-    // folders and the Master view in one place and one save.
-    // 🔴 This was `listMediaFolders().catch(() => [])`. A bare swallow turned
-    // EVERY failure — a 401 from a PIT without medias.readonly, a network blip,
-    // a shape change — into the same empty array, which the grid then reported
-    // as the flat statement "no media folders were returned for this location".
-    // That sentence was untrue and, worse, unfalsifiable: there was no way to
-    // tell "none exist" from "the call failed". Keep the tab working when the
-    // folder read fails, but SAY the read failed and why.
     let foldersError: string | null = null;
     const [users, pipelines, stored, folders] = await Promise.all([
       listLocationUsers(),
@@ -90,37 +73,7 @@ export async function GET(request: Request) {
         return [];
       }),
     ]);
-    // ═══════════════════════════════════════════════════════════════════════
-    // 🔴 ROUND 127 · ITEM 1 — DERIVED FROM THE STORED CONFIG, NOT FROM AN ENV
-    // VAR. This read `pipelineIds()` and `caregiverPipelineIds()`, both of
-    // which are ENVIRONMENT LISTS whose defaults hold the two original
-    // caregiver ids. So the three staff pipelines — created by script, given
-    // scope and a recruiting group on the Pipelines screen, drawn by the
-    // board, listed by the picker, shown by the Recruiting switcher — were
-    // reported "not loaded" HERE and nowhere else.
-    //
-    // 🔴 TWO MECHANISMS ANSWERING ONE QUESTION, one silently winning. Same
-    // shape as /api/clients rule 2 (two owners) and the stage bug (five call
-    // sites in one file while a sixth lived elsewhere). The stored config
-    // already knows, an admin already sets it, and a pipeline added next month
-    // needs a dropdown rather than an environment variable and a deploy.
-    //
-    // ⚠️ "LOADED" MEANS "SOMETHING ACTUALLY FETCHES IT", which is narrower than
-    // "it has an entry", and the difference matters because this badge is a
-    // promise that ticking the box does something:
-    //
-    //   client    fetched by the client board                       ✓
-    //   caregiver fetched by the recruiting board                   ✓
-    //   none      fetched by NOTHING unless it carries the events
-    //             role, in which case the Referrals tab reads it    ✓/✗
-    //
-    // A pipeline with no stored entry at all is fetched by nothing, which is
-    // exactly what the original badge was for.
-    //
-    // ⚠️ AND THE ENV VARS STAY — for the two jobs they still do, neither of
-    // which is this one. See the report: the one-time seed of a fresh account,
-    // and the fallback inside getSelectedPipelines() when the stored config
-    // cannot be read, so a GoHighLevel blip does not empty every board.
+
     const cfg = await getPipelineConfig();
     const entryOf = (id: string) => cfg.pipelines[id];
     const loadedReason = (id: string): string => {
@@ -141,62 +94,34 @@ export async function GET(request: Request) {
         pipelines: pipelines.map((p) => ({
           id: p.id,
           name: p.name,
-          // false => the dashboard doesn't fetch this pipeline yet; add it to
-          // PIPELINE_IDS for grants here to have any effect.
+
           inDashboard: loaded.has(p.id),
-          // ⚠️ WHY, NOT JUST WHETHER. "not loaded" sent an admin looking for an
-          // environment variable they cannot change; the fix is one dropdown on
-          // the Pipelines screen, and the badge now says so.
+
           notLoadedWhy: loadedReason(p.id) || undefined,
         })),
-        /**
-         * ═══ ROUND 167 · D12 — THE DIVISIONS A REFERRAL GRANT CAN ACTUALLY
-         * NAME ═══
-         *
-         * 🔴 THE TAB WAS DERIVING THEM FROM PIPELINE NAMES, which offered
-         * Events, OLTL Staff, PP Caregiver, ODP DSP and anything else a
-         * pipeline is named after — none of which a partner or an event is ever
-         * labelled with. An admin could tick one, save it, see it stored, and
-         * grant nothing: `referralDivisions` compares the stored value against
-         * `Partner Division`'s values, not against a pipeline's name.
-         *
-         * ⚠️ SERVED BY THIS ROUTE RATHER THAN PASSED DOWN FROM THE REFERRALS
-         * PAYLOAD. The tab already fetches everything else it needs from here;
-         * threading a prop through the page would couple an admin screen to a
-         * section it has nothing else to do with, and the two would then have
-         * to be loaded in the right order.
-         *
-         * ⚠️ EMPTY WHEN `Partner Division` IS NOT A PICKLIST on this account.
-         * The tab falls back to the old derivation and says which it is
-         * showing — a silent fallback that reproduces the old behaviour is the
-         * fault round 126 and round 130 both record.
-         */
+
         divisionOptions: await (async () => {
           const defs = await getEditableFieldDefs("contact");
           const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
           const def = defs.find((d) => n(d.name) === n(PARTNER_FIELDS.division.name));
           return def?.options?.length ? [...def.options] : [];
         })(),
-        // Folders read LIVE from GHL — a folder created in GHL appears here
-        // with no code change, same as users and pipelines.
+
         folders,
-        // null when the read succeeded. When set, the grid must say the read
-        // FAILED rather than claiming there are no folders.
+
         foldersError,
         grants: stored?.pipelines ?? {},
         folderGrants: stored?.folders ?? {},
         masterUsers: stored?.master ?? [],
-        // TASK 1 — the case-manager map, from the same single read. The tab
-        // renders it from the LIVE user list, so only ids travel here.
+
         caseManagers: stored?.caseManagers ?? {},
         referralAccess: stored?.referralAccess ?? {},
-        // ROUND 197
+
         staffing: stored?.staffing ?? {},
         peerTransfer: stored?.peerTransfer ?? [],
         peer: { configured: peerConfigured(), label: peerLabel() },
         publicFolderId: (process.env.RESOURCES_PUBLIC_FOLDER_ID || "").trim(),
-        // true => nothing readable is stored yet, so the env var is what's
-        // actually in force until the first save.
+
         usingEnvFallback: stored === null,
       },
       { headers: { "Cache-Control": "no-store" } },
@@ -206,7 +131,6 @@ export async function GET(request: Request) {
   }
 }
 
-// PUT { ssoKey?, grants } — writes the whole map as one JSON custom value.
 export async function PUT(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as {
@@ -214,22 +138,18 @@ export async function PUT(request: Request) {
       grants?: Record<string, string[]>;
       folderGrants?: Record<string, string[]>;
       masterUsers?: string[];
-      /** TASK 1 — rep user id → the managers who follow their cases. */
+
       caseManagers?: Record<string, string[]>;
-      /** ROUND 161 — user id → their referral-visibility override. */
+
       referralAccess?: Record<string, unknown>;
-      /** ROUND 197 — user id → "self" | "any". Absent user = off. */
+
       staffing?: Record<string, unknown>;
-      /** ROUND 197 — user ids with the cross-account transfer tick. */
+
       peerTransfer?: string[];
     };
     const denied = gate(request, body.ssoKey);
     if (denied) return denied;
 
-    // Each scope is OPTIONAL and saved independently. saveAccessGrantsV2 merges
-    // against what is stored, so a request carrying only `folderGrants` cannot
-    // wipe every pipeline grant on the account — which a naive whole-object
-    // write would do the first time the folders grid saves on its own.
     const norm = (
       g: Record<string, string[]> | undefined,
     ): Record<string, string[]> | undefined => {
@@ -239,29 +159,11 @@ export async function PUT(request: Request) {
       for (const [userId, ids] of Object.entries(g)) {
         if (!userId || !Array.isArray(ids)) continue;
         const list = [...new Set(ids.map(String).filter(Boolean))];
-        if (list.length) clean[userId] = list; // drop empties; keeps it readable
+        if (list.length) clean[userId] = list;
       }
       return clean;
     };
 
-    // ⚠️ `norm` DROPS AN EMPTY ARRAY, and for the case-manager map that is the
-    // right behaviour rather than a limitation — see the report. Removing a
-    // rep's last manager deletes the key, the row disappears from the tab, and
-    // `applyCaseManagers` still removes what it added because the test is its
-    // own stored record, not the map. The `[]` state stays meaningful in the
-    // storage model and is simply not something this screen can produce.
-    // ═══ ROUND 161 — ITS OWN NORMALISER, AND `norm` WOULD HAVE BROKEN IT ═════
-    //
-    // 🔴 `norm` DROPS AN EMPTY ARRAY (see its comment above). For case managers
-    // that is right; here it is the bug this feature exists to avoid. "Divisions,
-    // none selected" is the way an admin says "this person sees NO referrals" —
-    // run it through `norm` and it saves as absent, reads back as DERIVED, and
-    // the person falls straight to their pipeline grants. The one thing the
-    // three states are for, deleted on save.
-    //
-    // ⚠️ AND AN UNRECOGNISED MODE IS DROPPED RATHER THAN WIDENED. Anything that
-    // is not "agency" or "divisions" becomes absent — derived — because guessing
-    // "agency" would hand out access nobody granted.
     const normReferral = (
       g: Record<string, unknown> | undefined,
     ): Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }> | undefined => {
@@ -275,7 +177,7 @@ export async function PUT(request: Request) {
         else if (e.mode === "divisions")
           clean[userId] = {
             mode: "divisions",
-            // 🔴 KEPT WHEN EMPTY. This is the whole point.
+
             divisions: Array.isArray(e.divisions)
               ? [...new Set(e.divisions.map(String).filter(Boolean))]
               : [],
@@ -319,8 +221,7 @@ export async function PUT(request: Request) {
       ...(staffingPatch ? { staffing: staffingPatch } : {}),
       ...(peerPatch ? { peerTransfer: peerPatch } : {}),
     });
-    // Echo the MERGED state, not just what was sent — the caller needs to see
-    // what is actually stored now, including the scopes it didn't touch.
+
     const saved = await fetchAccessGrantsV2();
     return NextResponse.json(
       {

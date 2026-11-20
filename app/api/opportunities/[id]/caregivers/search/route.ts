@@ -16,25 +16,6 @@ import { withGrants } from "@/lib/withGrants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Typeahead for the add-link picker. Same visibility gate as managing the
-// record (own/follow, or admin).
-//
-// 🔴 ROUND 171 — THE SIDE IS DECIDED BY THE PIPELINE, NOT BY THE SEARCH.
-//
-// This route filtered to Record Type = "Caregiver" unconditionally, so on a
-// CAREGIVER's record the heading read "Clients" and the picker offered
-// caregivers. Round 170 found it and left it, because the value identifying a
-// client was unprobed; the probe came back saying there is no such value (see
-// getClientCaseRows), so a client is found by holding a client case.
-//
-// ⚠️ THE SAME TEST THE WRITE USES, DELIBERATELY. The POST on the parent route
-// decides which contact goes in which slot by asking whether this record's
-// pipeline is caregiver-scoped. If the picker answered that question a second
-// way the two could disagree, and a picker that offers the wrong side feeds a
-// correctly-ordered write with the wrong person — which reads as the slot bug
-// all over again.
-// ═══════════════════════════════════════════════════════════════════════════
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -78,26 +59,7 @@ async function getHandler(
     const openRecordIsCaregiver = cgPipes.some((p) => p.id === target.pipelineId);
 
     if (!openRecordIsCaregiver) {
-      // 🔴 ROUND 172 — NO ACCESS FILTER ON THIS SIDE, DELIBERATELY, AND THE
-      // ASYMMETRY WITH THE CLIENT BRANCH BELOW IS THE POINT.
-      //
-      // Reps link caregivers they do not recruit: the person staffing a case
-      // and the person who hired the caregiver are routinely in different
-      // divisions. Scoping this to the viewer's own applicant pipelines would
-      // leave a Private Pay rep unable to attach the caregiver actually doing
-      // the work — and they would create a duplicate contact instead, which is
-      // worse for everybody including whoever the scoping was meant to protect.
-      //
-      // ⚠️ SO THE PROTECTION IS THE FIELDS, NOT THE ROWS. `searchCaregiverContacts`
-      // returns a name, an applicant pipeline and a stage; no phone, no email,
-      // no compliance or health detail, withheld from the PAYLOAD and not just
-      // from the screen. And the gate above still applies: you must be able to
-      // edit the record this picker was opened from.
-      //
-      // 🔴 `withheld` IS 0 AND IT IS A FACT, NOT A PLACEHOLDER. Nothing is
-      // filtered out, so the count a filtered list owes its consumers is zero
-      // here — which is what lets the empty state say "No caregiver matches"
-      // without hedging.
+
       const cg = await searchCaregiverContacts(q);
       return NextResponse.json(
         {
@@ -110,14 +72,9 @@ async function getHandler(
       );
     }
 
-    // ── the open record is a CAREGIVER, so the other side is a CLIENT ───────
     const rows = await getClientCaseRows();
     const isAdmin = !session || isAdminSession(session.role, session.type);
-    // 🔴 THE STANDING RULE: A ROUTE THAT STARTS FILTERING A LIST OWES ITS
-    // CONSUMERS A COUNT. A recruiter editing a caregiver may hold no client
-    // pipeline at all, and the names of every client on the account are not
-    // theirs to read merely because this picker exists. The count travels so
-    // the picker can say "none you can see" rather than "none".
+
     const allowed = applyAccess(rows, {
       userId: session?.userId || "",
       isAdmin,
@@ -146,8 +103,7 @@ async function getHandler(
         createdAt: r.createdAt,
       })),
     );
-    // 🔴 NEVER THE CAREGIVER THEMSELVES. Linking a record to its own contact
-    // is two clicks and GoHighLevel refuses none of it.
+
     const exclude = target.contactId ? [target.contactId] : [];
     const results = matchCaseHolders(mine, q, { exclude });
     const everyone = matchCaseHolders(all, q, { exclude });
@@ -184,9 +140,6 @@ async function getHandler(
   }
 }
 
-
-// Grants are loaded once per request so canSeeRecord/canEditRecord see the
-// live pipeline-access custom value rather than only the env var.
 export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },

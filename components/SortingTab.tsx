@@ -1,21 +1,5 @@
 "use client";
-// ---------------------------------------------------------------------------
-// ROUND 197 — the two sorting tabs. ROUND 198 — redesigned.
-//
-//   "newleads"  every case at NEW LEAD the viewer is sent (theirs, plus
-//               unowned ones in pipelines they hold; admins: all). Each one
-//               gets Enroll · Transfer · Staffing.
-//   "staffing"  every UNOWNED case at REASSIGN the viewer is sent. Oldest
-//               waiting first. Each one gets Assign.
-//
-// 198: a stats row (and, on New Leads, where the sorted leads went), the same
-// smart search as the boards — scoped to THIS tab — with Show / Sort / Group,
-// board columns the width of every other board's, and no empty lanes.
-//
-// 🔴 IT FILTERS NOTHING FOR PERMISSION. The server already decided which
-// records this viewer receives (applyAccess + the Staffing gate). This view
-// only lays them out; the buttons it draws are re-checked server-side.
-// ---------------------------------------------------------------------------
+
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import type { OpportunityRecord } from "@/lib/types";
 import {
@@ -39,7 +23,6 @@ const STALE_DAYS = 2;
 type Kind = "newleads" | "staffing";
 export type SortAction = "enroll" | "transfer" | "staffing" | "assign";
 
-/** The page's SearchBox (round 195), handed in so both look and behave alike. */
 export type SearchBoxLike = (p: {
   which: "sorting";
   value: string;
@@ -51,7 +34,6 @@ export type SearchBoxLike = (p: {
   leadsLabel?: string;
 }) => ReactNode;
 
-/** The page's SourceMark: the Facebook / Google Ads / Indeed / Website logo. */
 export type SourceMarkLike = (p: { src: string; small?: boolean }) => ReactNode;
 
 type Show = "all" | "unopened" | "opened" | "unowned" | "owned" | "stale";
@@ -117,22 +99,22 @@ export default function SortingTab({
 }: {
   kind: Kind;
   records: OpportunityRecord[];
-  /** Every client record on the dashboard — the stats count stamps on these. */
+
   allRecords: OpportunityRecord[];
-  /** Id of the "Sorted From New Leads" field, or null when it doesn't exist. */
+
   sortedFieldId: string | null;
   isAdmin: boolean;
   view: "list" | "board";
-  /** Lane / chip order: the viewer's pipelines, then any shared ones. */
+
   pipelines: { id: string; name: string }[];
   labels: TabLabels;
-  /** Which buttons this viewer may use on this record (mirrors the server). */
+
   can: (r: OpportunityRecord, a: SortAction) => boolean;
   onOpen: (r: OpportunityRecord) => void;
   onAction: (r: OpportunityRecord, a: SortAction) => void;
   privatePayId: string;
   SearchBox: SearchBoxLike;
-  /** Same logo the pipeline boards show beside a lead's name. */
+
   SourceMark: SourceMarkLike;
 }) {
   const isNew = kind === "newleads";
@@ -152,7 +134,6 @@ export default function SortingTab({
   const now = Date.now();
   const todayStart = windowStart("today", now);
 
-  // ---- search index, once per payload ----
   const index = useMemo(() => {
     const m = new Map<string, ReturnType<typeof indexRecord>>();
     for (const r of records)
@@ -163,7 +144,6 @@ export default function SortingTab({
     return m;
   }, [records, labels.pipelines]);
 
-  // ---- order: unopened first then newest (new leads); oldest first (queue) ----
   const ordered = useMemo(() => {
     const out = [...records];
     if (sortBy === "default") {
@@ -185,7 +165,6 @@ export default function SortingTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, isNew, sortBy, labels.pipelines]);
 
-  // ---- search + tags + Show (everything except the pipeline chip) ----
   const pq = useMemo(() => parseQuery(q), [q]);
   const searched = useMemo(
     () =>
@@ -224,7 +203,6 @@ export default function SortingTab({
     setChip("all");
   };
 
-  // ---- suggestions: people, pipelines, sources, then the leads themselves ----
   const suggestions = useMemo(() => {
     if (!q.trim()) return [];
     const owners = new Map<string, { id: string; name: string; n: number }>();
@@ -289,7 +267,6 @@ export default function SortingTab({
     ...(sourceTag !== null ? [{ key: "s", label: sourceTag || "No source", onRemove: () => setSourceTag(null) }] : []),
   ];
 
-  // ---- stats ----
   const stats = useMemo(() => {
     const unopened = records.filter((r) => r.newLead).length;
     const arrivedToday = records.filter((r) => ts(r.createdAt) >= todayStart).length;
@@ -298,7 +275,7 @@ export default function SortingTab({
     const oldest = [...records].sort(
       (a, b) => ts(isNew ? a.createdAt : a.stageChangedAt || a.createdAt) - ts(isNew ? b.createdAt : b.stageChangedAt || b.createdAt),
     )[0];
-    // ROUND 198 — by source, with the logos, like the pipeline boards' tile.
+
     const src = new Map<string, number>();
     for (const r of records) src.set(r.src || "", (src.get(r.src || "") || 0) + 1);
     const bySource = [...src.entries()].sort((a, b) => b[1] - a[1]);
@@ -311,7 +288,6 @@ export default function SortingTab({
   );
   const winLabel: Record<StatsWindow, string> = { today: "today", "7d": "in the last 7 days", "30d": "in the last 30 days", all: "all time" };
 
-  // ---- the buttons ----
   const SortTo = ({ r }: { r: OpportunityRecord }) => {
     if (!isNew)
       return (
@@ -384,7 +360,6 @@ export default function SortingTab({
     </div>
   );
 
-  // ---- list rows, optionally grouped ----
   const limit = more.list || PAGE;
   const page = shown.slice(0, limit);
   const groups = useMemo(() => {
@@ -424,7 +399,7 @@ export default function SortingTab({
         </div>
         <div className="sortmeta" role="cell">
           {isNew ? (
-            // ROUND 198 — icon only (the source's name is in its tooltip).
+
             <span className="sortsrc">
               {r.src ? <SourceMark src={r.src} /> : <span className="sortnosrc" title="No source on this lead">—</span>}
             </span>
@@ -454,7 +429,7 @@ export default function SortingTab({
 
   return (
     <div className="sorttab" data-sorttab={kind}>
-      {/* ---- what this tab is ---- */}
+
       <div className="sorthead">
         <div className="sorttitle">
           <h2>{isNew ? labels.newLeads : labels.staffingTab}</h2>
@@ -481,7 +456,6 @@ export default function SortingTab({
         </ul>
       </div>
 
-      {/* ---- the numbers ---- */}
       <div className="sortstats">
         <div className="sortstat">
           <div className="k">Waiting {isNew ? "to sort" : "for an owner"}</div>
@@ -573,7 +547,6 @@ export default function SortingTab({
         ) : null}
       </div>
 
-      {/* ---- search, pipelines, show / sort / group ---- */}
       <div className="sorttools">
         <div className="sortsearchwrap">
           <SearchBox
@@ -630,7 +603,6 @@ export default function SortingTab({
         </div>
       </div>
 
-      {/* ---- the leads ---- */}
       {!shown.length ? (
         empty
       ) : view === "list" ? (
@@ -666,8 +638,7 @@ export default function SortingTab({
           </div>
         </div>
       ) : (
-        // 🔴 ROUND 198 — only pipelines that HAVE something; the width of every
-        // other board's column (264px, .col in globals.css).
+
         <div className="sortlanes">
           {laneIds
             .filter((id) => chip === "all" || id === chip)

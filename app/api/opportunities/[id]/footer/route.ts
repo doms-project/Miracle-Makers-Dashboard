@@ -14,29 +14,6 @@ import { withGrants } from "@/lib/withGrants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 168 — THE RECORD FOOTER: GoHighLevel's own, in our panel.
-//
-// 🔴 A SINGLE-RECORD READ DID NOT EXIST, AND THAT IS NOT AN OVERSIGHT. Round
-// 135 settled that the panel renders from the BOARD LIST — one payload, no
-// per-record fetch, which is what keeps opening a card instant and the request
-// count flat. This route exists because `internalSource` is the one thing the
-// panel needs that the search endpoint does not return, probed live:
-//
-//     GET /opportunities/{id}        internalSource: { type: CREATED,
-//                                      source: WORKFLOW_NEW, id: cb82ab6e-… }
-//     GET /opportunities/search      absent
-//
-// ⚠️ ONE READ PER PANEL OPEN, AND NEVER ADDED TO THE BOARD PAYLOAD. Folding it
-// into the list would mean several hundred single-record GETs on every load, on
-// an account whose budget is 100 requests per 10 seconds. The whole reason the
-// panel reads from the list is to avoid exactly that.
-//
-// 🔴 GATED LIKE EVERY OTHER PER-RECORD ROUTE — `canSeeRecord`, the same test
-// `conflicts/route.ts` uses, on the same mapped record. Without it this would
-// be a way to confirm a record's existence, its creation time and who made it
-// for any id a viewer could guess, on records their board withholds.
-// ═══════════════════════════════════════════════════════════════════════════
 async function getHandler(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -69,10 +46,6 @@ async function getHandler(
         { status: 403 },
       );
 
-    // ⚠️ RESOLVED SERVER-SIDE, because the label needs the user map and the
-    // client has only the users in its own payload — which is scoped. A record
-    // created by somebody outside the viewer's divisions would read "Former
-    // user" on the client and the right name here.
     const users = await getUserMap();
     const footer = got.footer;
     return NextResponse.json(
@@ -80,14 +53,9 @@ async function getHandler(
         ok: true,
         createdAt: footer.createdAt,
         updatedAt: footer.updatedAt,
-        /** "" when GoHighLevel sent no internalSource — the panel shows nothing. */
+
         createdBy: createdByLabel(footer, (uid) => users.get(uid) || ""),
-        /**
-         * ⚠️ THE RAW VALUE TRAVELS TOO, and it is deliberate. When the label
-         * falls through to the mechanical fallback, the only way anyone can
-         * send us the real value to map is if they can see it. It is account
-         * metadata — a GoHighLevel enum name — not client data.
-         */
+
         createdBySource: footer.sourceValue,
         recordId: id,
       },
@@ -115,7 +83,6 @@ export async function GET(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  // Grants are loaded once per request so canSeeRecord sees this viewer's
-  // pipelines — the same wrapper every other per-record route uses.
+
   return withGrants(() => getHandler(request, ctx));
 }

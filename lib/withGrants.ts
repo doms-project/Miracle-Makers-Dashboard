@@ -13,34 +13,16 @@ import {
   runWithStaffing,
 } from "./pipelineAccess";
 
-// Loads the pipeline-access grants ONCE for this request and runs the handler
-// with them installed, so getUserHomePipelines() (and therefore canSeeRecord,
-// applyAccess and userDivisions) sees the live custom value instead of the env
-// var.
-//
-// Deliberate properties:
-//   - per-REQUEST only; nothing is cached across requests, and a failed read is
-//     never cached (that was the users-lookup bug).
-//   - a missing / unparseable / failed read falls back to PIPELINE_ACCESS_MAP
-//     rather than locking everyone out.
-//   - the map is validated against the live user and pipeline lists, so a stale
-//     id (deleted user, deleted pipeline) is ignored instead of crashing the
-//     filter. If those lists can't be fetched we skip validation rather than
-//     treating every id as stale — failing open on VALIDATION, never on access.
 export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
   let stored: Record<string, string[]> | null = null;
-  // ITEM 4 + 6 — folder and master grants ride the same custom value and the
-  // same single read. Loading them separately would double the request count on
-  // every API call for two rarely-changing maps.
+
   let folderGrants: Record<string, string[]> = {};
   let masterUsers: string[] = [];
-  // 🔴 TASK 1 — rides the SAME single read as folders and master, for the
-  // reason written above: a separate custom value would be a second GET on
-  // every API call in the app, for a map that changes a few times a year.
+
   let caseManagers: Record<string, string[]> = {};
-  /** 🔴 ROUND 161 — rides the same single read, for the reason above. */
+
   let referralAccess: Record<string, { mode: "agency" } | { mode: "divisions"; divisions: string[] }> = {};
-  /** 🔴 ROUND 197 — same single read: Staffing needed levels + transfer ticks. */
+
   let staffing: Record<string, "self" | "any"> = {};
   let peerTransfer: string[] = [];
   let userIds: Set<string> | undefined;
@@ -56,30 +38,18 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
     staffing = v2?.staffing ?? {};
     peerTransfer = v2?.peerTransfer ?? [];
   } catch (e) {
-    // ITEM 2 root-cause trail. This was a bare `catch {}`: when the custom-value
-    // read failed, the request fell back to the env var with NOTHING said. If
-    // PIPELINE_ACCESS_MAP is also unset, every user then has zero home
-    // pipelines — no division, no [DIVISION] note prefix, and no clue why.
+
     // eslint-disable-next-line no-console
     console.error(
       "[grants] could not read the 'MM Pipeline Access' custom value — falling back to PIPELINE_ACCESS_MAP:",
       e instanceof Error ? e.message : String(e),
     );
-    stored = null; // fall back to the env var
+    stored = null;
   }
   try {
     userIds = await getLocationUserIds();
     pipelineIds = new Set((await listPipelines()).map((p) => p.id));
-    // getLocationUserIds() is built on getUserMap(), which SWALLOWS a failure and
-    // returns an EMPTY map (deliberately — it must not take down the read path).
-    // So a PIT missing `users.readonly` does not throw here; it succeeds with
-    // zero users, and buildGrants then validates every stored grant against an
-    // empty set and discards ALL of them as stale. That is how a users-scope 401
-    // silently wipes the entire pipeline access map: no division on Move notes,
-    // and every non-admin browsing nothing.
-    //
-    // An EMPTY list is "unavailable", not "nothing exists". Treat it exactly like
-    // the throw below — skip validation, keep the grants.
+
     if (!userIds.size) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -101,15 +71,11 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
       e instanceof Error ? e.message : String(e),
     );
     userIds = undefined;
-    pipelineIds = undefined; // skip validation rather than drop everything
+    pipelineIds = undefined;
   }
 
   const grants = buildGrants(stored, userIds, pipelineIds);
 
-  // Validation drops stale ids SILENTLY by design. Silent is right for the
-  // filter and wrong for the operator: a grant keyed by a user id that no longer
-  // exists (or a pipeline that was deleted) simply stops working, and the only
-  // symptom is a rep seeing nothing. Report exactly what was discarded.
   const storedCount = stored ? Object.keys(stored).length : null;
   if (storedCount != null && storedCount !== grants.size) {
     const kept = new Set(grants.keys());
@@ -128,16 +94,9 @@ export async function withGrants<T>(fn: () => Promise<T>): Promise<T> {
 
   return runWithGrants(grants, () =>
     runWithExtraGrants(buildIdMap(folderGrants), new Set(masterUsers), () =>
-      // ⚠️ NO ENV FALLBACK, unlike the pipeline grants. There is no
-      // CASE_MANAGER_MAP environment variable and there must not be: a frozen
-      // copy of who manages whom, on a second deployment, is a snapshot of a
-      // different company's staff — the same reasoning that has PIPELINE_ACCESS_MAP
-      // down as the last thing to fail closed. An unreadable value means an
-      // empty map, which by rule A means this feature does nothing at all.
+
       runWithCaseManagers(buildIdMap(caseManagers), () =>
-        // ⚠️ NOT `buildIdMap` — that builds Map<string, Set<string>> for id
-        // lists. These values are objects, so the Map is built directly and the
-        // three states survive: absent key, {divisions:[]}, {agency}.
+
         runWithReferralAccess(new Map(Object.entries(referralAccess)), () =>
           runWithStaffing(new Map(Object.entries(staffing)), new Set(peerTransfer), fn)))),
   );

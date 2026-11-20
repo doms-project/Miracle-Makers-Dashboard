@@ -10,24 +10,6 @@ export interface HybridUser {
   divisions?: string[];
 }
 
-// ITEM 4 — the hybrid picker for the four CUSTOM people-fields:
-//   Onboarding Rep · Case Manager · Sales Rep Assistant · HR / Assigned Team
-//
-// These are SINGLE_OPTIONS (HR / Assigned Team is MULTIPLE_OPTIONS) storing a
-// plain STRING, and their picklists in GHL hold almost nothing — which is why
-// they rendered as a dropdown containing only "TBD".
-//
-// Most of the people who belong in them ARE GHL users, so those are listed
-// automatically from the same users lookup the Owner field uses. The rest —
-// subcontractors, staff without a login — live in the field's own picklist and
-// are badged [ext] so the two are never confused.
-//
-// The stored value is a plain string either way. Nothing about the field's type
-// changes; a GHL workflow reading it sees exactly what it saw before.
-//
-// Adding a name is ADMIN ONLY and gated server-side in
-// /api/fields/[fieldId]/options. Choosing one is open to anyone who can edit the
-// record.
 export default function HybridPicker({
   fieldId,
   fieldName,
@@ -44,14 +26,14 @@ export default function HybridPicker({
   fieldId: string;
   fieldName: string;
   users: HybridUser[];
-  options: string[]; // the field's picklist, as GHL has it
+  options: string[];
   value: string | string[];
   multi?: boolean;
   disabled?: boolean;
   isAdmin: boolean;
   ssoBlob: string | null;
   onChange: (v: string | string[]) => void;
-  // Lets the panel update its cached field definitions without a full reload.
+
   onOptionAdded?: (fieldId: string, options: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -76,8 +58,7 @@ export default function HybridPicker({
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      // The record panel also listens for Escape — without stopping it here,
-      // dismissing this dropdown would close the whole record.
+
       if (e.key === "Escape") {
         e.stopPropagation();
         setOpen(false);
@@ -92,9 +73,6 @@ export default function HybridPicker({
     };
   }, [open]);
 
-  // GHL users first, then picklist entries that are NOT a user (the [ext] ones).
-  // Matching is case-insensitive on the name, so "Bill Lockfeld" stored in the
-  // picklist AND present as a user shows once, as a user.
   const { userRows, extRows } = useMemo(() => {
     const userNames = new Set(users.map((u) => u.name.trim().toLowerCase()));
     const ext = options
@@ -132,9 +110,7 @@ export default function HybridPicker({
     setBusy(true);
     setErr(null);
     try {
-      // apiFetch never throws a bare status: a Next 404 (an HTML page, not
-      // JSON) now reports the URL and says the running build predates the
-      // route, and a GHL failure carries GoHighLevel's own message.
+
       const j = await apiFetch<{ ok?: boolean; options?: string[] }>(
         `/api/fields/${encodeURIComponent(fieldId)}/options`,
         {
@@ -146,7 +122,7 @@ export default function HybridPicker({
       onOptionAdded?.(fieldId, j.options || [...options, v]);
       setNewName("");
       setAdding(false);
-      pick(v); // adding a name almost always means you want to select it
+      pick(v);
     } catch (e) {
       setErr(e);
     } finally {
@@ -292,8 +268,6 @@ export default function HybridPicker({
               );
             })}
 
-            {/* A value stored on the record that is in neither list — someone
-                edited it in GHL, or an option was removed. Never hide it. */}
             {selected
               .filter(
                 (s) =>

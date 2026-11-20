@@ -7,10 +7,6 @@ import type { ImportMeta, ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Admin-only. Returns ALL pipelines (+ their stages) and BOTH families of
-// custom field definition — opportunity and contact — so the import wizard's
-// destination + mapping dropdowns are fully dynamic. No pipeline, stage or
-// field is hardcoded.
 export async function GET(request: Request) {
   try {
     if (ssoConfigured()) {
@@ -27,16 +23,12 @@ export async function GET(request: Request) {
           { status: 403 },
         );
     }
-    // BOTH models. `getEditableFieldDefs()` defaults to "opportunity", and
-    // that default was the whole reason the applicant's 58 CONTACT fields were
-    // unreachable from the wizard: they were never in the list to pick.
+
     const [pipelines, fieldDefs, contactFieldDefs, tags] = await Promise.all([
       listPipelines(),
       getEditableFieldDefs("opportunity"),
       getEditableFieldDefs("contact"),
-      // ⚠️ NEVER FATAL. The tag list is a convenience for the batch-tag box.
-      // If GHL will not give it up, the box becomes a plain text field and the
-      // import still runs — losing suggestions must not lose the wizard.
+
       getLocationTags().catch(() => [] as string[]),
     ]);
     const body: ImportMeta = { pipelines, fieldDefs, contactFieldDefs, tags };

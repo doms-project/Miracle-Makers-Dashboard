@@ -1,118 +1,65 @@
-// The normalized shape the frontend expects. One object per OLTL opportunity.
 export interface OpportunityRecord {
   id: string;
-  // The OPPORTUNITY's own name (GHL `name`). Distinct from the contact — one
-  // contact can hold several opportunities, and showing only the contact name
-  // makes them indistinguishable in the list and panel header.
+
   oppName: string;
   first: string;
   last: string;
-  stage: string; // pipeline stage name
-  harmony: string; // Harmony ID (custom field)
-  countyId: string; // County ID (custom field)
-  office: string; // Office (custom field)
-  county: string; // County (custom field)
-  block: string; // Road Blocker (custom field); "None" when empty
-  ref: string; // Referral Source (custom field)
-  src: string; // Source (custom field)
-  rep: string; // owner / assigned user name
-  asst: string; // Sales Rep Assistant (custom field)
-  cm: string; // Case Manager (custom field)
-  onb: string; // Onboarding Rep (custom field)
-  cg: string; // Caregiver (custom field)
-  checked: boolean; // "Checked this week" (custom field)
-  // Identity fields used for the Phase 3 visibility filter (assignment-only).
-  ownerId: string; // GHL opportunity `assignedTo` user id ("" when unassigned)
-  followerIds: string[]; // GHL opportunity `followers` (array of user ids)
-  followerNames: string[]; // follower ids resolved to names via the users lookup
-  // Phase 2 editing — native fields + raw custom-field values keyed by field id.
-  stageId: string; // native pipelineStageId (the stable key; `stage` is the name)
-  status: string; // native opportunity status (open/won/lost/abandoned)
-  monetaryValue: number; // native value
-  cf: Record<string, unknown>; // fieldId -> current raw value (arrays preserved)
-  // ITEM #10 — the CONTACT's tags, carried through so a card can say HOW a
-  // record reached Sent out. `transferred-to-*` is written on every transfer;
-  // `reassigned-from-*` only on the reassign path, so its PRESENCE is the
-  // discriminator. Deliberately only presence: tags are contact-scoped, so the
-  // value's "from" half is unreliable (a within-division reassign writes
-  // `reassigned-from-oltl` beside `transferred-to-oltl`). The accurate source
-  // comes from the "Transferred From" FIELD instead — one job each.
-  //
-  // [] when GoHighLevel's opportunity search sends no contact tags. The card
-  // then falls back to the neutral wording rather than guessing.
-  // ITEM 1 — the contact's NATIVE name/phone/email, carried through so the panel
-  // can say how to reach the person. NOT custom fields and NOT in any folder, so
-  // CONTACT_FOLDERS never sees them; they get their own block at the top.
-  //
-  // ⚠️ NO EXTRA GHL CALL. These already ride along in the opportunity search's
-  // embedded `contact` object — the same object `tags` came from. They were
-  // simply never declared, so nothing read them.
+  stage: string;
+  harmony: string;
+  countyId: string;
+  office: string;
+  county: string;
+  block: string;
+  ref: string;
+  src: string;
+  rep: string;
+  asst: string;
+  cm: string;
+  onb: string;
+  cg: string;
+  checked: boolean;
+
+  ownerId: string;
+  followerIds: string[];
+  followerNames: string[];
+
+  stageId: string;
+  status: string;
+  monetaryValue: number;
+  cf: Record<string, unknown>;
+
   contactName: string;
   contactEmail: string;
   contactPhone: string;
   tags: string[];
-  contactId: string; // linked contact — notes are stored on the contact
-  // Multi-pipeline (v2). A record now belongs to one of several pipelines.
-  pipelineId: string; // the opportunity's native pipelineId
-  pipelineName: string; // resolved pipeline name (for the division badge)
-  shared: boolean; // true when surfaced via a NON-home pipeline (owner/follower)
-  // ITEM 2 — when this record last changed stage, for the Master view's
-  // days-in-stage. "" when GoHighLevel didn't send it; the UI then renders
-  // NOTHING rather than "0 days", which would be a confident claim about a
-  // record whose history we don't actually know.
+  contactId: string;
+
+  pipelineId: string;
+  pipelineName: string;
+  shared: boolean;
+
   stageChangedAt?: string;
-  // When the opportunity was created. "" when GoHighLevel sends no timestamp —
-  // the referral dashboard then shows "—" and counts the referral as UNDATED
-  // rather than as "referred today", which would inflate every 90-day figure.
-  /**
-   * 🔴 ROUND 174 — WHEN THE STATUS LAST CHANGED, FOR WON/LOST IN A PERIOD.
-   *
-   * ⚠️ IT IS NOT A SECOND `stageChangedAt`. It was identical to it on every
-   * record sampled live, and a bulk edit moves it without any status changing —
-   * so every number derived from it carries that sentence on screen. Option 1
-   * of the three in report 173; recording status changes properly is its own
-   * round.
-   */
+
   statusChangedAt?: string;
   createdAt?: string;
-  // ITEM 5 — OPTIMISTIC CONCURRENCY. GoHighLevel's `updatedAt`, carried through
-  // to the client and sent back on every write. The server compares it to the
-  // stored value and refuses the write if anyone else has touched the record in
-  // between, instead of silently overwriting their change.
-  //
-  // "" when GoHighLevel sent no timestamp — the check then cannot run and the
-  // write proceeds. That is deliberate: refusing every write because we can't
-  // read a version would break the app over a missing field, whereas the old
-  // behaviour (last write wins) is what we already had.
+
   version?: string;
-  /**
-   * ROUND 181 — the "First Opened" field, raw: `<iso>|<userId>`, or "" when
-   * nobody has opened the case in the dashboard. Read by lib/newLead.ts.
-   */
+
   firstOpened?: string;
-  /**
-   * ROUND 181 — set by the server on client AND Recruiting records: true while the case
-   * is a "new lead" (open, created on/after the cutoff, never opened). Absent
-   * when tracking is off — no field on the account — so no label can be stuck.
-   */
+
   newLead?: boolean;
 }
 
-// Custom-field definition sent to the client to drive the dynamic editors.
 export interface EditableFieldDef {
   id: string;
   name: string;
-  dataType: string; // TEXT | LARGE_TEXT | SINGLE_OPTIONS | MULTIPLE_OPTIONS | DATE | NUMERICAL | MONETORY | CHECKBOX
-  options: string[]; // option strings for *_OPTIONS / CHECKBOX
-  // ITEM 3 — the folder's NAME when GoHighLevel supplies one. Folders are
-  // matched by name first (a name survives a folder being recreated; an id does
-  // not), falling back to parentId when absent.
+  dataType: string;
+  options: string[];
+
   parentName?: string;
-  editable: boolean; // false for the read-only blocklist
-  parentId: string; // custom-field folder id (drives folder-driven field sets)
-  // GHL's authored display order WITHIN a folder (spaced in 50s so fields can be
-  // inserted between later — never renumber, just respect it). The search API
-  // returns fields in an arbitrary order, so this is the only reliable ordering.
+  editable: boolean;
+  parentId: string;
+
   position: number;
 }
 
@@ -121,28 +68,19 @@ export interface Note {
   who: string;
   when: string;
   txt: string;
-  // The author's division AT WRITE TIME, stamped into the note body. Never
-  // looked up later — a lookup would relabel past notes if the author moves
-  // division, rewriting history.
+
   division?: string;
-  // ITEM 4 — note editing. The UI shows the edit affordance only when
-  // authorId === the viewer; the server re-checks and is the real boundary.
-  // `edited` renders the marker that keeps an overwrite honest.
+
   authorId?: string;
   edited?: boolean;
-  // ITEM 5 — soft-deleted. The note stays in history, struck through, showing
-  // who removed it and when; the original text is not kept.
+
   removed?: boolean;
-  // ITEM 2 — a Move note carries a SYSTEM record plus the author's words. The
-  // author may correct or withdraw only their half; the system half is what
-  // tells the receiving rep how the case got to them.
+
   isMove?: boolean;
-  system?: string; // "" for a manual note
-  reason?: string; // the whole text for a manual note
+  system?: string;
+  reason?: string;
 }
 
-// Add Client (item 3) — what the modal posts. `assignedTo` is ADVISORY: the
-// server forces a rep to themselves and only honours it for an admin.
 export interface NewClientPayload {
   firstName: string;
   lastName: string;
@@ -152,11 +90,8 @@ export interface NewClientPayload {
   stageId?: string;
   assignedTo?: string;
   oppName?: string;
-  contactId?: string; // set when the user picked an existing contact
-  // ITEM 3 — the collapsed "more details" fields, keyed BY FIELD ID with real
-  // option values. They were three free-text strings; Office is MULTIPLE_OPTIONS
-  // and County / Referral Source Type are SINGLE_OPTIONS, so free text produced
-  // values no filter, report or GHL workflow could read.
+  contactId?: string;
+
   details?: Record<string, string | string[]>;
 }
 
@@ -165,103 +100,61 @@ export interface ContactMatch {
   name: string;
   email: string;
   phone: string;
-  // Pipelines where this contact ALREADY has a case — each one is a destination
-  // GHL will refuse (OPPORTUNITY_NO_DUPLICATE).
+
   pipelines: { pipelineId: string; pipelineName: string; stage: string }[];
 }
 
 export interface Viewer {
-  authenticated: boolean; // false when SSO isn't configured (open/setup mode)
-  isAdmin: boolean; // isAdminRole(role): "admin" or "owner" (lib/adminRole.ts) — never `type`
+  authenticated: boolean;
+  isAdmin: boolean;
   userName: string | null;
   role: string | null;
-  type?: string | null; // GHL session `type` (agency/location) — diagnostic
-  total: number; // total records before the visibility filter
-  // v2 — the viewer's HOME pipelines (admins: all selected). Drives the board
-  // (home pipelines only) and the division filter.
+  type?: string | null;
+  total: number;
+
   homePipelineIds?: string[];
-  // ITEM 4 — Master view grant. Not a role: it changes the LAYOUT of records the
-  // viewer can already see, never which records those are.
+
   canSeeMaster?: boolean;
-  /** ROUND 197 — the Staffing needed setting ("admin" for admins). */
+
   staffing?: "admin" | "any" | "self" | "off";
-  /** ROUND 197 — may use Transfer to ODP / Miracle Makers (the Access tick). */
+
   canPeerTransfer?: boolean;
 }
 
 export interface OpportunitiesResponse {
   records: OpportunityRecord[];
-  /**
-   * ROUND 181 — whether opens can be recorded (the "First Opened" field
-   * exists) and the creation cutoff. Both scopes.
-   */
+
   newLeads?: { tracking: boolean; since: string };
-  // A pipeline whose fetch failed. Its records are ABSENT from `records`, and
-  // that is indistinguishable from "this pipeline is empty" unless we say so.
+
   failedPipelines?: { id: string; name: string; error: string }[];
-  pipeline: { id: string; name: string } | null; // legacy single-pipeline summary (v2: null)
+  pipeline: { id: string; name: string } | null;
   count: number;
   viewer?: Viewer;
-  // Metadata for the Phase 2 editors (same for all records).
-  fieldDefs?: EditableFieldDef[]; // OLTL opportunity custom-field definitions
-  // 🔴 pipelineId -> the folder KEYS (or raw ids, for folders created at
-  // runtime) that pipeline's record panel shows — the admin's stored decision.
-  //
-  // Shipped WITH fieldDefs on purpose: groupFieldsForPipeline is synchronous
-  // and cannot fetch it. ABSENT means "could not be read", which the panel
-  // treats as "not loaded" and falls back to the code map — never as "empty".
+
+  fieldDefs?: EditableFieldDef[];
+
   pipelineFolders?: Record<string, string[]>;
-  /** ITEM Q — field ids hidden per pipeline. Only pipelines that hide something. */
+
   pipelineExclusions?: Record<string, string[]>;
-  /** ITEM 1 — pipelines explicitly marked "staff". Absent = caregiver. */
+
   pipelineGroups?: Record<string, "caregiver" | "staff">;
-  /**
-   * ROUND 176 — pipelines whose Clients-sidebar tab an admin turned off.
-   * Only hidden ones. ABSENT means the config could not be read: show them all.
-   * Navigation only — it never narrows `records` or `pipelines`.
-   */
+
   pipelineSidebarHidden?: Record<string, true>;
-  /**
-   * 🔴 ROUND 155 — HOW MANY PIPELINES ARE NOT IN `pipelines`.
-   *
-   * `pipelines` is now scoped to what this viewer holds a grant for, plus the
-   * pipelines of records they can already see. This says how many were left
-   * out, and it is NOT courtesy: `recruitingEmpty` says "N pipelines exist, but
-   * none is yours yet" and used to derive that N by counting the full list.
-   * Without this the same screen would read "no pipelines are set up yet" —
-   * false, and it sends an admin off to create one that already exists.
-   *
-   * ⚠️ A COUNT, NEVER NAMES. That is the whole point of the scoping; the number
-   * says an access decision was made, which is the thing a reader cannot
-   * otherwise tell from an empty list.
-   */
+
   pipelinesWithheld?: number;
-  // folderId -> its NAME. The only place a folder name can live: GoHighLevel
-  // returns parentName empty on every field and refuses the folder endpoint
-  // for opportunity/contact objects.
+
   folderNames?: Record<string, string>;
-  stages?: { id: string; name: string }[]; // union of stages across pipelines (deduped by id)
-  // Location users for the owner/follower pickers. `divisions` labels each user
-  // (empty = none mapped -> the picker shows "—", never hides them).
+  stages?: { id: string; name: string }[];
+
   users?: { id: string; name: string; divisions?: string[]; pipelineIds?: string[] }[];
-  // Multi-pipeline (v2).
-  pipelines?: { id: string; name: string }[]; // the selected pipelines, in order
-  stagesByPipeline?: Record<string, { id: string; name: string }[]>; // pipelineId -> its stages
-  /**
-   * 🔴 ROUND 132 — the other company's sub-account, if this deployment has one.
-   *
-   * ⚠️ `configured` IS A FLAG, NOT A CREDENTIAL. `PEER_PIT` never leaves the
-   * server; this only says whether one is set, so the Transfer control can be
-   * absent rather than present-and-always-failing.
-   */
+
+  pipelines?: { id: string; name: string }[];
+  stagesByPipeline?: Record<string, { id: string; name: string }[]>;
+
   peer?: { configured: boolean; label: string };
-  /**
-   * 🔴 ROUND 197 — the STORED tab names (keys as in StoredPipelineConfig.labels).
-   * Raw, so the browser can tell "renamed" from "default" for Reset; it
-   * resolves them through lib/sorting.ts resolveLabels().
-   */
+
   tabLabels?: Record<string, string>;
-  /** ROUND 197 — every client pipeline's id + name, for the Sort dialog only. */
+
   sortTargets?: { id: string; name: string }[];
 }
 
@@ -269,27 +162,12 @@ export interface ApiError {
   error: string;
   detail?: string;
   status?: number;
-  /**
-   * 🔴 TRUE WHEN THE APP DECLINED ON PURPOSE — round 119, item 3.
-   *
-   * A REFUSAL and a FAULT are not the same thing and must not look the same.
-   * "\"PP Staff Applicants\" has no scope yet. Choose Client or Caregiver above"
-   * is round 112's guard doing exactly its job, and it was rendered under
-   * "✗ Something went wrong. The details below will help us fix it." — behind a
-   * disclosure triangle. The instruction was hidden inside a fault report.
-   *
-   * ⚠️ MARKED BY THE THING THAT DECIDED, not inferred from a status code. A 400
-   * from GoHighLevel is a fault; a 400 from OUR OWN route carrying our own
-   * sentence is a refusal. Only the code that refused can tell them apart, so
-   * it says so here rather than leaving the renderer to guess.
-   */
+
   refusal?: boolean;
 }
 
-// Resources tab — a file in the OLTL Resources media folder.
 export interface ResourceFile {
-  // ITEM 11 — needed to delete one file. "" when GHL sent no id, and the UI
-  // hides the delete affordance in that case rather than sending a blank id.
+
   id: string;
   name: string;
   url: string;
@@ -303,7 +181,6 @@ export interface ResourcesResponse {
   count: number;
 }
 
-// Bulk import — metadata for the wizard (all dynamic, nothing hardcoded).
 export interface ImportPipeline {
   id: string;
   name: string;
@@ -311,20 +188,13 @@ export interface ImportPipeline {
 }
 export interface ImportMeta {
   pipelines: ImportPipeline[];
-  fieldDefs: EditableFieldDef[]; // opportunity custom fields (map targets)
-  // ITEM 3 — CONTACT custom fields, the other half of the map targets.
-  //
-  // 🔴 An applicant's experience, certifications and availability are CONTACT
-  // fields BY DESIGN — they describe the person and survive a second
-  // application. The wizard only ever offered opportunity fields, so none of
-  // the 58 applicant fields could be imported into at all.
+  fieldDefs: EditableFieldDef[];
+
   contactFieldDefs: EditableFieldDef[];
-  // Existing tags on the location, for the batch-tag suggestions. SUGGEST, not
-  // restrict — a new tag is the normal case. Empty if the read failed; the
-  // wizard degrades to a plain text box rather than blocking the import.
+
   tags: string[];
 }
-/** Item 5 — a row whose person already exists, found BEFORE anything is written. */
+
 export interface ImportDuplicate {
   row: number;
   name: string;
@@ -332,27 +202,23 @@ export interface ImportDuplicate {
   matchedOn: "email" | "phone";
 }
 
-/** What to do with rows whose person already exists. */
 export type DuplicateMode = "update" | "overwrite" | "skip";
 
 export interface ImportRowError {
-  row: number; // 1-based row index within the file
+  row: number;
   error: string;
 }
 export interface ImportSummary {
   created: number;
-  updated: number; // existing contact, fields written and note added
-  skipped: number; // existing contact, left untouched
+  updated: number;
+  skipped: number;
   failed: number;
-  noted: number; // import notes written
-  notesSkipped: number; // a note with this heading was already on the record
-  // Contacts the batch tag was applied to. Counted separately from `created` +
-  // `updated` because a tag write can fail on its own without costing the row.
+  noted: number;
+  notesSkipped: number;
+
   tagged: number;
   errors: ImportRowError[];
-  // Values that could not be normalised for their target type. NOT errors —
-  // the value was imported exactly as written; this is the list a person looks
-  // at afterwards to decide whether it was right.
+
   flagged: ImportFlag[];
 }
 
@@ -363,40 +229,21 @@ export interface ImportFlag {
   reason: string;
 }
 
-// Task 4 — a caregiver linked to a client via the caregiver_client association.
 export interface Caregiver {
-  relationId: string; // used to remove the link
-  contactId: string; // the OTHER contact in the relation (deep-links to GHL)
+  relationId: string;
+  contactId: string;
   name: string;
-  // The association is DIRECTIONAL. On a client's record the other side is a
-  // caregiver; on a caregiver's record it is a client. The heading and the
-  // wording follow this — they used to say "Caregivers" on both.
+
   role?: "caregiver" | "client";
 }
 
-// Caregiver/client link counts for the list + board badges, keyed by contactId.
-//
-// 🔴 ROUND 152 — `unknown` IS A THIRD STATE AND IT IS NOT A ZERO.
-//
-// The client recorded `{caregivers:0, clients:0}` for every id the server did
-// not answer for, and the route's own comment said that was fine: "It simply
-// gets no badge, which is the same as having no links." It is not the same. A
-// contact whose relations read FAILED is not a contact with no relations, and
-// because the zero is recorded it is never asked about again — so one upstream
-// failure pinned a wrong badge for the rest of the session.
-//
-// ⚠️ THE SAME SHAPE AS EVERY OTHER DEFECT IN THIS TASK: a blank rendered as an
-// answer. It is only worse here because nothing on screen said anything was
-// missing — a 504 loses every badge visibly; this lost one, silently, and
-// permanently.
 export type RelationCount =
   | { caregivers: number; clients: number; unknown?: false }
-  /** The read failed or timed out. Never rendered as "no links". */
+
   | { caregivers?: undefined; clients?: undefined; unknown: true };
 
 export type RelationCounts = Record<string, RelationCount>;
 
-// Task 5 — email send. A selectable recipient (client or caregiver contact).
 export interface EmailRecipient {
   contactId: string;
   name: string;

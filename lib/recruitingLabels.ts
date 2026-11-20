@@ -1,24 +1,5 @@
-// ---------------------------------------------------------------------------
-// ROUND 175 · ITEM 2 — ODP CALLS THEM DSPs.
-//
-// 🔴 PURE, AND NOT INLINE IN THE COMPONENT. Round 167 reverted an inline
-// `useMemo` and the proof came back GREEN — rule 10. Wording a proof must be
-// able to check does not live inside JSX.
-//
-// ⚠️ LABELS ONLY. Nothing here changes which pipelines a viewer holds, which
-// records they see, or what is written. "DSP" is what ODP calls the same role
-// OLTL calls a caregiver; the grouping underneath is untouched.
-// ---------------------------------------------------------------------------
 import { divisionLabel } from "./division";
 
-/**
- * Is every recruiting pipeline this viewer holds an ODP one?
- *
- * 🔴 EVERY, AND AT LEAST ONE. A viewer with OLTL and ODP sees the OLTL wording,
- * because "DSP" would be wrong for half their board — and a viewer with NO
- * recruiting pipelines is not ODP-only, they are nothing-only. An `every()` on
- * an empty array is `true`, which is exactly the trap here.
- */
 export function isOdpOnlyRecruiting(pipelineNames: string[]): boolean {
   const divs = pipelineNames
     .map((n) => divisionLabel(n).toUpperCase())
@@ -30,11 +11,11 @@ export function isOdpOnlyRecruiting(pipelineNames: string[]): boolean {
 export type RecruitingGroup = "caregiver" | "staff" | "all";
 
 export interface RecruitingNouns {
-  /** The menu's own word for this choice — so the control shows what it offered. */
+
   group: string;
   one: string;
   many: string;
-  /** What a PIPELINE in this group is called, which is not what a RECORD is called. */
+
   pipelines: string;
 }
 
@@ -51,9 +32,7 @@ export function recruitingNouns(
     };
   if (group === "all")
     return { group: "All", one: "applicant", many: "applicants", pipelines: "recruiting" };
-  // ⚠️ "DSPs" / "Caregivers" IS THE ONLY THING odpOnly CHANGES. The record noun
-  // stays "applicant" in both: an applicant is an applicant whichever programme
-  // they applied to, and only the ROLE has two names.
+
   return {
     group: odpOnly ? "DSPs" : "Caregivers",
     one: "applicant",
@@ -68,7 +47,6 @@ export interface RecruitingOption {
   hint: string;
 }
 
-/** The group picker's three choices, in order. */
 export function recruitingGroupOptions(odpOnly: boolean): RecruitingOption[] {
   return [
     {

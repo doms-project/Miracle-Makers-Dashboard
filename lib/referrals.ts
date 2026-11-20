@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// REFERRAL PARTNERS — the vocabulary and the arithmetic.
-//
-// 🔴 THE ARITHMETIC IS THE PRODUCT. The brief says so, and it is taken from the
-// prototype VERBATIM rather than from the brief's prose summary — the two
-// disagree in four places and the prototype is the one that runs. Every
-// difference is marked ⚠️ PROTOTYPE where it appears.
-//
-// ⚠️ ISOMORPHIC. The section computes these to render and the route computes
-// them to answer; two copies would drift.
-// ---------------------------------------------------------------------------
-
-/** Contact custom fields. Ids cross-check the NAME lookup, never replace it. */
 export const PARTNER_FIELDS = {
   recordType: { id: "dmZVdhXsk65gRwUxHDpF", name: "Record Type" },
   category: { id: "QvRjlFRKR6ppml2QhUb7", name: "Partner Category" },
@@ -19,7 +6,6 @@ export const PARTNER_FIELDS = {
   notes: { id: "7bHU9QP42u5JCuOPZBbs", name: "Partner Notes" },
 } as const;
 
-/** Opportunity custom field holding the partner's CONTACT ID, as text. */
 export const REFERRING_PARTNER_FIELD = "GE6Wj9WhrUVc2ZGwxqLP";
 
 export const EVENT_FIELDS = {
@@ -37,31 +23,6 @@ export const ATTENDEE_FIELDS = {
 export const PARTNER_RECORD_TYPE = "Referral Partner";
 export const ATTENDEE_RECORD_TYPE = "Event Attendee";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🔴 THE THREE JOINS. THESE ARE THE EXACT NAMES THE ROUTE LOOKS FOR.
-//
-// You asked which names to create so they match. The FIRST entry in each list
-// is canonical — create exactly that and everything below starts working with
-// no code change. The rest are tolerated aliases so a near-miss spelling does
-// not silently produce an empty Events tab.
-//
-//   1. Event Attended   CONTACT      ✅ already exists on the account
-//   2. Event Source     OPPORTUNITY  ← create: which event produced this client
-//   3. Event Host       OPPORTUNITY  ← create: which partner ran this event
-//
-// ⚠️ EVERY ONE IS **TEXT HOLDING AN ID**, exactly like `Referring Partner`.
-// Report 99 (a) settled why, and it pays off three more times here: an
-// opportunity's `cf` already rides along on the search this app makes anyway,
-// so each join costs ZERO extra calls. An association would cost one request
-// per record.
-//
-// ⚠️ `Event Source` IS YOUR SPELLING AND IT WINS. Report 101 proposed "Source
-// Event"; you wrote "Event Source". Yours is canonical — mine is kept below as
-// an alias so whichever exists is found, rather than the two of us each being
-// half right and the tab rendering nothing.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** Which event this attendee was met at. Holds the event opportunity's id. */
 export const ATTENDEE_EVENT_FIELD_NAMES = [
   "Event Attended",
   "Attended Event",
@@ -69,31 +30,15 @@ export const ATTENDEE_EVENT_FIELD_NAMES = [
   "Event ID",
 ] as const;
 
-/**
- * ✅ CREATED ON THE ACCOUNT, 12 September. Ids kept as a CROSS-CHECK only — the
- * route still resolves by name, so these never become the single point of
- * failure a hardcoded pair would be.
- *
- *   Event Source   O87ax86ucnqvbXhJkkep   opportunity
- *   Event Host     PCbzK8AbUDYajq9Aja60   opportunity
- */
 export const OPP_EVENT_FIELD_ID = "O87ax86ucnqvbXhJkkep";
 export const EVENT_HOST_FIELD_ID = "PCbzK8AbUDYajq9Aja60";
 
-/** Which event produced this client. Holds the event opportunity's id. */
 export const OPP_EVENT_FIELD_NAMES = [
   "Event Source",
   "Source Event",
   "Referring Event",
 ] as const;
 
-/**
- * Which partner ran this event. Holds the partner CONTACT's id.
- *
- * Powers "Run by [ Riddle Hospital ]" on an event card and the whole "Events
- * worked" section of the partner drawer. Absent → "No organisation linked",
- * which is the brief's own wording for it.
- */
 export const EVENT_HOST_FIELD_NAMES = [
   "Event Host",
   "Hosted By",
@@ -101,38 +46,14 @@ export const EVENT_HOST_FIELD_NAMES = [
   "Host",
 ] as const;
 
-/**
- * A touch's kind.
- *
- * ⚠️ The prototype's mock carries only `Visit` and `Call` (TOUCH_LOG:476) and
- * the brief says "Type and note" without listing values. Fixed list rather than
- * free text, for the same reason the categories are fixed: free text is how one
- * channel ends up counted twice.
- */
 export const TOUCH_TYPES = ["Call", "Visit", "Email", "Event", "Other"] as const;
 
-/**
- * 🔴 THE TYPE IS PREFIXED INTO THE NOTE, BECAUSE GoHighLevel HAS NOWHERE ELSE.
- *
- * A note carries body / userId / dateAdded / relations and no metadata field —
- * recorded at lib/ghl.ts's DIVISION_TAG for exactly this reason. So the type
- * goes where the division already goes: into the text, at the front.
- *
- * ⚠️ `Visit: ` , the prototype's own shape, NOT `[Visit] `. The bracket form is
- * already load-bearing on OPPORTUNITY notes (division and edited tags) and
- * parseNoteBody() consumes leading bracket tags — reusing it here would make a
- * partner touch parse as a division-tagged opportunity note.
- *
- * ⚠️ IT SURVIVES IN GOHIGHLEVEL, which is the point: a rep reading the contact
- * natively sees "Visit: dropped lunch for the discharge team", not a code.
- */
 export function composeTouch(type: string, text: string): string {
   const t = (type || "").trim();
   const body = (text || "").trim();
   return t && (TOUCH_TYPES as readonly string[]).includes(t) ? `${t}: ${body}` : body;
 }
 
-/** The inverse. An untyped note (or one written in GHL) returns type "". */
 export function parseTouch(body: string): { type: string; text: string } {
   const m = /^([A-Za-z][A-Za-z ]{0,12}):\s*([\s\S]*)$/.exec(body || "");
   if (m && (TOUCH_TYPES as readonly string[]).includes(m[1].trim()))
@@ -143,21 +64,10 @@ export function parseTouch(body: string): { type: string; text: string } {
 export const TIERS = ["A", "B", "C", "Prospect"] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** Days between touches, by tier. */
 export const CADENCE: Record<string, number> = { A: 14, B: 30, C: 90, Prospect: 21 };
 
-/**
- * How hard an overdue touch pushes up the queue.
- *
- * 🔴 ⚠️ PROTOTYPE — THE BRIEF OMITS `Prospect`. It lists `{A:3, B:2, C:1}`; the
- * prototype has `{A:3, B:2, C:1, Prospect:2}`. Without the fourth entry a
- * Prospect's priority is `overdueBy * undefined` = NaN, and NaN sorts
- * unpredictably — the queue would put every Prospect in an arbitrary place with
- * nothing on screen to say why. Taken from the prototype.
- */
 export const WEIGHT: Record<string, number> = { A: 3, B: 2, C: 1, Prospect: 2 };
 
-/** ⚠️ PROTOTYPE — "due this week" is SEVEN days, not the brief's three. */
 export const DUE_SOON_DAYS = 7;
 
 export const OUTCOMES = [
@@ -169,19 +79,6 @@ export const OUTCOMES = [
 ] as const;
 export const LEGIT_LEAD = "Legit lead";
 
-/**
- * 🔴 A FALLBACK ONLY — THE LIVE FIELD IS THE TRUTH.
- *
- * Settled: the dropdown reads `Partner Category`'s own options from
- * GoHighLevel, so there is nothing to reconcile and editing the list in GHL
- * changes the dashboard with no deploy. This array is used ONLY when the field
- * has no options at all, which on a configured account never happens.
- *
- * ⚠️ SO DO NOT "FIX" THIS LIST TO MATCH THE ACCOUNT. It is not meant to match.
- * Three lists existed (16 in the prototype, 17 in the brief, 19 on the live
- * field) precisely because each was somebody's copy of another; a fourth copy
- * kept in sync by hand is the bug, not the cure.
- */
 export const PARTNER_CATEGORIES = [
   "Hospital discharge",
   "SNF / rehab",
@@ -201,74 +98,18 @@ export const PARTNER_CATEGORIES = [
   "Former client family",
 ] as const;
 
-/**
- * 🔴 ROUND 128 — THE SWITCHER'S DIVISIONS COME FROM THE FIELD, NOT FROM HERE.
- *
- * This was the live list, and on an ODP-only deployment it offered two
- * divisions that cannot exist there: a user picked OLTL and got an empty screen
- * with no explanation — the screen was right and the list was lying to it.
- *
- * ⚠️ IT IS THE SAME ARGUMENT THAT SETTLED Partner Category IN ROUND 103: read
- * the options live and the reconciliation problem disappears permanently, while
- * an admin adding a division in GoHighLevel gets it here for free.
- *
- * 🔴 KEPT AS A FALLBACK ONLY — the same standing the pipeline env lists were
- * reduced to in round 127. It answers "what do we show when the field's own
- * options cannot be read", which is a default; it no longer answers "which
- * divisions exist", which is a fact with a live source.
- */
 export const DIVISIONS = ["Private Pay", "OLTL", "ODP", "All"] as const;
 
-/**
- * 🔴 NOW A STRING, because the set is whatever the account's field says.
- *
- * ⚠️ THE TYPE WAS DOING REAL WORK AND THIS GIVES SOME OF IT UP. A union caught
- * a typo at compile time; a string cannot. What replaces it is narrower and
- * better placed: the switcher can only ever be SET to a value it just listed,
- * and a stored choice that is no longer offered is clamped back to All rather
- * than left pointing at a division that does not exist.
- */
 export type Division = string;
 
-/** The switcher's own value. Not an option on the field, and never expected in the data. */
 export const ALL_DIVISIONS = "All";
 
-/**
- * ⚠️ A PARTNER MARKED "All" APPEARS UNDER EVERY DIVISION, not only under "All".
- * Same for an event. "All" is a property of the partner, not a filter value.
- */
 export function inDivision(recordDivision: string, viewing: Division): boolean {
   if (viewing === ALL_DIVISIONS) return true;
   const d = (recordDivision || "").trim();
   return !d || d === "All" || d === viewing;
 }
 
-/**
- * ═══ ROUND 167 · B6 — WHAT THE DIVISION SWITCHER MAY OFFER ═════════════════
- *
- * 🔴 PURE, AND IT IS HERE RATHER THAN IN THE COMPONENT BECAUSE OF A REVERT THAT
- * CAME BACK GREEN. The first version of this lived in a `useMemo` inside
- * ReferralsSection, and round 167's proof asserted the SERVER field it reads
- * (`meta.viewerReferralDivisions`) rather than the derivation itself — so
- * reverting the derivation changed nothing the proof could see. That is rule
- * 10: a revert that changes nothing is not a passing revert, it is a proof not
- * reaching the code. Pulled out here, it is driven with literals.
- *
- * 🔴 ACCESS FIRST, THEN THE DATA, AND BOTH ARE NEEDED.
- *
- *   ACCESS   an ODP-only viewer must read "ODP" even on a day when no ODP
- *            partner and no ODP event exists. Deriving from the data alone is
- *            what let one unscoped OLTL event put "OLTL" on their heading, and
- *            what made the heading read "Referral partners" when it was deleted.
- *
- *   DATA     an ADMIN has no divisions (`null` = all), so access alone would
- *            give them an empty switcher; and a division that exists in the
- *            records but that nobody holds must stay reachable by whoever can
- *            see it.
- *
- * ⚠️ "All" IS NEVER AN ENTRY. A record marked "All" appears under every
- * division — that is the record saying something, not a menu item.
- */
 export function headingDivisions(
   viewerDivisions: readonly string[] | null | undefined,
   partners: readonly { division?: string }[],
@@ -291,195 +132,63 @@ export interface RawPartner {
   tier: string;
   division: string;
   owner: string;
-  /**
-   * The owner's USER ID, beside the resolved name.
-   *
-   * ⚠️ The Touch queue's Mine/All filter compares ids, never names. Two staff
-   * called Chris, or a rename in GoHighLevel, would silently change who a
-   * worklist belongs to if it matched on the display string.
-   */
+
   ownerId: string;
   notes: string;
-  /**
-   * 🔴 TASK 2 · SECTION 4 — YOU OWN THIS PARTNER, AND THEIR DIVISION IS NOT ONE
-   * YOU HOLD.
-   *
-   * The exact parallel to `applyAccess` admitting an owned record from any
-   * pipeline as `shared: true` (lib/pipelineAccess.ts:143): a rep who owns an
-   * ODP partner while holding only Private Pay must still see them, because
-   * withholding it would hide their own work from them.
-   *
-   * ⚠️ ALWAYS FALSE FOR AN ADMIN, and for a deployment with no SSO — there is
-   * no viewer to be outside anything.
-   */
+
   shared: boolean;
-  /**
-   * Days since the newest note on this contact.
-   *
-   * 🔴 NULL MEANS UNKNOWN, NOT ZERO — the notes for this partner have not been
-   * fetched (Sources loads them for what is on screen only). A partner with no
-   * note at all is `Infinity`, which IS overdue: nobody has ever spoken to
-   * them, which is the point.
-   */
+
   lastTouch: number | null;
 }
 
 export interface RawReferral {
   id: string;
-  /**
-   * 🔴 THE CLIENT'S NAME — round 112, item 4.
-   *
-   * The drawer listed "3 days ago · won · $5,500/mo" four times over and a rep
-   * could not tell which case was which. Items 2 and 3 then put EDITABLE
-   * controls on those rows, and nobody edits an unnamed row confidently.
-   *
-   * ⚠️ THIS DOES NOT BREACH THE BOUNDARY RULE. The same drawer already prints
-   * the partner's name, email and phone at the top: the rule is that client
-   * data is never STORED here, not that it is never SHOWN. This is fetched
-   * live from the opportunity, exactly as the partner's details are, and
-   * written nowhere.
-   */
+
   name: string;
   partnerId: string;
   status: string;
   value: number;
-  /**
-   * Days since the opportunity was created.
-   *
-   * 🔴 NULL MEANS UNDATED, NOT TODAY. GoHighLevel's opportunity search does not
-   * guarantee a creation timestamp (the same uncertainty `stageChangedAt` was
-   * given), and the prototype's `ago` is a plain number — so an absent date
-   * would have become 0 and counted as "referred today" in every 90-day figure.
-   * Undated referrals are counted in `refs`, excluded from `refs90`, and the
-   * excluded number is stated: the round-97 rule.
-   */
+
   ago: number | null;
-  /**
-   * 🔴 TASK 2 · §2 — THE PIPELINE THIS CASE IS IN, so its DIVISION can be
-   * derived with `divisionLabel()`. Without it a case cannot be placed in a
-   * division at all, and the aggregates could only ever be scoped by
-   * ownership — which is exactly what round 122 refused.
-   *
-   * ⚠️ THE NAME, NOT THE ID. `divisionLabel` reads names, the switcher
-   * compares against `Partner Division` values, and an id would need a second
-   * lookup on the client to mean anything. `OpportunityRecord.pipelineName`
-   * already carries it for the division badge, so this costs no request.
-   */
+
   pipelineName: string;
   eventId?: string;
-  /**
-   * 🔴 WHOLE NUMBERS, FILTERED DETAIL — AND THIS FLAG IS THE WHOLE MECHANISM.
-   *
-   * True when `applyAccess` would show this opportunity to the viewer: one they
-   * own or FOLLOW (anywhere), or an unassigned one in a pipeline they hold
-   * (lib/pipelineAccess.ts:136-145).
-   *
-   * ⚠️ TAGGED, NOT SPLIT INTO TWO ARRAYS, and that is deliberate. Every
-   * aggregate below — refs, won, revenue, winRate, lastRefAgo — reads the whole
-   * array and IGNORES this flag, so a partner's win rate is the business's
-   * number and identical for everyone. Only the drawer's per-record list, which
-   * names individual cases, filters on it. Two arrays would make the next
-   * person choose which to aggregate, and eventually they would choose wrong.
-   *
-   * ═══════════════════════════════════════════════════════════════════════
-   * 🔴 TASK 2 · §2 — THE AGGREGATES *ARE* SCOPED NOW, AND NOT BY THIS FLAG.
-   *
-   * Everything below still stands. It is about OWNERSHIP, and ownership is
-   * still not allowed to cut a total. What changed is that a second, different
-   * filter was added above it — DIVISION — and the argument against the first
-   * does not reach the second:
-   *
-   *   ownership  two reps in ONE division read different win rates under one
-   *              label. The same question answered two ways: not a narrower
-   *              truth, a different number wearing the same name.
-   *
-   *   division   "ODP revenue" is a real figure that exists whether or not
-   *              anybody is looking, and every ODP rep reads the SAME one. The
-   *              label can carry the scope — "Revenue · ODP" — and mean it.
-   *
-   * ⚠️ SO ROUND 122'S RULE SURVIVES IN THE FORM THAT MATTERED: an aggregate
-   * must never depend on WHO is asking. It now depends on WHICH PROGRAMME is
-   * being asked about, and two people asking about the same programme get the
-   * same answer. That is falsifiable — if two viewers ever see different
-   * numbers under the same division label, this reasoning is wrong and the
-   * paragraph below wins again.
-   *
-   * 🔴 AND `visible` ITSELF IS UNTOUCHED. No aggregate reads it; `shown` is
-   * still its only reader, and the seam described below is still the seam.
-   * ═══════════════════════════════════════════════════════════════════════
-   *
-   * 🔴 THE SEAM, ACCEPTED KNOWINGLY — DO NOT "FIX" IT BY SCOPING THE TOTALS.
-   * Whole totals beside a filtered list make the withheld residual derivable:
-   * `revenue − Σ(shown won values)`, and `lastRefAgo` is `min(ago)` over ALL,
-   * so a hidden newest referral shows through. At exactly one withheld record
-   * the aggregate IS that record. That is arithmetic, not an oversight: the
-   * drawer already prints "6 of 12 shown", which announces the residual exists,
-   * and what leaks is commercial shape only — no name, no contact detail, no
-   * PHI. Making the totals viewer-scoped would give two people different win
-   * rates under one label, which is the failure this design exists to avoid.
-   */
+
   visible: boolean;
 }
 
 export interface EnrichedPartner extends RawPartner {
   cadence: number;
-  /** Positive = days past cadence. Null when lastTouch is unknown. */
+
   overdueBy: number | null;
   isOverdue: boolean;
-  /** Unknown last touch — rendered "—" and excluded from every count. */
+
   unknownTouch: boolean;
   priority: number;
   refs: number;
   refs90: number;
-  /** Referrals with no creation date — excluded from refs90, never silent. */
+
   undated: number;
-  /**
-   * How many of this partner's referrals the viewer may see as records.
-   *
-   * ⚠️ NOT USED BY ANY AGGREGATE. It exists so the drawer can say "6 of 12
-   * shown" — the count is the honesty, and the totals stay whole.
-   */
+
   shown: number;
   won: number;
   revenue: number;
-  /**
-   * 🔴 APPLICANTS THIS PARTNER SENT — round 122, item 2. A SEPARATE COUNT,
-   * never folded into `refs` or `revenue`.
-   *
-   * ⚠️ A NURSING SCHOOL SENDS PEOPLE WHO WANT JOBS, not people who want care.
-   * Both are referrals in the ordinary sense of the word and neither is the
-   * other: $5,500/mo and 3 hires do not add, and a source that sends only
-   * applicants must not read as a partner who produces no revenue.
-   *
-   * 🔴 THE ONLY THING THAT MAKES THIS SAFE IS THAT `revenue` NEVER SEES THEM.
-   * Rounds 118 and 120 deferred this twice for exactly that risk — a second sum
-   * threaded through the same reducers. The fix is not care: it is that
-   * applicants arrive in their OWN list and no arithmetic reads both.
-   */
+
   applicants: number;
-  /** Of those, the ones hired — status "won" on an applicant pipeline. */
+
   hired: number;
   winRate: number;
   lastRefAgo: number | null;
 }
 
-/** The prototype's `enrich`, verbatim apart from the unknown-touch handling. */
 export function enrichPartner(
   p: RawPartner,
   referrals: RawReferral[],
-  /**
-   * 🔴 A SECOND LIST, NOT A WIDER FIRST ONE — round 122, item 2.
-   *
-   * ⚠️ PASSING APPLICANTS IN `referrals` WOULD PUT THEM IN `revenue`, silently,
-   * through the reducer four lines down. A separate parameter is what makes
-   * that impossible rather than merely unintended. Defaults to empty so every
-   * existing caller is unchanged.
-   */
+
   applicantRefs: RawReferral[] = [],
 ): EnrichedPartner {
   const mine = referrals.filter((o) => o.partnerId === p.id);
-  // ⚠️ NEVER MERGED INTO `mine`. Every figure below — refs, refs90, won,
-  // revenue, winRate — reads `mine`, and this list is deliberately not in it.
+
   const mineCg = applicantRefs.filter((o) => o.partnerId === p.id);
   const won = mine.filter((o) => o.status === "won");
   const dated = mine.filter((o): o is RawReferral & { ago: number } => o.ago != null);
@@ -495,8 +204,7 @@ export function enrichPartner(
     overdueBy: over,
     isOverdue: over != null && over > 0,
     unknownTouch,
-    // Unknown sits below everything actionable but above nothing — it is not a
-    // claim that the partner is fine, only that we cannot say.
+
     priority: over == null ? -1e6 : over > 0 ? over * weight : -1000 + over,
     refs: mine.length,
     refs90: recent.length,
@@ -505,8 +213,7 @@ export function enrichPartner(
     won: won.length,
     revenue: won.reduce((a, o) => a + o.value, 0),
     applicants: mineCg.length,
-    // ⚠️ `.value` IS NOT READ HERE, ON PURPOSE. An applicant opportunity may
-    // carry a monetaryValue and it does not mean revenue.
+
     hired: mineCg.filter((o) => o.status === "won").length,
     winRate: mine.length ? Math.round((won.length / mine.length) * 100) : 0,
     lastRefAgo: lastRef,
@@ -519,14 +226,7 @@ export interface RawAttendee {
   eventId: string;
   outcome: string;
   profile: string;
-  /**
-   * GoHighLevel's `dateUpdated`, for the outcome dropdown's concurrency check.
-   *
-   * ⚠️ "" WHEN THE SEARCH DID NOT SEND ONE. The check then cannot run and the
-   * write proceeds — the same deliberate choice `OpportunityRecord.version`
-   * documents. Refusing every triage because a timestamp is missing would be
-   * worse than the last-write-wins behaviour we already have.
-   */
+
   version: string;
 }
 
@@ -538,19 +238,10 @@ export interface RawEvent {
   cost: number;
   venue: string;
   division: string;
-  /** Partner contact id from `Event Host`. "" = no organisation linked. */
+
   host: string;
 }
 
-/**
- * The prototype's `eventStats`, verbatim.
- *
- * 🔴 IT RETURNS ZEROS UNTIL AN ATTENDEE CARRIES AN EVENT ID — see
- * ATTENDEE_EVENT_FIELD_NAMES. The arithmetic is correct and the input is
- * missing, which is a different thing from the arithmetic being wrong, and the
- * Events tab must say which it is rather than drawing "0 met · 0 legit" as if
- * nobody came.
- */
 export function eventStats(
   ev: RawEvent,
   attendees: RawAttendee[],
@@ -569,22 +260,12 @@ export function eventStats(
     pending,
     clients: wonOpps.length,
     revenue: wonOpps.reduce((a, o) => a + o.value, 0),
-    // Cost per LEGIT lead — null rather than 0 when none, so the tile can say
-    // "—" instead of claiming a free lead.
+
     cpl: legit ? Math.round(ev.cost / legit) : null,
     contacts: cs,
   };
 }
 
-/**
- * The KPIs, from the prototype.
- *
- * ⚠️ PROTOTYPE vs BRIEF — `Active sources`. The prototype's Overview counts
- * EVERY visible partner (`all.length`); the brief defines it as "partners with
- * at least one referral in 90 days". The brief's is the one that means
- * something — a count of rows is already the row count — so BOTH are returned
- * and the tile uses `activeSources`, with `totalSources` beside it.
- */
 export function partnerKpis(list: EnrichedPartner[]) {
   const known = list.filter((p) => !p.unknownTouch);
   return {
@@ -593,11 +274,10 @@ export function partnerKpis(list: EnrichedPartner[]) {
     refs90: list.reduce((a, p) => a + p.refs90, 0),
     won: list.reduce((a, p) => a + p.won, 0),
     revenue: list.reduce((a, p) => a + p.revenue, 0),
-    // 🔴 SEPARATE TOTALS, SEPARATE TILES. Summed here only so the header can
-    // show them beside revenue — never added to it.
+
     applicants: list.reduce((a, p) => a + p.applicants, 0),
     hired: list.reduce((a, p) => a + p.hired, 0),
-    /** Referrals with no creation date, so absent from every 90-day figure. */
+
     undatedRefs: list.reduce((a, p) => a + p.undated, 0),
     overdue: known.filter((p) => p.isOverdue).length,
     dueSoon: known.filter(
@@ -606,21 +286,11 @@ export function partnerKpis(list: EnrichedPartner[]) {
     later: known.filter(
       (p) => !p.isOverdue && (p.overdueBy as number) < -DUE_SOON_DAYS,
     ).length,
-    // 🔴 STATED, NEVER SILENTLY DROPPED — the round-97 rule. A partner whose
-    // notes have not loaded has an UNKNOWN last touch, and a queue that quietly
-    // omits them under-counts exactly the people nobody has spoken to.
+
     unknown: list.length - known.length,
   };
 }
 
-/**
- * The event KPIs — and every one of them survives the attribution hole.
- *
- * ⚠️ NOTE WHAT THE BRIEF ASKED FOR: "Legit leads = Event Outcome = 'Legit lead'"
- * and "Awaiting review = attendees with no Event Outcome set" are counts across
- * ATTENDEES, not per event. So the Overview tiles are computable today even
- * though the per-event breakdown is not.
- */
 export function eventKpis(events: RawEvent[], attendees: RawAttendee[]) {
   return {
     events: events.length,
@@ -634,13 +304,6 @@ export function eventKpis(events: RawEvent[], attendees: RawAttendee[]) {
   };
 }
 
-/**
- * THE DRAWER'S "EVENTS WORKED" — every event this partner ran, aggregated.
- *
- * ⚠️ NEEDS `Event Host`. With no host field the list is empty and the section
- * does not render at all, which is the brief's own rule ("only when there are
- * any") rather than a screen full of zeros.
- */
 export function partnerEvents(
   partnerId: string,
   events: RawEvent[],
@@ -662,13 +325,11 @@ export function partnerEvents(
     clients,
     cost,
     revenue,
-    // Same null-not-zero rule as the per-event cpl: no legit leads means we
-    // cannot divide, not that the leads were free.
+
     cpl: legit ? Math.round(cost / legit) : null,
   };
 }
 
-/** Referrals pointing at a partner that no longer exists. */
 export function danglingReferrals(
   referrals: RawReferral[],
   partners: { id: string }[],
@@ -677,40 +338,13 @@ export function danglingReferrals(
   return referrals.filter((o) => o.partnerId && !live.has(o.partnerId)).length;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ROUND 175 · ITEM 3 — A THING YOU JUST SAVED IS ON THE SCREEN.
-//
-// 🔴 THE REPORT, 5 OCT: Jack added a partner and thought it had not saved. It
-// had. The Referrals list comes from GoHighLevel's contact search, which round
-// 173 measured as lagging a new contact by up to a minute — so the save
-// succeeded, the reload returned a list without it, and the screen showed
-// exactly what a failure would show.
-//
-// ⚠️ AND AN OPTIMISTIC INSERT ALONE DOES NOT FIX IT. The dialog's `onAdded`
-// triggers a reload, and that reload would wipe the inserted row a moment
-// later — a flicker is worse than the original bug because it looks like the
-// save being undone. So a saved row is held as PENDING and re-merged after
-// every load, until the server's own list carries it.
-//
-// 🔴 AND IT IS DROPPED THE MOMENT THE SERVER AGREES, never on a timer. A timer
-// would either drop it while search was still cold or keep a deleted row alive;
-// "the payload now contains it" is the only test that cannot be wrong.
-// ═══════════════════════════════════════════════════════════════════════════
-
 export interface WithPendingResult<T> {
-  /** What to show: pending rows the server has not caught up on, then the rest. */
+
   rows: T[];
-  /** What to keep holding. Shrinks to [] as search catches up. */
+
   stillPending: T[];
 }
 
-/**
- * Merge locally-saved rows into a server list.
- *
- * ⚠️ PENDING ROWS GO FIRST, deliberately. Somebody who just saved something is
- * looking for it, and a list sorted by whatever the server sorted by can put it
- * on page three.
- */
 export function withPending<T extends { id: string }>(
   fromServer: readonly T[],
   pending: readonly T[],

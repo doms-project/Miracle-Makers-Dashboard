@@ -39,25 +39,9 @@ import { resolveLabels, labelProblem, withLabel, type LabelKey } from "@/lib/sor
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-// 🔴 ROUND 119 · ITEM 1(b) — THERE WAS NO LIMIT DECLARED, so this route took
-// the platform default (10s on Vercel's Hobby tier). `delete-pipeline` and
-// `create-pipeline` each make several GoHighLevel writes, any of which 117 may
-// retry three times with up to 6s of backoff — so a bad minute could exceed the
-// limit and the function is killed mid-run with nothing returned. That is
-// precisely the hang. (The four-write `attribution-folder` that first exposed
-// this was deleted in round 124; the limit is still needed without it.)
-//
-// ⚠️ A LIMIT IS NOT THE FIX, THOUGH — the steps are. See the action below: it
-// now runs ONE step per request, so no single call can be long enough to be
-// killed. This raises the ceiling for everything else on the route.
+
 export const maxDuration = 60;
 
-// 🔴 ADMIN-ONLY, ENFORCED HERE — NOT BY THE HIDDEN RAIL ENTRY.
-//
-// The rail's `isAdminViewer` is convenience: it keeps a link a rep cannot use
-// out of their way. It is not the boundary. This route re-derives the role from
-// the SSO blob on every call, exactly as /api/admin/pipeline-access does,
-// because this one can create pipelines and fields on the live account.
 function gate(request: Request, ssoKey?: string): NextResponse | null {
   if (!ssoConfigured()) return null;
   const blob = ssoKey || request.headers.get("x-ghl-sso-key");
@@ -89,13 +73,6 @@ function fail(e: unknown): Promise<NextResponse> | NextResponse {
   });
 }
 
-/**
- * Folder sections, each with its fields NAMED.
- *
- * ⚠️ EXPANDING A FOLDER HAS TO LIST ITS FIELDS. Ticking a folder name alone is
- * a guess — "More Details" and "Client Details" mean nothing until you can see
- * inside. The defs are already fetched and cached, so this costs no extra call.
- */
 function sectionsFromDefs(
   defs: EditableFieldDef[],
   folderNames: Record<string, string> = {},
@@ -108,42 +85,25 @@ function sectionsFromDefs(
     byFolder.set(d.parentId, arr);
   }
   const out: {
-    key: string; // the stored token: a code key, or a raw id for a runtime folder
+    key: string;
     id: string;
     label: string;
-    /**
-     * 🔴 FALSE MEANS THE LABEL IS A GUESS, and the screen has to say so.
-     * Two sections both reading "Section" — 4 fields and 2 fields — is a
-     * checklist nobody can tick with confidence: one of them was the Website
-     * Intent Form and there was no way to tell which.
-     */
+
     named: boolean;
-    /**
-     * 🔴 TRUE WHEN TICKING THIS FOLDER WOULD DO NOTHING AT ALL.
-     *
-     * Every field in it is hidden or system-info, and both of those are
-     * intercepted in groupFieldsForPipeline BEFORE any folder rule runs. So the
-     * checkbox is not "a bad idea here" — it is inert, and an inert control is
-     * worse than an absent one because nothing tells you it did nothing.
-     */
+
     inert: boolean;
     fields: { id: string; name: string; dataType?: string }[];
   }[] = [];
   for (const [folderId, fields] of byFolder) {
     const key = folderKeyById(folderId);
     const curated = key ? FOLDER_LABELS[key as keyof typeof FOLDER_LABELS] : "";
-    // 🔴 NOT parentName. It is EMPTY on every field — round 55 verified that
-    // live and wrote it down (lib/fieldFolders.ts:491); round 91 labelled
-    // runtime folders by it anyway. The stored name is the only other source
-    // there has ever been.
+
     const fromGhl = folderNames[folderId] || "";
     const named = !!(curated || fromGhl);
     out.push({
-      key: key || folderId, // hybrid: runtime folders have no key, so store the id
+      key: key || folderId,
       id: folderId,
-      // With no name from either source, name it by what is IN it rather than
-      // by the word "Section" — a heading that is identical for every
-      // unnameable folder is worse than no heading.
+
       label:
         curated ||
         fromGhl ||
@@ -153,9 +113,7 @@ function sectionsFromDefs(
           .join(", ")}${fields.length > 2 ? "…" : ""}`,
       named,
       inert: fields.every((f) => fieldIsAlwaysIntercepted(f.name)),
-      // dataType travels with the name: the expanded panel shows it, and it is
-      // already on every definition, so withholding it would cost a round trip
-      // to say what we already know.
+
       fields: fields
         .map((f) => ({ id: f.id, name: f.name, dataType: f.dataType }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -180,12 +138,6 @@ function knownFields(defs: EditableFieldDef[], sections: ReturnType<typeof secti
   });
 }
 
-// GET — the screen's whole payload, live:
-//   pipelines   ALL of them from GHL (so a pipeline deleted in GHL but still in
-//               the stored map can be reconciled rather than silently listed)
-//   config      the stored value, seeded on first read if never configured
-//   sections    every folder with its fields named, for the checklist
-//   known       every field, for the duplicate guard
 export async function GET(request: Request) {
   try {
     const denied = gate(request);
@@ -194,27 +146,14 @@ export async function GET(request: Request) {
       listPipelines(),
       getEditableFieldDefs("opportunity"),
       getPipelineConfig(),
-      // 🔴 ITEM O — THE CONTACT SIDE, READ ONLY. The screen could not show a
-      // contact folder at all, so "Enquiry Details" — one field, used by zero of
-      // 1,114 contacts, drawn on every client record — was invisible to the only
-      // person who could act on it.
-      //
-      // ⚠️ NO EXTRA ROUND TRIP IN PRACTICE. getEditableFieldDefs memoizes per
-      // model per lambda, and the contact defs are already fetched by
-      // /api/opportunities on the same instance.
+
       getEditableFieldDefs("contact").catch(() => [] as EditableFieldDef[]),
     ]);
 
-    // 🔴 ROUND 130 — THE FOLDER IDS THAT ACTUALLY EXIST ON THIS ACCOUNT, from
-    // both models. Every "is this folder ours" question on this screen is
-    // answered from this one set rather than from the built-in table.
     const folderIdsHere = folderIdsPresent([...defs, ...contactDefs]);
     const sections = sectionsFromDefs(defs, config.folderNames);
     const live = new Set(pipelines.map((p) => p.id));
-    // ⚠️ RECONCILE, DO NOT AUTO-DELETE. A stored key with no live pipeline is
-    // surfaced as "no longer in GoHighLevel" with a remove button. Silently
-    // dropping it would also drop the mapping of an admin who deleted the wrong
-    // pipeline in GHL and is about to recreate it.
+
     const stale = Object.keys(config.pipelines).filter((id) => !live.has(id));
     return NextResponse.json(
       {
@@ -225,51 +164,24 @@ export async function GET(request: Request) {
         })),
         config,
         stale,
-        // 🔴 THE INERT ONES ARE NOT OFFERED. Round 33 hid Reassign Followers as
-        // "a string of meaningless ids that reads as a fault"; the folder it
-        // lives in holds nothing else a pipeline can show, so a checkbox for it
-        // can only mislead. Split out rather than deleted — the screen says how
-        // many were withheld and why, so the count on screen still reconciles
-        // with what is in GoHighLevel.
+
         sections: sections.filter((s) => !s.inert),
         inertSections: sections
           .filter((s) => s.inert)
           .map((s) => ({ id: s.id, key: s.key, fields: s.fields })),
-        // ITEM 6 — ⚠️ DETECTION IS FREE, as you said: every def already carries
-        // parentId and the defs are already cached, so a folder no pipeline has
-        // been given and no name is held for costs no extra call to find.
+
         unconfiguredFolders: sections
           .filter(
             (sec) =>
               !sec.named &&
-              // ⚠️ AND NOT INERT. Asking an admin to type a name for a folder
-              // that enables nothing is asking for work with no effect.
+
               !sec.inert &&
               !Object.values(config.pipelines).some((e) => e.folders.includes(sec.key)),
           )
           .map((sec) => ({ id: sec.id, key: sec.key, fields: sec.fields })),
         known: knownFields(defs, sections),
         sharedKey: folderKeyById(FOLDERS.shared),
-        /**
-         * 🔴 ITEM O — BOTH NAMES, BECAUSE THE DASHBOARD RENAMES THEM.
-         *
-         * "Form | Form 6" is what an admin sees in GoHighLevel. "Enquiry
-         * Details" is what this app calls it. An admin searching GHL for the
-         * second finds nothing, which is how a dead folder stays on every client
-         * record with nobody able to name it.
-         *
-         * ⚠️ READ-ONLY, AND THE SCREEN SAYS SO. CONTACT_FOLDERS is a hardcoded
-         * table (lib/fieldFolders.ts:493) and making it editable is a different
-         * control from this checklist — contact folders are not pipeline-scoped.
-         * Showing what is there and what it costs is the half that can be true
-         * today; see the report.
-         */
-        // 🔴 ROUND 130 — RESOLVED AGAINST THIS ACCOUNT, exactly the way the
-        // record panel resolves it. The old version matched the built-in id or
-        // a `parentName` GoHighLevel never sends, so on a second deployment it
-        // listed ten sections at "0 fields" while the account's real folders
-        // sat underneath as unknown. A screen that reports a different answer
-        // from the panel it describes is worse than no screen.
+
         contactSections: CONTACT_FOLDERS.map((f) => {
           const resolvedId =
             resolveFolderId(f.id, [f.name, f.label], folderIdsHere, config.folderNames) || "";
@@ -281,9 +193,7 @@ export async function GET(request: Request) {
           );
           return {
             id: f.id,
-            // ⚠️ THE ID ACTUALLY IN USE HERE, which is the built-in one on the
-            // main account and the admin-named one anywhere else. "" means the
-            // section has nothing to resolve to yet.
+
             resolvedId,
             ghlName: f.name,
             label: f.label,
@@ -292,32 +202,11 @@ export async function GET(request: Request) {
             fields: fields.map((d) => ({ id: d.id, name: d.name, dataType: d.dataType })),
           };
         }),
-        // 🔴 ROUND 130 — TRUE WHEN THIS CODE'S FOLDER IDS DESCRIBE A DIFFERENT
-        // ACCOUNT. Written and exported in 129, deliberately unwired until the
-        // no-op was proven; this is the screen it was for.
+
         builtInFoldersForeign: builtInFoldersAreForeign([...contactDefs, ...defs]),
-        /**
-         * ⚠️ A CONTACT FOLDER GOHIGHLEVEL HAS AND THIS APP DOES NOT — item O's
-         * second half. Its fields fall to the contact-side orphan bucket with no
-         * banner and no way to file them, so the only thing this screen can
-         * honestly do today is SAY THEY EXIST.
-         *
-         * 🔴 GHL STANDARD FOLDERS ARE NOT LISTED. "Contact" and "Additional
-         * Info" are standardFieldsFolder:true — fieldFolders.ts:511 — and
-         * offering either drags every native field onto the panel. They are not
-         * candidates, so listing them as unfiled would be an invitation to a
-         * known incident.
-         */
+
         unknownContactFolders: (() => {
-          // 🔴 ROUND 130 — THE IDS ACTUALLY IN USE, NOT THE BUILT-IN ONES.
-          //
-          // ⚠️ THIS WAS THE BUILT-IN SET AND IT PRODUCED THE SAME FAULT ONE
-          // LAYER DOWN: an admin points a folder at a section, the section
-          // starts drawing — and the folder is STILL listed as one this
-          // dashboard does not know about, because "known" was answering from
-          // the code table while the panel answered from the account. Two
-          // answers to one fact, again. Caught by the proof driving the whole
-          // loop rather than the naming call alone.
+
           const known = new Set(
             CONTACT_FOLDERS.map(
               (f) =>
@@ -326,8 +215,8 @@ export async function GET(request: Request) {
             ),
           );
           const standard = new Set([
-            "O0m1HH8Mou9C9ImAPhJT", // "Contact"
-            "4ywdaP7iC0k6zaEkXTTl", // "Additional Info"
+            "O0m1HH8Mou9C9ImAPhJT",
+            "4ywdaP7iC0k6zaEkXTTl",
           ]);
           const out = new Map<string, { id: string; fields: { id: string; name: string }[] }>();
           for (const d of contactDefs) {
@@ -359,24 +248,24 @@ interface Body {
     | "move-field"
     | "name-folder"
     | "rename-tab";
-  // create-pipeline
+
   name?: string;
   stages?: string[];
   scope?: "client" | "caregiver";
   folders?: string[];
-  // save-config
+
   config?: unknown;
-  /** ROUND 176 — the page's BUILD.round; save-config refuses a mismatch. */
+
   build?: string;
-  // delete-pipeline
+
   pipelineId?: string;
-  // create-section / create-field
+
   parentId?: string;
   fieldId?: string;
   folderId?: string;
   dataType?: string;
   options?: string[];
-  // rename-tab (round 197)
+
   key?: string;
 }
 
@@ -388,8 +277,7 @@ export async function POST(request: Request) {
 
     switch (body.action) {
       case "create-pipeline": {
-        // 🔴 SCOPE IS REQUIRED AND NEVER INFERRED. The caregiver/client split is
-        // structural; guessing it puts an applicant on the client board.
+
         const scope = body.scope === "caregiver" ? "caregiver" : body.scope === "client" ? "client" : null;
         if (!scope)
           return NextResponse.json(
@@ -404,9 +292,7 @@ export async function POST(request: Request) {
           name: String(body.name || ""),
           stages: Array.isArray(body.stages) ? body.stages.map(String) : [],
         });
-        // The mapping is written in the SAME request. A pipeline that exists
-        // without one is the whole failure this screen was built to remove, so
-        // there is no window in which it can be created and left unmapped.
+
         const config = await getPipelineConfig();
         const entry: StoredPipelineEntry = {
           scope,
@@ -422,35 +308,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ pipeline: created, config: saved });
       }
 
-      /**
-       * 🔴 ITEM L — DELETE, GATED ON THE RECORD COUNT SERVER-SIDE.
-       *
-       * The screen counts too, from the payload it already holds, and refuses to
-       * offer the button. That is the good experience. THIS is the guarantee:
-       * the browser's number is whatever the browser last loaded, and an
-       * opportunity created in GoHighLevel five minutes ago is not in it.
-       *
-       * ⚠️ ONE REQUEST. `limit=1`, read `meta.total` — not the 6-page fetch
-       * `searchAll` would do. Delete is a rare, deliberate, irreversible action;
-       * one call to make it safe is the cheapest thing on this screen.
-       *
-       * 🔴 AND A COUNT WE COULD NOT GET REFUSES. `null` is "I could not count",
-       * never "zero" — the same rule round 115b's scope dialog follows.
-       */
-      /**
-       * 🔴 ITEM L — HOW MANY RECORDS ARE IN ONE PIPELINE, ON DEMAND.
-       *
-       * ⚠️ THE BROWSER'S OWN COUNTS CANNOT ANSWER THIS, and finding that out is
-       * what item L cost. `recordCounts` is built by counting the records in the
-       * loaded payloads, so a pipeline with NO records never appears in it — and
-       * "zero" is then indistinguishable from "never fetched". The two pipelines
-       * this item exists to delete, "test" and "round 91 probe", are both
-       * unconfigured: they are in NO board's payload, so the browser has never
-       * seen them and never will.
-       *
-       * 🔴 ONE REQUEST, WHEN A ROW IS OPENED. Not on load, and not for all ten —
-       * the same rule item T follows. `limit=1` and read the total.
-       */
       case "count-records": {
         const pipelineId = String(body.pipelineId || "").trim();
         if (!pipelineId)
@@ -459,9 +316,7 @@ export async function POST(request: Request) {
             { status: 400 },
           );
         const count = await countOpportunitiesInPipeline(pipelineId);
-        // ⚠️ null TRAVELS AS null. The screen shows "I cannot say" and offers no
-        // delete; turning it into 0 here is how an empty-looking pipeline with
-        // records in it gets deleted.
+
         return NextResponse.json({ pipelineId, count });
       }
 
@@ -490,27 +345,12 @@ export async function POST(request: Request) {
                 count === 1 ? "it" : "them"
               } in GoHighLevel first.`,
               status: 409,
-              // 🔴 A REFUSAL, NOT A FAULT — round 119, item 3. Nothing went
-              // wrong: the screen declined, deliberately, and said why.
+
               refusal: true,
             } as ApiError,
             { status: 409 },
           );
-        // 🔴 ITEM 1's SECOND QUESTION, AND THE ANSWER WAS YES — THE ENTRY WAS
-        // LEFT BEHIND.
-        //
-        // `deletePipeline` threw on the 400, so the `savePipelineConfig` below
-        // it never ran: the pipeline was gone from GoHighLevel and still in MM
-        // Pipeline Folders. Exactly round 90's stale-key case, manufactured by
-        // the screen that exists to prevent it.
-        //
-        // ⚠️ TWO FIXES, AND BOTH ARE NEEDED. `deletePipeline` no longer treats
-        // "is deleted" as a failure, so this line stops throwing — but a
-        // DIFFERENT failure after the pipeline is gone would strand the entry
-        // again. So the config write is in a `finally`-shaped path: if the
-        // delete threw for any reason, we ask GoHighLevel whether the pipeline
-        // is actually still there, and reconcile on what is true rather than on
-        // whether a request 4xx'd.
+
         let deleteErr: unknown = null;
         try {
           await deletePipeline(pipelineId);
@@ -519,8 +359,7 @@ export async function POST(request: Request) {
         }
         if (deleteErr) {
           const still = (await listPipelines()).some((p) => p.id === pipelineId);
-          // Still there — the delete genuinely failed. Report it, change
-          // nothing, and leave the mapping alone.
+
           if (still) throw deleteErr;
           // eslint-disable-next-line no-console
           console.warn(
@@ -529,14 +368,7 @@ export async function POST(request: Request) {
               "it does not become a stale key.",
           );
         }
-        // 🔴 AND THE STORED ENTRY GOES WITH IT — round 90's stale-key case.
-        //
-        // ⚠️ THIS IS NOT THE AUTO-DELETE ROUND 90 REFUSED. That refusal protects
-        // an admin who deleted the wrong pipeline IN GHL and is about to
-        // recreate it — the app must not throw away a mapping it cannot know
-        // they still want. Here the same admin is deleting both, in one action,
-        // having been told what it does. Leaving the entry behind would only
-        // manufacture the stale key this screen then asks them to reconcile.
+
         const cfg = await getPipelineConfig();
         let config = cfg;
         if (Object.prototype.hasOwnProperty.call(cfg.pipelines, pipelineId)) {
@@ -547,41 +379,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ deleted: pipelineId, config });
       }
 
-      // 🔴 ROUND 124 · ITEM 5 — `attribution-folder` IS DELETED.
-      //
-      // It was a ONE-TIME MIGRATION and it is complete: the folder exists,
-      // both fields are in it, and it is ticked onto all five client
-      // pipelines. Left in place it could only ever report "already done" —
-      // and, after somebody deliberately reorganises those folders, quietly
-      // move two fields back.
-      //
-      // ⚠️ THE ACTION GOES WITH THE BUTTON, NOT JUST THE BUTTON. An admin
-      // endpoint with no caller is a control that still exists; whoever finds
-      // it next cannot tell the job is finished. Its reasoning lives on the
-      // Pipelines screen as a note, which is the part worth keeping.
-
-
       case "save-config": {
-        // 🔴 ROUND 176 — A PAGE FROM ANOTHER BUILD MAY NOT SAVE THE WHOLE MAP.
-        //
-        // This save REPLACES the stored map, and a page only sends the keys
-        // its own build knows. A tab left open from before a field existed
-        // (round 176's `sidebar` is the case that forced this) would write
-        // every entry back without it — every hidden pipeline would quietly
-        // reappear, and the read-back would agree, because that page's config
-        // never had the field to compare. So the page names its build and a
-        // mismatch is refused before anything is read or written.
-        //
-        // ⚠️ A REFUSAL, NOT AN ERROR: nothing was changed, and the fix is a
-        // reload. An absent build is a mismatch — it is exactly the old tab.
+
         if (String(body.build ?? "") !== BUILD.round)
           return NextResponse.json(
             {
               error:
-                // ⚠️ ROUND 177 · R5 — "A DIFFERENT VERSION", not "older". The
-                // check compares builds, so it also fires on a page NEWER than
-                // the server (a tab opened mid-deploy); saying "older" was a
-                // guess about which side moved.
+
                 `This page is from a different version of the dashboard ` +
                 `(page ${body.build ? `v${String(body.build).slice(0, 12)}` : "unknown"}, ` +
                 `server ${BUILD_LABEL}). Nothing was saved. Reload the page, ` +
@@ -599,20 +403,9 @@ export async function POST(request: Request) {
             { error: "That configuration could not be read.", status: 400 } as ApiError,
             { status: 400 },
           );
-        // 🔴 ALWAYS seeded:true on a save. Writing false would arm the seed to
-        // overwrite this very save on the next read.
+
         const current = await getPipelineConfig();
-        // 🔴 THE SCREEN CANNOT UNTICK WHAT IT WAS NEVER SHOWN.
-        //
-        // `next.pipelines` is the whole map as the screen holds it, so anything
-        // the screen does not render is absent from it — and absent here means
-        // REMOVED. Inert folders are now filtered out of `sections`, so without
-        // this an admin pressing Save would silently drop a stored selection
-        // they never saw and never chose to change.
-        //
-        // ⚠️ Narrow on purpose: ONLY tokens for folders that are inert today.
-        // Carrying every unrendered token would make deliberate removal
-        // impossible, which is the opposite mistake.
+
         const inertTokens = new Set(
           sectionsFromDefs(
             await getEditableFieldDefs("opportunity"),
@@ -632,10 +425,9 @@ export async function POST(request: Request) {
         const saved = await savePipelineConfig({
           seeded: true,
           pipelines: next.pipelines,
-          // ⚠️ MERGED, never replaced. The screen does not send folderNames, so
-          // writing next.folderNames would erase every name we hold.
+
           folderNames: { ...current.folderNames, ...next.folderNames },
-          // 🔴 ROUND 197 — carried, never sent by this screen's grid save.
+
           labels: current.labels || {},
         });
         return NextResponse.json({ config: saved });
@@ -651,8 +443,7 @@ export async function POST(request: Request) {
         const defs = await getEditableFieldDefs("opportunity");
         const cfg2 = await getPipelineConfig();
         const sections = sectionsFromDefs(defs, cfg2.folderNames);
-        // Re-checked server-side. The screen checks as you type; that is a
-        // courtesy, not a gate.
+
         const verdict = checkFieldName(name, knownFields(defs, sections), body.options);
         if (verdict.kind === "blocked")
           return NextResponse.json(
@@ -685,10 +476,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ moved: true });
       }
 
-      // 🔴 ROUND 197 — RENAME A TAB. Display only (see StoredPipelineConfig.
-      // labels). An empty name resets to the default. Admin-gated like every
-      // action here; duplicates and over-long names are refused server-side,
-      // not only in the browser.
       case "rename-tab": {
         const key = String(body.key || "");
         const okKey =

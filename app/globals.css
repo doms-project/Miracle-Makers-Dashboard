@@ -23,20 +23,9 @@ button{cursor:pointer;border:0;background:none;color:inherit;}
 ::-webkit-scrollbar-thumb{background:#d9cfe8;border-radius:10px;border:2px solid var(--canvas);}
 ::-webkit-scrollbar-thumb:hover{background:#c6b8dd;}
 
-/* 🔴 ROUND 177 · D10 — 64px unless <html data-rail="expanded">.
-   ROUND 181: the server now SENDS "expanded", so the sidebar starts at 184px;
-   the inline script in app/layout.tsx switches to "collapsed" before first
-   paint for somebody who pressed « or on a screen 640px or narrower — so
-   nobody sees one width and then the other. The record panel and every
-   dialog are position:fixed, so this track is the only width it costs. */
 .app{display:grid;grid-template-columns:64px minmax(0,1fr);height:100vh;overflow:hidden;background:var(--bg);}
 html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 
-/* rail */
-/* 🔴 ROUND 176 · M5 — THE RAIL SCROLLS. It had no overflow and `.app` is
-   overflow:hidden, so once the Clients entries were added the GHL note and the
-   build stamp were CLIPPED off a short iframe, not scrolled to. min-height:0
-   is what lets a grid child shrink below its content and scroll. */
 .rail{background:linear-gradient(180deg,var(--plum-deep),var(--plum));display:flex;flex-direction:column;align-items:stretch;padding:16px 10px;gap:3px;overflow-y:auto;overflow-x:hidden;min-height:0;}
 .rail .logo{align-self:center;width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,var(--gold),#f6c079);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--plum-deep);font-size:16px;margin-bottom:14px;flex:none;box-shadow:0 3px 10px rgba(0,0,0,.3);}
 .rail button{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.6);position:relative;transition:background .14s,color .14s;}
@@ -53,7 +42,6 @@ html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 
 .main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;}
 
-/* topbar */
 .topbar{display:flex;align-items:center;gap:14px;padding:15px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;}
 .title h1{margin:0;font-size:17px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:10px;}
 .title h1 .pipe{width:9px;height:9px;border-radius:3px;background:linear-gradient(135deg,var(--gold),#f4b860);}
@@ -70,36 +58,23 @@ html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 .seg button+button{border-left:1px solid var(--line);}
 .seg button svg{width:14px;height:14px;}
 
-/* stats strip */
 .stats{display:flex;gap:11px;padding:14px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;background:linear-gradient(180deg,#fbf9fe,#fff);}
 .stat{flex:1;min-width:120px;border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--bg);box-shadow:var(--shadow-sm);position:relative;overflow:hidden;}
 .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--plum);}
-/* A tile that FILTERS. Same box as .stat — a button element so it is
-   keyboard-reachable and announces itself — with the lit state the board's
-   source picker already uses. */
-/* 🔴 ONE DEFINITION — round 115. Round 114 wrote `.statbtn` TWICE, here and
-   again 1000 lines further down, with different properties in each. Nothing
-   looked broken because the cascade merges them per-property, which is exactly
-   what makes it dangerous: the next person to edit one of them changes half a
-   rule. scripts/loader-sweep.mjs now refuses a class defined twice in this
-   file. */
+
 .statbtn{appearance:none;display:block;width:100%;text-align:left;font:inherit;
   color:inherit;cursor:pointer;}
 .statbtn:hover:not(:disabled){border-color:var(--plum-line);background:var(--plum-soft);}
 .statbtn:disabled{cursor:default;opacity:.55;}
 .statbtn.on{border-color:var(--plum);background:var(--plum-soft);box-shadow:0 0 0 2px var(--plum-soft);}
 
-/* The build stamp — deliberately quiet, deliberately always there. */
-/* ⚠️ ROUND 176 · M6 — WHITE AT .72, NOT --ink-3. --ink-3 is a text colour for
-   a LIGHT surface; on the dark rail it measured 3.04:1. Every rail row now
-   uses the same white-on-plum, ≥4.8:1 at its worst (hover over --plum). */
 .railbuild{margin-top:4px;flex:none;font-size:9px;letter-spacing:.06em;text-align:center;
   color:rgba(255,255,255,.72);user-select:all;cursor:default;}
-/* The excluded-count, beside the number it is excluded from. */
+
 .vsub{font-size:12px;font-weight:600;color:var(--ink-3);}
-/* The master view's tile row scrolls with the page rather than pinning. */
+
 .mstats{border-bottom:0;padding-bottom:4px;background:none;}
-/* What a lit tile is filtering to, and the way out. */
+
 .mfocus{margin:0 22px 10px;font-size:11.5px;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:7px 11px;}
 .mfocus button{font:inherit;font-weight:700;color:var(--plum);text-decoration:underline;cursor:pointer;}
 .stat.gold::before{background:var(--gold);} .stat.blk::before{background:var(--blk);} .stat.ok::before{background:var(--ok);}
@@ -109,13 +84,11 @@ html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 .stat .mini{display:flex;gap:8px;margin-top:6px;font-size:10.5px;color:var(--ink-2);flex-wrap:wrap;}
 .stat .mini b{color:var(--plum);font-weight:700;}
 
-/* scope banner */
 .scope{display:flex;align-items:center;gap:10px;padding:9px 22px;font-size:12px;border-bottom:1px solid var(--line);flex:none;}
 .scope.admin{background:var(--ok-soft);color:#08502f;} .scope.rep{background:var(--plum-soft);color:var(--plum-deep);} .scope.office{background:var(--gold-soft);color:var(--gold-ink);}
 .scope b{font-weight:700;}
 .scope .tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 8px;border-radius:20px;background:rgba(255,255,255,.65);}
 
-/* toolbar */
 .toolbar{display:flex;align-items:center;gap:9px;padding:12px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none;}
 .search{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:280px;background:var(--bg);box-shadow:var(--shadow-sm);transition:border-color .14s,box-shadow .14s;}
 .search:focus-within{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
@@ -127,7 +100,6 @@ html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 .officefilter select{font:inherit;font-size:12.5px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;}
 .officefilter select:focus{border-color:var(--plum);outline:none;box-shadow:0 0 0 3px var(--plum-soft);}
 
-/* stage chips */
 .stages{display:flex;gap:7px;padding:12px 22px;border-bottom:1px solid var(--line);overflow-x:auto;flex:none;}
 .chip{display:flex;align-items:center;gap:7px;padding:7px 14px;border:1px solid var(--line);border-radius:20px;font-size:12px;font-weight:500;color:var(--ink-2);white-space:nowrap;background:var(--bg);transition:all .12s;}
 .chip:hover{border-color:var(--plum-line);background:var(--plum-soft);}
@@ -135,11 +107,8 @@ html[data-rail="expanded"] .app{grid-template-columns:184px minmax(0,1fr);}
 .chip.on{background:var(--plum);border-color:var(--plum);color:#fff;font-weight:600;}
 .chip.on .n{background:rgba(255,255,255,.25);color:#fff;}
 
-/* table — bounded scroll region */
 .scroll{flex:1 1 auto;overflow:auto;min-height:0;}
-/* 🔴 The admin screens had NO scrolling container at all — .main is
-   overflow:hidden, so "Create pipeline" was clipped off the bottom with no way
-   to reach it. Padding so the last control is never flush against the edge. */
+
 .adminscroll{padding:16px 18px 40px;}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;}
 thead th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:600;color:var(--ink-2);font-size:10.5px;
@@ -152,7 +121,7 @@ thead th.sorted .sortcaret{color:var(--plum);}
 .officefilter .dirbtn{border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--plum);font-size:11px;padding:7px 9px;line-height:1;box-shadow:var(--shadow-sm);}
 .officefilter .dirbtn:hover{background:var(--plum-soft);}
 .officefilter .dirbtn:disabled{color:var(--ink-3);cursor:not-allowed;background:var(--line-soft);}
-/* group-by section rows */
+
 tbody tr.grouprow td{position:sticky;top:37px;background:var(--plum-soft);border-top:1px solid var(--plum-line);border-bottom:1px solid var(--plum-line);padding:8px 14px;z-index:1;}
 tbody tr.grouprow{cursor:default;}
 tbody tr.grouprow:hover td{background:var(--plum-soft);}
@@ -175,7 +144,7 @@ tbody tr:last-child td{border-bottom:0;}
 .tick{color:var(--ok);font-weight:800;font-size:14px;}
 
 .empty{padding:56px 22px;text-align:center;color:var(--ink-3);font-size:12.5px;}
-/* Resources tab */
+
 .reswrap{padding:18px 22px;}
 .resgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
 .rescard{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:11px;padding:13px 14px;background:var(--bg);box-shadow:var(--shadow-sm);text-decoration:none;color:var(--ink);transition:border-color .12s,box-shadow .12s,transform .12s;}
@@ -188,7 +157,6 @@ tbody tr:last-child td{border-bottom:0;}
 .rescard .ropen{flex:none;font-size:11px;font-weight:700;color:var(--plum);}
 .empty b{color:var(--ink-2);}
 
-/* board */
 .board{flex:1 1 auto;display:flex;gap:14px;padding:18px 22px;overflow:auto;min-height:0;background:var(--canvas);}
 .col{flex:0 0 264px;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);border-radius:12px;max-height:100%;box-shadow:var(--shadow-sm);}
 .colhead{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700;}
@@ -200,16 +168,15 @@ tbody tr:last-child td{border-bottom:0;}
 .card .cf{display:flex;gap:5px;flex-wrap:wrap;}
 .card.draggable{cursor:grab;touch-action:none;}
 .card.draggable:active{cursor:grabbing;}
-/* source card while its copy is being dragged in the overlay */
+
 .card.ghost{opacity:.4;}
-/* the floating copy rendered in the DragOverlay (portal, never clipped) */
+
 .card.dragging{cursor:grabbing;box-shadow:0 12px 30px rgba(91,42,134,.32);border-color:var(--plum);background:var(--bg);}
 .card.nodrag{cursor:pointer;}
 .col.dropover{background:var(--plum-soft);outline:2px dashed var(--plum-line);outline-offset:-4px;}
 .col.dropover .colbody{background:var(--plum-soft);}
 .card .savemsg{margin-top:6px;}
 
-/* record panel */
 .scrim{position:fixed;inset:0;background:rgba(30,15,45,.42);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .18s;z-index:4;}
 .scrim.on{opacity:1;pointer-events:auto;}
 .panel{position:fixed;top:0;right:0;height:100%;width:min(600px,100%);background:var(--bg);box-shadow:var(--shadow);
@@ -219,12 +186,7 @@ tbody tr:last-child td{border-bottom:0;}
 .phead{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px;background:linear-gradient(135deg,var(--plum-soft),#faf6fe);}
 .phead h2{margin:0 0 3px;font-size:17px;color:var(--plum-deep);font-weight:800;letter-spacing:-.02em;}
 .phead .sub{font-size:11.5px;color:var(--plum);}
-/* ── ROUND 131 · rename in place ─────────────────────────────────────────────
-   🔴 THE BUTTON MUST NOT LOOK LIKE A BUTTON AT REST. The heading is the panel's
-   title first and a control second; a boxed button there would read as an
-   action to take rather than as the name of the thing being looked at. So the
-   affordance is the pencil and the hover tint, and `inherit` on font/colour
-   keeps the heading a heading. */
+
 .inmhead{margin:0 0 3px;}
 .inmline{margin:3px 0 0;display:flex;align-items:baseline;gap:6px;}
 .inmwhat{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--plum);opacity:.7;flex:none;}
@@ -236,24 +198,16 @@ tbody tr:last-child td{border-bottom:0;}
 .inmval{overflow-wrap:anywhere;}
 .inmpen{font-size:11px;opacity:0;flex:none;transition:opacity .12s;}
 .inmbtn:hover .inmpen,.inmbtn:focus-visible .inmpen{opacity:.65;}
-/* ── ROUND 134 · a value that is also a link ────────────────────────────────
-   🔴 THE PENCIL IS A SEPARATE BUTTON HERE, not a span inside the control, and
-   it is ALWAYS VISIBLE rather than appearing on hover. A hover-only affordance
-   on an anchor is a trap: the thing that appears under the pointer is not the
-   thing the pointer is over, and the click that was meant to edit dials
-   instead. It is small and quiet, and it is always there. */
+
 .inmanchor{text-decoration:none;}
 .inmanchor:hover .inmval{text-decoration:underline;}
 .inmpenbtn{flex:none;font-size:11px;line-height:1;padding:3px 5px;border-radius:5px;color:var(--ink-3);background:transparent;transition:background .12s,color .12s;}
 .inmpenbtn:hover:not(:disabled),.inmpenbtn:focus-visible{background:rgba(255,255,255,.8);color:var(--plum);}
 .inmpenbtn:disabled{display:none;}
-/* An absent value reads as absent, not as a value that happens to say "No
-   phone" — the same muted treatment the Harmony ID column already uses. */
+
 .inmnone{color:var(--ink-3);font-weight:500;}
 .inmedit{margin:0 0 4px;}
-/* 🔴 THE SCOPE SENTENCE IS THE POINT OF THE CONTROL, so it is above the boxes
-   and not a hint beneath them: a rep who has already typed has already decided
-   which name they were changing. */
+
 .inmscope{font-size:11px;line-height:1.45;color:var(--plum);background:rgba(255,255,255,.72);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-bottom:6px;}
 .inmboxes{display:flex;flex-wrap:wrap;gap:6px;}
 .inminput{flex:1 1 130px;min-width:0;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);}
@@ -264,22 +218,16 @@ tbody tr:last-child td{border-bottom:0;}
 .inmsave:disabled,.inmcancel:disabled{opacity:.6;cursor:default;}
 .x{width:32px;height:32px;border-radius:8px;color:var(--plum);font-size:19px;line-height:1;flex:none;background:rgba(255,255,255,.6);transition:background .12s;}
 .x:hover{background:#fff;}
-/* min-height:0 — same family as .movebody/.rfdbd/.rfhits. The record panel
-   body scrolls inside a fixed-height panel; without an explicit minimum its
-   last field is unreachable on a long record. Found by loader-sweep rule 6. */
+
 .pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:20px 22px 28px;}
 .sechead{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:24px 0 12px;display:flex;align-items:center;gap:9px;}
 .sechead::after{content:"";flex:1;height:1px;background:var(--line);}
 .sechead:first-child{margin-top:0;}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;}
 .f.wide{grid-column:1 / -1;}
-/* collapsed read-only system info */
+
 .sysinfo{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--canvas);overflow:hidden;}
-/* 🔴 LEGIBLE, NOT A WHISPER. This was 11px, uppercase, letter-spaced, in
-   --ink-3 on canvas grey — the visual language of chrome, which said IGNORE
-   THIS. But "Transferred From" is the receiving rep's answer to how a case
-   landed on them: something to READ, just not to edit. Normal ink, normal
-   size. Still collapsed, still read-only, still last. */
+
 .sysinfo>summary{cursor:pointer;list-style:none;padding:11px 14px;font-size:12.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;user-select:none;}
 .sysinfo-n{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
 .syshint{padding:0 14px 2px;font-size:11px;color:var(--ink-3);line-height:1.5;}
@@ -288,12 +236,6 @@ tbody tr:last-child td{border-bottom:0;}
 .sysinfo[open]>summary::before{transform:rotate(90deg);}
 .sysinfo>summary:hover{color:var(--plum);background:var(--plum-soft);}
 
-/* ── THE UNFILED BUCKET ───────────────────────────────────────────────────
-   🔴 DELIBERATELY NOT .sysinfo. System-written fields are ours and will never
-   be mapped; an unfiled field is a real field somebody created that the
-   dashboard has not been told about yet. Same collapse mechanics, a normal
-   section's voice — and an amber marker, because it is a thing to be fixed
-   rather than a thing to be ignored. */
 .unfiled{margin-top:18px;border:1px solid #f0dcc9;border-radius:10px;background:#fdfaf6;overflow:hidden;}
 .unfiled>summary{cursor:pointer;list-style:none;padding:11px 14px;font-size:12.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;user-select:none;}
 .unfiled>summary::-webkit-details-marker{display:none;}
@@ -322,25 +264,14 @@ tbody tr:last-child td{border-bottom:0;}
 .savemsg{font-size:10.5px;color:var(--ink-3);margin-top:4px;}
 .savemsg.err{color:var(--blk);font-weight:600;}
 .editbanner{font-size:11px;color:var(--gold-ink);background:var(--gold-soft);border:1px solid #f3e2c4;border-radius:8px;padding:8px 11px;margin-bottom:4px;}
-/* ROUND 181 — "New lead" until somebody opens it. Gold, beside "Following"'s
-   plum: --gold-ink on --gold-soft is 5.7:1 (computed), above AA 4.5:1. */
+
 .newlead-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--gold-ink);background:var(--gold-soft);border:1px solid var(--gold);border-radius:20px;padding:1px 7px;vertical-align:middle;white-space:nowrap;}
 .follow-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;vertical-align:middle;}
 
 .note{border:1px solid var(--line);border-radius:9px;padding:12px 13px;margin-bottom:10px;background:var(--canvas);}
 .note .nh{font-size:11px;color:var(--ink-3);margin-bottom:5px;}
 .note .nh b{color:var(--plum);font-weight:700;}
-/* 🔴 NEWLINES ARE STORED — THEY WERE BEING COLLAPSED HERE.
-   An import note is 25 lines of "Header: value" and Q&A pairs; a Move note is a
-   system sentence plus the rep's reason. Both arrived from GoHighLevel with
-   their newlines intact and were rendered into an element with default
-   whitespace handling, so the whole body ran together on one line.
 
-   pre-wrap, NOT pre: long values must still wrap. "Campaign: PP | Search |
-   Main Line ZIPs | Aug 2026" would otherwise push the panel wide.
-
-   ⚠️ This repairs every EXISTING note. Nothing needs rewriting — the data was
-   always right. */
 .note p{margin:0;font-size:12.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}
 .addnote{display:flex;gap:8px;margin-top:4px;}
 .addnote input{flex:1;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit;font-size:12.5px;outline:none;transition:border-color .12s;}
@@ -350,7 +281,6 @@ tbody tr:last-child td{border-bottom:0;}
 .addnote button:hover{background:var(--plum-mid);}
 .addnote button:disabled{background:var(--ink-3);cursor:not-allowed;}
 
-/* loading / error states */
 .statewrap{flex:1 1 auto;display:flex;align-items:center;justify-content:center;padding:40px 22px;min-height:0;}
 .statecard{max-width:460px;text-align:center;}
 .spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--plum-soft);border-top-color:var(--plum);margin:0 auto 16px;animation:spin .8s linear infinite;}
@@ -362,7 +292,6 @@ tbody tr:last-child td{border-bottom:0;}
 .statecard .retry:hover{background:var(--plum-mid);}
 .errdot{color:var(--blk);}
 
-/* ── Bulk import wizard ───────────────────────────────────────── */
 .importwrap{padding:20px 22px 40px;display:flex;flex-direction:column;gap:16px;}
 .isec{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:16px 18px;box-shadow:var(--shadow-sm);}
 .istep{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--plum);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
@@ -372,27 +301,11 @@ tbody tr:last-child td{border-bottom:0;}
 .imeta{font-size:11px;color:var(--ink-3);margin-top:8px;}
 .irow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;}
 .irow label{font-size:11px;font-weight:700;color:var(--ink-2);}
-/* 🔴 A TICKBOX IS NOT A TEXT INPUT — round 112, item 5.
-   This rule matched EVERY `input` inside an `.irow`, tickboxes included, and
-   `min-width:150px` is catastrophic for one: the section checklist lives in
-   `<div class="irow pffolders">`, so each checkbox demanded 150px of its 156px
-   label and left EIGHT PIXELS for the name. With `.pfsecname{overflow-wrap:
-   anywhere}` the label then wrapped ONE CHARACTER PER LINE, and the longest
-   ("Website Intent Form") set the height of all fourteen cards.
-   Measured, not guessed — scripts/section-grid-proof.mjs:
-     tracks 155.7px | 19.8px | 18.2px   nameW 8px   nameH 132px
-   The editor's copy of the same list is NOT inside an `.irow` and renders on
-   one line, which is the control case that confirms it.
-   ⚠️ Excluded by TYPE rather than patched at the call site, because the next
-   tickbox someone puts in an `.irow` would hit this again. */
+
 .irow select,.irow input:not([type="checkbox"]):not([type="radio"]){border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;min-width:150px;transition:border-color .12s;}
 .irow input[type="checkbox"],.irow input[type="radio"]{min-width:0;width:auto;flex:0 0 auto;margin:0;}
 .irow select:focus,.irow input:not([type="checkbox"]):not([type="radio"]):focus{border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
-/* The batch tag box. Deliberately NOT styled like the source picker — one is a
-   fixed vocabulary, the other is free text, and they must not read alike. */
-/* Base styling comes from `.irow input` — only the differences live here:
-   it GROWS (free text needs room where a fixed picker does not), and it says
-   so when the tag is blocked. */
+
 .itag{flex:1 1 260px;}
 .itag[aria-invalid="true"]{border-color:#c0392b;}
 .itag[aria-invalid="true"]:focus{box-shadow:0 0 0 3px #fdeeec;}
@@ -400,16 +313,11 @@ tbody tr:last-child td{border-bottom:0;}
 .irow .ihint code{background:rgba(0,0,0,.06);border-radius:4px;padding:1px 5px;font-size:11px;}
 .itagerr{flex-basis:100%;margin-top:2px;font-size:11.5px;line-height:1.5;color:#8c2f22;background:#fdeeec;border:1px solid #f3d2cd;border-radius:8px;padding:7px 10px;}
 .irow .isrc{min-width:190px;}
-/* The source hint sits on its own line under the Destination row — .irow is a
-   wrapping flex row, so it needs a full-width basis or it lands beside the
-   picker and squeezes it. */
+
 .irow .ihint{flex-basis:100%;font-size:11px;color:var(--ink-3);line-height:1.45;}
-/* Import — the three mapping outcomes. "note" reads as a destination, not a
-   warning: it is where most columns legitimately end up. "dropped" is the one
-   that used to be silent and is now the loud one. */
+
 .imaprow .inote{margin-left:7px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 6px;}
-/* ⚠️ AMBER, NOT RED. Skipping a report title is the right outcome, not an
-   error — but it is a silent change to someone's file, so it has to be seen. */
+
 .ihead{margin-top:10px;padding:10px 12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;font-size:11.5px;line-height:1.55;color:#7a5227;}
 .ihead.raw{border-color:var(--line);background:var(--canvas);color:var(--ink-2);}
 .ihead b{color:#5c3d1c;}
@@ -417,7 +325,7 @@ tbody tr:last-child td{border-bottom:0;}
 .ihead ul{margin:7px 0 0;padding:0;list-style:none;}
 .ihead li{display:flex;gap:8px;align-items:baseline;padding:3px 0;}
 .iheadn{flex:0 0 auto;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;opacity:.75;}
-/* The quoted row can be long. Wrap it; never let it push the panel wide. */
+
 .iheadv{flex:1 1 auto;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;overflow-wrap:anywhere;}
 .iheadact{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
 .iheadact button{padding:6px 11px;border:1px solid #e0c9ae;background:#fff;color:#7a5227;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;}
@@ -427,17 +335,11 @@ tbody tr:last-child td{border-bottom:0;}
 .iheadact .iheadok{border-color:var(--plum);background:var(--plum);color:#fff;}
 .iheadact .iheadok:hover{background:#4a2170;}
 .iheadact .iheadok:disabled{opacity:.5;cursor:default;}
-/* ── ADMIN → PIPELINES ─────────────────────────────────────────────────── */
-/* 🔴 BUTTONS THAT LOOK LIKE BUTTONS. The global reset is
-   `button{border:0;background:none;color:inherit}`, so every control in this
-   screen that did not opt into a class rendered as plain clickable text —
-   "Create field" and "Create pipeline" read as links, which is the one thing a
-   destructive-ish action must not look like. Scoped to this screen so nothing
-   else shifts. */
+
 .pfadmin button{border:1px solid var(--plum);background:var(--plum);color:#fff;border-radius:8px;padding:8px 14px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s;}
 .pfadmin button:hover:not(:disabled){background:#4a2170;border-color:#4a2170;}
 .pfadmin button:disabled{opacity:.45;cursor:default;}
-/* Secondary actions stay quiet — outlined, not filled. */
+
 .pfadmin button.ighost,.pfadmin .pfsectoggle,.pfadmin .pfstage button,
 .pfadmin .pfstalerow button,.pfadmin .pfwarnacts button{background:var(--bg);color:var(--ink-2);border-color:var(--line);font-weight:500;}
 .pfadmin button.ighost:hover:not(:disabled),.pfadmin .pfstage button:hover:not(:disabled){background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum);}
@@ -447,7 +349,6 @@ tbody tr:last-child td{border-bottom:0;}
 .pfadmin .irow{align-items:flex-start;margin-bottom:14px;}
 .pfadmin .irow > label{padding-top:8px;min-width:150px;}
 
-/* Stages. Position is LIST ORDER — the number is a readout, never an input. */
 .pfstagelist{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:6px;}
 .pfstage{display:flex;align-items:center;gap:6px;}
 .pfstagepos{flex:0 0 22px;font-size:10.5px;font-weight:700;color:var(--ink-3);text-align:right;}
@@ -456,76 +357,43 @@ tbody tr:last-child td{border-bottom:0;}
 .pfstage button:disabled{opacity:.35;cursor:default;}
 .pfstage button:not(:disabled):hover{border-color:var(--plum);color:var(--plum);}
 
-/* The folder checklist. Expanding lists the fields — see the comment at the
-   render site: ticking a name alone is a guess. */
-/* ⚠️ COLUMNS, NOT A STACK. Fourteen full-width rows pushed every action below
-   the fold. These are short, independent items — the shape is a compact grid
-   that grows sideways before it grows down. */
-/* ITEM 3a — A GRID YOU SCAN, NOT A LIST YOU SCROLL. Sixteen sections at
-   260px-wide cards with card-sized padding is four screens of chrome around
-   sixteen words. Narrower columns and a tighter gap fit the same sixteen in
-   one view, which is what a checklist is for. */
 .pfseclist{flex:1 1 340px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:4px;}
 .pfsec{display:grid;grid-template-columns:1fr auto auto;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:3px 7px;gap:0 5px;}
 .pfsec.unnamed{border-color:#f0dcc9;background:#fdfaf6;}
 .pfseclab{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);cursor:pointer;min-width:0;}
 .pfseclab input{margin:0;flex:0 0 auto;}
 .pfsecname{font-weight:600;overflow-wrap:anywhere;}
-/* ⚠️ NOT A NAME — AND THE OLD RULE WAS NOT LOSING TO THE CASCADE.
-   Round 95 set the marker to 10.5px and the field list to 10px, and both were
-   rendering at exactly that. What made them read as loud as a real section
-   name was never the size:
-     · weight 700 against a named section's 600,
-     · a saturated brown against --ink,
-     · and TWO STACKED LINES where a name is one.
-   Small + bold + high-contrast reads heavier than large + regular, so shrinking
-   it again would not have helped. The field list has moved into the expanded
-   panel (one line now), the weight drops below the named rows rather than
-   above them, and the ⚠ carries the warning so the words do not have to. */
+
 .pfsecunk{display:inline-flex;align-items:baseline;gap:5px;min-width:0;}
 .pfsecunk-w{font-size:9.5px;color:#b07a2e;flex:0 0 auto;line-height:1;}
 .pfsecunk-t{font-size:11px;font-weight:500;font-style:italic;color:var(--ink-3);white-space:nowrap;}
 .pfseccount{font-size:10.5px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;white-space:nowrap;}
-/* ITEM 3c — the id now lives INSIDE the expanded panel, beside the fields it
-   helps you match, rather than on the face of a collapsed row. */
+
 .pfsecid{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);font-size:9.5px;color:var(--ink-3);overflow-wrap:anywhere;}
 .pfsecid code{font-size:9.5px;}
 .pfsectoggle{border:0;background:none;color:var(--ink-3);cursor:pointer;font-size:12px;padding:2px 6px;}
 .pfsectoggle:hover{color:var(--plum);}
 .pfsechide{grid-column:1 / -1;display:flex;align-items:center;gap:7px;margin-top:4px;font-size:10.5px;color:var(--ink-2);cursor:pointer;line-height:1.4;}
 .pfsechide input{flex:0 0 auto;}
-/* ITEM 7b — cards side by side, expanding IN PLACE. The chevron must not push
-   its neighbours out of view or collapse the grid to one column, and the tick
-   target is the checkbox alone so expanding and ticking cannot fight. */
-/* deliberate-override: one extra property on the checklist card. */
+
 .pfsec{align-content:start;}
 .pfsec .pfseclab{cursor:default;}
 .pfsec .pfseclab input{cursor:pointer;}
 .pfsec .pfsecname{cursor:pointer;}
 
-/* ITEM 6 — the unconfigured-folder banner. */
 .pfunknown{margin-bottom:16px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:10px;padding:12px 14px;font-size:12px;color:#7a5227;}
 .pfunknown b{color:#5c3d1c;}
-/* ⚠️ flex-start, not center. The evidence column is now a full field list;
-   centring it against a two-line ask floats both away from their own edges. */
+
 .pfunknownrow{display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px;margin-top:11px;padding-top:11px;border-top:1px solid #f0dcc9;}
 .pfunknownwhat{flex:1 1 240px;min-width:0;font-size:11.5px;overflow-wrap:anywhere;}
 .pfunknownrow input{flex:0 1 220px;min-width:0;border:1px solid #e0c9ae;border-radius:8px;padding:7px 10px;font:inherit;font-size:12.5px;background:#fff;}
 
-/* One line saying why all four controls live on one screen. */
 .pfwhy{margin-bottom:16px;font-size:11.5px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:9px;padding:9px 12px;}
 
-/* ITEM 7c — steps that read in order, one primary action. */
 .pfadmin .istep{margin:20px 0 10px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--plum);}
 .pfadmin .istep:first-of-type{margin-top:0;}
 .pfadmin .pfprimary{padding:11px 22px;font-size:13px;}
 
-/* "+ Add a section" on the record panel. */
-/* ⚠️ RENAMED FROM .addsec — THAT NAME WAS ALREADY TAKEN. AddClientDialog has
-   used .addsec for its "Lead" / "Case" headings since round 33 (globals.css:751,
-   below this and therefore winning on every shared property). Round 94 added a
-   second .addsec here for the record panel's "+ Add a section", so each was
-   quietly restyling the other. Prior claim wins; this one moves. */
 .pullsec{margin-top:10px;position:relative;}
 .pullsec-btn{border:1px dashed var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;}
 .pullsec-btn:hover,.pullsec-btn.on{border-style:solid;background:#efe6fb;}
@@ -536,12 +404,6 @@ tbody tr:last-child td{border-bottom:0;}
 .pullsec-pop > button span{font-size:10.5px;color:var(--ink-3);}
 .pullsec-note{padding:7px 10px 4px;font-size:10.5px;line-height:1.5;color:var(--ink-3);border-top:1px solid var(--line-soft);margin-top:4px;}
 
-/* 🔴 AN OPEN SECTION IS A ROW OF ITS OWN — round 115b, item I.
-   The chips are inline and wrap; the panel underneath them is not a chip and
-   must not inherit a chip's width. Spanning every column of `.pfseclist` is
-   what turns a 220px column of broken words into a readable two-column list. */
-/* The instruction block above the checklist. Quiet, but not a footnote: an
-   admin who reads it ticks sensibly, and one who does not ticks everything. */
 .pfgovern{margin:0 0 12px;padding:11px 13px;border:1px solid var(--line);
   background:var(--canvas);border-radius:9px;font-size:11.5px;line-height:1.6;
   color:var(--ink-2);}
@@ -551,9 +413,7 @@ tbody tr:last-child td{border-bottom:0;}
 
 .pfsec.open{grid-column:1 / -1;}
 .pfsecfields{grid-column:1 / -1;font-size:11px;line-height:1.55;color:var(--ink-2);background:var(--canvas);border-radius:6px;padding:7px 9px;margin-top:4px;}
-/* One field per line: name left, type right, the gap filled so the eye can
-   travel across it. `min-width:0` on the name is what lets a long question
-   ellipsise instead of pushing the type off the row. */
+
 .pffieldlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;}
 .pffieldlist li{display:flex;align-items:baseline;gap:10px;padding:2px 0;
   border-bottom:1px dotted var(--line);}
@@ -563,8 +423,7 @@ tbody tr:last-child td{border-bottom:0;}
   white-space:nowrap;}
 
 .pfnew{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
-/* Explicit two-column grid — label, control. Nothing can wrap into a position
-   where it cannot be reached. */
+
 .pffield{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:9px 12px;}
 .pffield > label{font-size:11px;font-weight:700;color:var(--ink-2);display:flex;align-items:center;gap:6px;white-space:nowrap;}
 .pffield input,.pffield select,.pffield textarea{width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);outline:none;}
@@ -572,15 +431,12 @@ tbody tr:last-child td{border-bottom:0;}
 .pffield input:disabled{background:var(--line-soft);color:var(--ink-3);}
 .pffield textarea{align-self:start;}
 .pffield-prefix{max-width:140px;}
-/* Section picker + its "new section" button on one line. */
+
 .pffield-sec{display:flex;gap:8px;align-items:center;min-width:0;}
 .pffield-sec select,.pffield-sec input{flex:1 1 auto;min-width:0;}
 .pffield-sec button{flex:0 0 auto;white-space:nowrap;}
 .pfnew .ihint{margin-top:9px;}
 
-/* 🔴 BLOCK is red and offers no way through. ⚠️ WARN is amber and always
-   does — a false positive that stops someone working is worse than a
-   duplicate they can merge later. */
 .pfblock,.pfwarn{border-radius:9px;padding:9px 12px;font-size:11.5px;line-height:1.5;margin-bottom:9px;}
 .pfblock{border:1px solid #f3d2cd;background:#fdeeec;color:#8c2f22;}
 .pfwarn{border:1px solid #f0dcc9;background:#fdf8f2;color:#7a5227;}
@@ -596,7 +452,7 @@ tbody tr:last-child td{border-bottom:0;}
 .pfrow > summary:hover{background:var(--row-hover);}
 .pfrow[open] > summary{background:var(--sel);}
 .pfrow .pfseclist{margin:0 12px 12px;border-radius:8px;}
-/* A row's own status, so an error is read where it happened. */
+
 .pfrowmsg{margin:10px 12px 0;}
 
 .pfscopeedit{display:flex;align-items:center;gap:9px;margin:10px 12px 4px;flex-wrap:wrap;}
@@ -608,13 +464,8 @@ tbody tr:last-child td{border-bottom:0;}
 .pfscope{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
 .pfcount{margin-left:auto;font-size:11px;color:var(--ink-3);}
 
-/* Stale keys are RECONCILED, never auto-removed. */
 .pfstale{margin-top:14px;border:1px solid var(--line);background:var(--canvas);border-radius:10px;padding:11px 13px;font-size:12px;}
-/* 🔴 ROUND 130 — the "point this folder at a section" control. `.pfstalerow`
-   is a single flex LINE, so the select and its Save need their own row rather
-   than being squeezed onto the end of an id and a field list. Defined here
-   because round 120 shipped `.moveacts` and `.savemsg.ok` used everywhere and
-   defined nowhere, and the sweep only catches what it has already met. */
+
 .pfstalerow{display:flex;align-items:center;gap:10px;margin-top:7px;flex-wrap:wrap;}
 .pfunkname{flex:1 1 100%;display:flex;align-items:center;gap:8px;margin-top:4px;}
 .pfunkname label{font-size:11px;font-weight:600;color:var(--ink-2);flex:none;}
@@ -628,7 +479,6 @@ tbody tr:last-child td{border-bottom:0;}
 .pfstalerow button{padding:4px 10px;border:1px solid var(--line);background:var(--bg);border-radius:7px;font-size:11.5px;cursor:pointer;color:var(--ink-2);}
 .pfstalerow button:hover{border-color:#c0392b;color:#8c2f22;}
 
-/* The notice checkPipelineConfig() should always have shown someone. */
 .pfunconf{margin-bottom:12px;border:1px solid #f0dcc9;background:#fdf8f2;border-radius:9px;padding:9px 12px;font-size:11.5px;line-height:1.55;color:#7a5227;}
 .pfunconf b{color:#5c3d1c;}
 .pfunconf button{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--plum);cursor:pointer;text-decoration:underline;}
@@ -640,8 +490,7 @@ tbody tr:last-child td{border-bottom:0;}
 .inotepv{margin:0 0 10px;font-size:11.5px;}
 .inotepv summary{cursor:pointer;color:var(--plum);font-weight:600;}
 .inotepv pre{margin:8px 0 0;padding:11px 13px;border:1px solid var(--line);background:var(--canvas);border-radius:9px;font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;}
-/* Item 5 — the duplicate decision. Deliberately the loudest block on Preview:
-   it is the only one where the wrong choice destroys data. */
+
 .idups{margin:0 0 12px;padding:11px 13px;border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:9px;font-size:12px;color:var(--ink-2);}
 .idups.busy,.idups.clean{color:var(--ink-3);font-size:11.5px;}
 .idups-head{margin-bottom:9px;line-height:1.5;}
@@ -655,27 +504,17 @@ tbody tr:last-child td{border-bottom:0;}
 .idups-all{margin-top:8px;font-size:11px;}
 .idups-all summary{cursor:pointer;color:var(--plum);font-weight:600;}
 .idups-all ul{margin:6px 0 0;padding-left:18px;line-height:1.6;max-height:200px;overflow:auto;}
-/* Scope — a contact field is the person's, not this record's. */
-/* CONTACT / OPPORTUNITY — the two block headers. STRUCTURAL, not collapsible:
-   the folder sections inside them already collapse. Uses --plum, the existing
-   token; no new colour. */
+
 .blockhead{display:flex;align-items:center;gap:10px;margin:20px 0 11px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:8px;padding:8px 12px;}
 .blockhead::after{content:"";flex:1;height:1px;background:var(--plum-line);}
-/* The first header sits directly under Assignment, so it needs less air above
-   than the second one, which follows a field grid. */
+
 .pbody > .blockhead:first-of-type{margin-top:16px;}
 
-/* "+ Add a field" — a client contact section's empty questions.
-   A QUIET TEXT BUTTON, not a filled one, sitting below the answered fields:
-   this is a panel reps read far more often than they edit, and the control must
-   not compete with the answers above it. Renders only when a section actually
-   has empty fields. */
 .addfield{position:relative;margin:9px 0 2px;font-size:11.5px;}
 .addfield-btn{border:0;background:none;padding:2px 0;font:inherit;font-size:11.5px;font-weight:600;color:var(--plum);cursor:pointer;border-radius:5px;}
 .addfield-btn:hover,.addfield-btn.on{text-decoration:underline;}
 .addfield-n{font-weight:600;color:var(--ink-3);}
-/* ONE PER LINE. The list is the whole point of replacing the <select>: a rep
-   reads the questions and picks one, rather than hunting a flattened row. */
+
 .addfield-pop{position:absolute;z-index:40;top:100%;left:0;margin-top:5px;min-width:240px;max-width:340px;max-height:260px;overflow:auto;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--plum-line);border-radius:9px;box-shadow:var(--shadow-md,0 8px 24px rgba(0,0,0,.12));padding:5px;}
 .addfield-pop button{text-align:left;border:0;background:none;font:inherit;font-size:12px;color:var(--ink);padding:7px 9px;border-radius:6px;cursor:pointer;white-space:normal;line-height:1.4;}
 .addfield-pop button:hover{background:var(--plum-soft);color:var(--plum);}
@@ -704,14 +543,12 @@ tbody tr:last-child td{border-bottom:0;}
 .iresult .ierrs{flex-basis:100%;margin:8px 0 0;padding:10px 14px;list-style:none;background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:9px;max-height:200px;overflow:auto;}
 .iresult .ierrs li{font-size:11.5px;color:var(--blk);padding:2px 0;line-height:1.5;}
 
-/* ── Task 3: caregiver paired with client ─────────────────────── */
 .clientcell{display:flex;flex-direction:column;gap:1px;}
 .clientcell .clname{font-weight:700;}
 .clientcell .clcg{font-size:11px;color:var(--ink-3);font-weight:500;}
 .clientcell .clcg::before{content:"🧑‍⚕️ ";}
 .ccg{font-size:11px;color:var(--ink-2);margin-top:2px;}
 
-/* ── Task 1: resources toolbar / upload / preview ─────────────── */
 .restoolbar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
 .restoolbar .search{flex:1;min-width:200px;}
 .resupload{display:inline-flex;align-items:center;gap:7px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;white-space:nowrap;}
@@ -726,13 +563,11 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .previewhead{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--canvas);}
 .previewname{flex:1;font-weight:700;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .previewopen{font-size:12px;font-weight:600;color:var(--plum);}
-/* Same rule: a tall preview image must scroll, not push the modal open and
-   get clipped by it. */
+
 .previewbody{flex:1 1 auto;min-height:0;overflow:auto;background:#f0edf5;display:flex;align-items:center;justify-content:center;}
 .previewbody iframe{width:100%;height:100%;border:0;}
 .previewbody img{max-width:100%;max-height:100%;object-fit:contain;}
 
-/* ── Task 4: caregivers section (record panel) ────────────────── */
 .cgsec{display:flex;flex-direction:column;gap:10px;margin-bottom:8px;}
 .cgmuted{font-size:12px;color:var(--ink-3);}
 .cglist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
@@ -754,7 +589,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .cghitname{font-size:12.5px;font-weight:600;color:var(--ink);}
 .cghitmeta{font-size:10.5px;color:var(--ink-3);}
 
-/* ── Task 2: import wizard stepper / drag-drop / progress ─────── */
 .istepper{display:flex;list-style:none;margin:0 0 18px;padding:0;gap:6px;flex-wrap:wrap;}
 .istepper-i button{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);cursor:pointer;}
 .istepper-i button:disabled{cursor:not-allowed;opacity:.7;}
@@ -783,7 +617,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .ighost:hover:not(:disabled){border-color:var(--plum);color:var(--plum);}
 .ighost:disabled{opacity:.5;cursor:not-allowed;}
 
-/* ── Task 5: email composer ───────────────────────────────────── */
 .emailbtn{display:inline-flex;align-items:center;gap:7px;margin:2px 0 6px;background:var(--plum);color:#fff;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s;}
 .emailbtn:hover{background:var(--plum-mid);}
 .emailbox{background:var(--bg);border-radius:14px;width:min(640px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
@@ -804,12 +637,10 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .emailpreview .epbody{padding:12px 13px;font-size:12.5px;line-height:1.6;color:var(--ink);white-space:pre-wrap;}
 .emailresults .ireset{margin-top:12px;}
 
-/* email templates: source badge + HTML preview */
 .tplsrc{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:2px 8px;}
 .emailpreview .ephtml{max-height:320px;overflow:auto;}
 .emailpreview .ephtml img{max-width:100%;height:auto;}
 
-/* ── Task 5: follower editor ──────────────────────────────────── */
 .followedit{display:flex;flex-direction:column;gap:8px;}
 .folchips{display:flex;flex-wrap:wrap;gap:6px;}
 .folchip{display:inline-flex;align-items:center;gap:6px;background:var(--plum-soft);border:1px solid var(--plum-line);color:var(--plum);border-radius:20px;padding:3px 6px 3px 11px;font-size:11.5px;font-weight:600;}
@@ -817,55 +648,42 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .folchip .folx:hover{background:#fff;}
 .folchip .folx:disabled{opacity:.5;cursor:progress;}
 
-/* ── Task 6: Move action ──────────────────────────────────────── */
 .panelactions{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px;}
 .movebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .12s,border-color .12s;}
 .movebtn:hover{background:var(--plum-soft);border-color:var(--plum);}
 .movebox{background:var(--bg);border-radius:14px;width:min(520px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);}
-/* The applicant dialog's routing readout — what the division decided, shown
-   before it is committed. */
+
 .cgadd .movebody{gap:10px;}
 .cgroute{font-size:12px;line-height:1.55;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:9px 12px;}
 .cgroute b{color:var(--plum-deep);}
 .cgroute select{margin-top:7px;width:100%;border:1px solid var(--plum-line);border-radius:8px;padding:7px 9px;font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
 .cgroute.contactonly{background:var(--canvas);border-color:var(--line);}
 .cgroute.contactonly b{color:var(--ink);}
-/* 🔴 No pipeline exists. Amber — a thing to be fixed, not a thing to ignore. */
+
 .cgroute.none{background:#fdf8f2;border-color:#f0dcc9;color:#7a5227;}
 .cgroute.none b{color:#5c3d1c;}
 .cgroute-alt{margin-top:6px;font-size:11px;opacity:.9;}
 .cgsave{border:1px solid var(--plum);background:var(--plum);color:#fff;border-radius:9px;padding:11px 20px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
 .cgsave:hover:not(:disabled){background:#4a2170;}
 .cgsave:disabled{opacity:.45;cursor:default;}
-/* 🔴 THE THIRD TIME THIS EXACT SHAPE HAS CLIPPED CONTENT — round 113, item H.
-   `.movebox` is a column flex container with max-height:90vh and
-   overflow:hidden; `.movebody` is its scrolling child. A flex item's automatic
-   minimum (`min-height:auto`) stops it shrinking below its content, so the body
-   grew past the box and the box clipped it — the Add-partner modal ended at
-   Owner with Notes and its hint unreachable.
-   Previously: `.rfhits` collapsed to 0px (round 112 item 6) and `.rfdbd` cut off
-   its last attributed row (round 112 item 4). Same rule, three symptoms.
-   ⚠️ scripts/loader-sweep.mjs now has a rule for it so there is not a fourth. */
+
 .movebody{flex:1 1 auto;min-height:0;padding:16px 18px 20px;overflow:auto;display:flex;flex-direction:column;gap:14px;}
 .movebody .irow{gap:4px;}
 .movebody .irow label{margin-top:6px;}
-/* Same exclusion: a 100%-wide tickbox is the same bug in a modal. */
+
 .movebody .irow select,.movebody .irow input:not([type="checkbox"]):not([type="radio"]){width:100%;}
 .movewarn{font-size:12px;line-height:1.55;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c2;border-radius:9px;padding:11px 13px;}
 .movetoggle{display:flex;align-items:center;gap:8px;margin-top:9px;font-size:11.5px;font-weight:600;color:var(--ink-2);cursor:pointer;}
 .movetoggle input{margin:0;accent-color:var(--plum);}
 .movetoggle-note{margin-top:6px;font-size:11px;line-height:1.5;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:7px;padding:7px 10px;}
 
-/* ── Task 7: division badges, provenance, board card division ─── */
 .divbadge{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 7px;vertical-align:middle;}
 .provenance{font-size:10.5px;color:var(--ink-3);font-style:italic;margin-top:2px;}
 .phead .provenance{margin-top:5px;font-style:normal;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:6px;padding:3px 8px;display:inline-block;}
 .card .cdiv{margin-top:5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);}
-/* ROUND 178 · ITEM 4 — the created line. --ink-2, not --ink-3: --ink-3 on the
-   card's light background is ~3.3:1, below AA for text this small. */
+
 .card .ccreated{margin-top:3px;font-size:10.5px;color:var(--ink-2);}
 
-/* ── Task 8: masked sensitive fields (SSN) ────────────────────── */
 .v.ro.masked{justify-content:space-between;gap:10px;}
 .maskval{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.06em;}
 .maskbtn{flex:none;border:1px solid var(--line);border-radius:6px;padding:3px 10px;font-size:10.5px;font-weight:700;color:var(--ink-2);background:var(--bg);cursor:pointer;}
@@ -875,7 +693,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .maskedwrap .maskbtn{margin-top:9px;}
 .unassigned-tag{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;vertical-align:middle;}
 
-/* ── Admin: Pipeline Access tab ───────────────────────────────── */
 .pawrap{padding:20px 22px 40px;display:flex;flex-direction:column;gap:14px;}
 .panote{font-size:12px;line-height:1.6;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:10px;padding:12px 14px;}
 .pawarn{font-size:12px;line-height:1.55;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:10px;padding:11px 14px;}
@@ -904,14 +721,10 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .clientcell .clcontact{font-size:11px;color:var(--ink-3);font-weight:500;}
 .clientcell .clcontact::before{content:"👤 ";}
 .card .ccontact{font-size:11px;color:var(--ink-2);margin-top:2px;}
-/* Move/notes follow-ups: transferred-from badge + note division */
+
 .fromtag{font-size:10px;font-weight:700;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:20px;padding:1px 7px;}
 .note .nh .ndiv{color:var(--plum);font-weight:600;}
 
-/* ── ITEM 2 · UserPicker — replaces the native <select> for owner/follower ──
-   A native <option> is one line of unstyleable text, so "Jhune Manalaysay -
-   Onboarding" and its division ran together. Name on its own line, division as
-   a muted chip below it. Same visual language as the caregiver typeahead. */
 .uppick{position:relative;}
 .upbtn{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:var(--bg);font:inherit;font-size:12.5px;cursor:pointer;transition:border-color .12s;}
 .upbtn:hover:not(:disabled){border-color:var(--plum);}
@@ -931,19 +744,11 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .uprow.sel{background:var(--plum-soft);}
 .uprowname{font-size:12.5px;font-weight:600;color:var(--ink);}
 
-/* ── ITEM 3 · Add Client ── */
 .addclientbtn{border:1px solid var(--plum-line);background:var(--plum-soft);color:var(--plum);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;margin-right:10px;transition:background .12s;}
 .addclientbtn:hover{background:var(--plum);color:#fff;}
-/* 🔴 WIDER, AND TWO COLUMNS WHERE THE FIELDS ARE SHORT — round 115c, item 3.
-   `.movebody .irow input{width:100%}` makes every control fill its row, so a
-   row holding "First name" and "Last name" became FOUR lines: one line's worth
-   of content spread over four. At 520px there was no room to do otherwise;
-   at 760 there is.
-   ⚠️ `width` as well as `max-width`: `.movebox` sets `width:min(520px,100%)`
-   and a max-width alone would never beat it. */
+
 .addbox{width:min(760px,100%);max-width:760px;}
-/* A pair of short fields, side by side, collapsing to one column when narrow.
-   The textarea and the pipeline picker stay full width — they are not short. */
+
 .irow2{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;align-items:start;}
 .irow2 > div{display:flex;flex-direction:column;gap:4px;min-width:0;}
 .irow2 label{font-size:11px;font-weight:700;color:var(--ink-2);margin-top:6px;}
@@ -960,7 +765,6 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .dupacts{display:flex;gap:8px;margin-top:8px;}
 .dupacts .ighost{padding:6px 12px;font-size:11.5px;}
 
-/* ── ITEM 4 · note editing (author only; no delete) ── */
 .nedited{margin-left:6px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;cursor:help;}
 .noteedit{margin-left:8px;background:transparent;border:0;padding:0;font:inherit;font-size:11px;font-weight:600;color:var(--plum);cursor:pointer;}
 .noteedit:hover{text-decoration:underline;}
@@ -969,40 +773,23 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .noteeditacts{display:flex;gap:8px;justify-content:flex-end;}
 .noteeditacts .ighost,.noteeditacts .ibtn{padding:6px 14px;font-size:11.5px;}
 
-/* ── ITEM 1 · the formatted date beneath a DATE input ── */
 .datehint{font-size:10.5px;color:var(--ink-3);margin-top:3px;}
 
-/* ── ITEM 4 · hybrid picker — GHL users plus admin-added names ── */
 .updiv{padding:6px 11px 4px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);background:var(--line-soft);border-top:1px solid var(--line);}
 .extbadge{margin-left:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);border:1px solid var(--line);border-radius:20px;padding:0 6px;vertical-align:middle;}
-/* ITEM 3 — "+ Add name…" sits ABOVE the list, not below it.
-   The record panel body is a scroll container (.pbody{overflow:auto}), so this
-   absolutely-positioned menu is CLIPPED by it. With 25 users the list fills its
-   max-height and anything after it landed past the panel's bottom edge — which
-   is why users and TBD were visible and "+ Add name…" was not. It was never a
-   permission problem; the row was rendering off-screen. Above the list it can
-   never be the clipped one, and the list is capped shorter so the whole menu
-   fits inside the panel. */
+
 .upadd{border-bottom:1px solid var(--line);background:var(--canvas);padding:8px 11px;display:flex;flex-direction:column;gap:6px;}
 .upaddbtn{background:transparent;border:0;padding:0;font:inherit;font-size:12px;font-weight:600;color:var(--plum);cursor:pointer;text-align:left;}
 .upaddbtn:hover{text-decoration:underline;}
 .upaddacts{display:flex;gap:8px;justify-content:flex-end;}
 .upaddacts .ighost,.upaddacts .ibtn{padding:6px 14px;font-size:11.5px;}
 
-/* ── ITEM 5 · soft-deleted note — visible gap, not an erasure ── */
 .noteremove{color:var(--blk);}
-/* The tombstone. A removed note has nothing left to show, so it drops the card,
-   the border, the author/date header and the strikethrough — all of which were
-   framing an absence. One muted line, in the timeline position the note held,
-   carrying who removed it and when. Kept rather than dropped because a hard
-   delete leaves no sign anything was ever there. */
+
 .notegone{display:block;font-size:11px;color:var(--ink-3);font-style:italic;padding:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;}
 
-/* GHL DATE fields cannot store a time — flagged where a field NAME promises one. */
 .datewarn{font-size:10.5px;color:var(--blk);background:var(--blk-soft);border-radius:6px;padding:4px 8px;margin-top:4px;}
 
-/* ── ITEM 2 · in-app confirmation (never window.confirm — a sandboxed GHL
-      iframe swallows it and returns false with no prompt) ── */
 .confirmbox{max-width:460px;}
 .confirmtext{font-size:13px;line-height:1.55;color:var(--ink-2);}
 .ibtn.danger{background:var(--blk);}
@@ -1010,33 +797,19 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .ipresetname{display:inline-flex;align-items:center;gap:6px;}
 .ipresetname input{border:1px solid var(--plum);border-radius:7px;padding:5px 9px;font:inherit;font-size:11.5px;outline:none;}
 
-/* ── Caregiver ↔ client link badge (the association is DIRECTIONAL, so the
-      wording is "1 caregiver" on a client's row and "2 clients" on a
-      caregiver's). Absent until the counts arrive — never a flashing zero. ── */
 .rellink{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:20px;padding:1px 8px;white-space:nowrap;}
 .cghead{display:flex;align-items:center;gap:8px;}
 .cgcount{font-size:10px;font-weight:700;color:var(--ink-3);background:var(--line-soft);border-radius:20px;padding:1px 7px;}
 
-/* ── ITEM 2 · a Move note's SYSTEM half — the record of the transfer itself.
-      Never struck through, never editable: it is how the receiving rep learns
-      how the case reached them. Only the author's reason follows it. ── */
 .notesys{color:var(--ink-3);}
-/* The system half shown beside the edit box — same reason, same fix. */
+
 .notesysro{font-size:12px;color:var(--ink-3);background:var(--line-soft);border-radius:7px;padding:7px 10px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;}
 
-/* A viewer with no pipeline grants. Not an error: fail-closed access is working
-   as intended and the reader has done nothing wrong — so this reads as a state,
-   in the normal empty-state voice, not a warning. */
 .empty.noaccess{max-width:460px;margin:0 auto;line-height:1.6;}
 
-/* Board landing view: the board excludes shared records, so a viewer whose only
-   records are shared would otherwise see empty columns and no explanation. */
 .boardhint{max-width:520px;margin:0 auto 14px;line-height:1.6;}
 .linkbtn{background:transparent;border:0;padding:0;font:inherit;color:var(--plum);font-weight:600;cursor:pointer;text-decoration:underline;}
 
-/* ── Layered error display: plain sentence always visible, verbatim technical
-      detail behind a disclosure. Both halves matter — a rep can't act on a
-      status code, and we can't diagnose without the exact string + traceId. ── */
 .errmsg{line-height:1.5;}
 .errdetails{margin-top:6px;}
 .errdetails summary{cursor:pointer;font-size:10.5px;font-weight:600;color:var(--ink-3);list-style:none;user-select:none;}
@@ -1050,25 +823,17 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .errcopy:hover{border-color:var(--plum);color:var(--plum);}
 .errbody .errmsg{font-size:13px;}
 
-/* ── ITEM 4: MASTER VIEW ──────────────────────────────────────────────────
-   The board's own layout, with the columns meaning something else: a column
-   is a PIPELINE, not a stage. Wider columns because the card carries one more
-   line (the stage, which the column no longer says). */
 .masterboard{align-items:flex-start;}
 .masterboard .col{flex:0 0 288px;}
 .mtoolbar{border-bottom:1px solid var(--line);}
 .mnote{padding:10px 22px 0;font-size:11.5px;line-height:1.6;color:var(--ink-3);}
 .mnote b{color:var(--ink-2);}
-/* No drag here — a cross-pipeline move needs an owner, a stage and a reason,
-   so the cursor must not promise one. */
+
 .card.mcard{cursor:pointer;}
 .card.mcard .cm{margin-bottom:6px;}
 .mstage{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--plum);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:7px;padding:4px 8px;margin-bottom:8px;}
 .pill.divpill{background:var(--gold-soft);color:var(--gold-ink);font-weight:700;text-transform:uppercase;font-size:9.5px;letter-spacing:.05em;}
 
-/* ── ITEM 6c: RESOURCES, ONE SECTION PER FOLDER ───────────────────────────
-   Sections rather than a folder selector: a selector shows one folder at a
-   time and hides that the others exist. */
 .ressection{margin-bottom:22px;}
 .ressechead{display:flex;align-items:center;gap:10px;margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line);}
 .ressechead h3{margin:0;font-size:13px;font-weight:700;color:var(--ink);}
@@ -1081,33 +846,21 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .foldername:focus{outline:none;border-color:var(--plum);box-shadow:0 0 0 3px var(--plum-soft);}
 .fnote{margin:8px 0 0;font-size:11px;line-height:1.55;color:var(--ink-3);}
 
-/* ── ITEM 6b: the folder grid, and the Master column in the pipeline grid ── */
 .pah2{margin:26px 0 10px;font-size:14px;font-weight:700;color:var(--ink);}
 .pagrid th.pamasterhead{border-left:2px solid var(--line);}
 .pagrid td.pamastercell{border-left:2px solid var(--line-soft);}
 .papublic{display:block;margin-top:3px;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);}
 
-/* ── ITEM 2/3: Master view CATEGORY columns ───────────────────────────────
-   A column is a CATEGORY, not a stage or a pipeline, so a drop can't decide
-   by itself which pipeline is meant — it opens Move instead of committing. */
 .mcol .colhead{cursor:help;}
 .mnote.refused{color:var(--blk);background:var(--blk-soft);border:1px solid #f3c6bf;border-radius:8px;margin:8px 22px 0;padding:8px 12px;}
-/* The PIPELINE name, not the division — with category columns "ODP" no longer
-   says which pipeline a card is in. */
+
 .pill.pipepill{background:var(--plum-soft);color:var(--plum);font-weight:600;border:1px solid var(--plum-line);}
 .mage{margin-left:auto;font-size:10px;font-weight:700;color:var(--ink-3);background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:0 6px;}
-/* A lead sitting for a fortnight is what this view exists to surface. */
+
 .mage.stale{color:var(--blk);background:var(--blk-soft);border-color:#f3c6bf;}
-/* Names what was dropped, and what still has to be decided. */
+
 .moveintro{font-size:12.5px;line-height:1.6;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:10px 12px;margin-bottom:12px;}
 
-/* deliberate-override — this block intentionally re-opens .masterboard and
-   .mstage to widen them for the four-column layout.
-   ── ITEM 4 layout: four columns, not five pipelines ──────────────────────
-   Four columns left the board mostly empty. Wider columns and cards, larger
-   type, more room to breathe.
-   ⚠️ Deliberately NOT more fields: this view answers "where is everything",
-   not "everything about each thing". */
 .masterboard{gap:20px;padding:20px 26px;}
 .masterboard .col{flex:1 1 0;min-width:280px;max-width:460px;}
 .masterboard .colhead{padding:14px 16px;font-size:13.5px;}
@@ -1115,60 +868,33 @@ button.rescard{width:100%;text-align:left;font:inherit;cursor:pointer;background
 .masterboard .card{padding:15px 16px;}
 .masterboard .card .cn{font-size:14px;margin-bottom:5px;}
 .masterboard .card .cm{font-size:12px;margin-bottom:8px;}
-/* deliberate-override: larger type for the four-column master layout. */
+
 .mstage{font-size:12.5px;padding:5px 10px;}
 
-/* ── ITEM 11: delete one file ─────────────────────────────────────────────
-   The × sits over the card rather than inside it, so the card stays a single
-   click target for preview/download and the delete can't be hit by accident. */
 .rescardwrap{position:relative;}
 .resfiledel{position:absolute;top:8px;right:8px;width:22px;height:22px;line-height:1;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--ink-3);font-size:15px;cursor:pointer;opacity:0;transition:opacity .12s,color .12s,border-color .12s;}
 .rescardwrap:hover .resfiledel,.resfiledel:focus{opacity:1;}
 .resfiledel:hover{color:var(--blk);border-color:var(--blk);background:var(--blk-soft);}
 
-/* ITEM 1 — an operational warning, not a block. Deliberately not error-red: the
-   move is allowed and often correct. */
 .ownerwarn{font-size:12px;line-height:1.55;color:var(--wait);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:9px 12px;margin-top:10px;}
 
-/* The Refresh button that replaced refresh-on-focus. Sits beside Add Lead:
-   deliberately visible, because the data is now only as fresh as the last
-   press and that has to be obvious. */
 .refreshbtn{display:inline-flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px 13px;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;transition:border-color .12s,color .12s;}
 .refreshbtn svg{width:14px;height:14px;}
 .refreshbtn:hover:not(:disabled){border-color:var(--plum);color:var(--plum);}
 .refreshbtn:disabled{opacity:.55;cursor:default;}
 
-/* ── ITEM 13: the rail is a SECTION switch (Clients / Caregivers) ─────────
-   Caregiver recruitment is different work from client enrolment, so the split
-   is top-level rather than another tab beside List/Board. */
 .rail .railsec{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;width:100%;height:auto;flex:none;padding:8px 10px;background:transparent;border:0;border-radius:10px;color:rgba(255,255,255,.72);cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;letter-spacing:.01em;transition:background .12s,color .12s;}
-/* Collapsed: icon over a short label, which is the rail as it was before 176. */
-/* ⚠️ ROUND 177 · Q6 — TIGHTER, AND STILL LABELLED. Collapsed is everyone's
-   default now, so the section names stay visible; only the padding and gap
-   shrink (60px rows in v176). */
+
 html:not([data-rail="expanded"]) .rail .railsec{flex-direction:column;justify-content:center;gap:3px;padding:6px 2px;font-size:9.5px;font-weight:700;}
 .rail .railsec svg{width:19px;height:19px;}
-/* ⚠️ A DARK HOVER. The old one was a light --plum-soft pill on a dark column. */
+
 .rail .railsec:hover{color:#fff;background:rgba(255,255,255,.08);}
 .rail .railsec.active{color:#fff;background:rgba(255,255,255,.16);}
 .rail .railsec.active:hover{background:rgba(255,255,255,.2);}
 
-/* ── ITEM 15: admin ACTIONS sit below the sections (Import / Access) ──────
-   A hairline and a caption rather than a third section heading: these are
-   things you DO, not places the records live.
-   `height:auto` above is a fix, not a tweak — `.rail button{height:42px}`
-   (one class + one element) was beating `.rail .railsec`, which sets width but
-   never set a height, so every rail icon was laid out at 19x1px and had been
-   invisible since the sections landed. Adding Import and Access here would
-   have shipped two more invisible icons. */
 .rail .raildiv{width:26px;height:1px;background:rgba(255,255,255,.18);margin:9px 0 4px;flex:none;align-self:center;}
 .rail .raillabel{font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.72);flex:none;align-self:center;}
 
-/* ═══ ROUND 176 — THE CLIENTS HEADING AND ITS ENTRIES ═══════════════════════
-   🔴 THE HEADING IS AN <h2>, NOT A BUTTON. It is styled like .raillabel and
-   has no cursor, no hover and no active state, because it does nothing. The
-   entries are `.railpipe`, deliberately NOT `.railsec`: the proofs address the
-   sections through `.railsec`, and an entry is not a section. */
 .rail .railclients{display:flex;flex-direction:column;gap:2px;flex:none;}
 .rail .railhead{margin:2px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;
   text-transform:uppercase;color:rgba(255,255,255,.72);cursor:default;}
@@ -1178,44 +904,38 @@ html:not([data-rail="expanded"]) .rail .railsec{flex-direction:column;justify-co
   text-align:left;transition:background .12s,color .12s;}
 .rail .railpipe:hover{color:#fff;background:rgba(255,255,255,.08);}
 .rail .railpipe.active{color:#fff;background:rgba(255,255,255,.16);}
-/* F3 — a long name is cut with an ellipsis; the full name is in its title. */
+
 .rail .railpipename{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .rail .railpipecount{flex:none;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;}
 .rail .railpipeini{display:none;}
-/* D4 — "didn't load", in gold so it reads as a warning and not as a zero. */
+
 .rail .railpipe.failed .railpipecount{color:var(--gold);}
 .rail .railpipenote{margin:0 8px 4px 12px;font-size:10.5px;line-height:1.4;color:rgba(255,255,255,.72);}
-/* C4 — the entries' own height, so the list does not jump when they arrive. */
+
 .rail .railskel{height:32px;flex:none;margin:0 4px;border-radius:9px;background:rgba(255,255,255,.06);}
 .rail .railcollapse{width:100%;height:24px;flex:none;margin-top:6px;font-size:13px;font-weight:700;
   color:rgba(255,255,255,.72);border-radius:7px;}
-/* ⚠️ ROUND 177 · I — HIDDEN on a narrow screen, where the sidebar is always
-   collapsed. v176 disabled it instead, and a disabled button shows no title,
-   so its reason was never seen. */
+
 @media (max-width:640px){.rail .railcollapse{display:none;}}
-/* Recruiting's sub-labels — Caregivers (DSPs) and Office staff. */
+
 .rail .railsub{margin:6px 12px 2px;font-size:9.5px;font-weight:700;letter-spacing:.06em;
   text-transform:uppercase;color:rgba(255,255,255,.72);}
-/* Only drawn collapsed, where the sub-labels leave the eye (Q5: dividers only). */
+
 .rail .railsubdiv{display:none;}
-/* 🔴 D9 + M1 — "Open Recruiting", the way in for somebody with no entry. */
+
 .rail .railopen{display:flex;align-items:center;gap:8px;width:100%;height:32px;flex:none;
   padding:0 8px 0 12px;border-radius:9px;color:#fff;background:rgba(255,255,255,.08);
   font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;}
 .rail .railopen svg{width:16px;height:16px;flex:none;}
 .rail .railopen:hover,.rail .railopen.active{background:rgba(255,255,255,.16);}
-/* Collapsed: the heading stays for screen readers but leaves the eye; each
-   entry shows its initials, and the full name stays in title and aria-label. */
+
 html:not([data-rail="expanded"]) .rail .railhead,
 html:not([data-rail="expanded"]) .rail .railpipenote{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;margin:0;}
 html:not([data-rail="expanded"]) .rail .railpipe{justify-content:center;padding:0 2px;height:34px;}
 html:not([data-rail="expanded"]) .rail .railpipename,
 html:not([data-rail="expanded"]) .rail .railpipecount{display:none;}
 html:not([data-rail="expanded"]) .rail .railpipeini{display:block;font-size:10px;font-weight:800;letter-spacing:.02em;white-space:nowrap;}
-/* 🔴 ROUND 177 · ADDITION 1 — COLLAPSED MUST NOT HIDE WHAT MATTERS. Collapsed
-   is the default, so a pipeline that failed to load is marked here too — gold
-   initials and a dot — not left reading like any other. Its title says
-   "didn't load"; the count of every entry is in its title. */
+
 html:not([data-rail="expanded"]) .rail .railpipe.failed .railpipeini{color:var(--gold);}
 html:not([data-rail="expanded"]) .rail .railpipe.failed::after{content:"";position:absolute;top:5px;right:5px;
   width:6px;height:6px;border-radius:50%;background:var(--gold);}
@@ -1224,103 +944,52 @@ html:not([data-rail="expanded"]) .rail .railsubdiv{display:block;}
 html:not([data-rail="expanded"]) .rail .railopen{justify-content:center;padding:0;height:34px;}
 html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 
-/* ITEM B — the "organisation, not security" line beside the upload control.
-   Deliberately not an alert box: it is a standing fact about GoHighLevel media
-   URLs, not an error, and a red banner that never goes away stops being read. */
 .reswarn{font-size:11px;line-height:1.35;color:var(--ink-2);background:var(--gold-soft);border:1px solid rgba(0,0,0,.06);border-radius:8px;padding:6px 10px;max-width:340px;}
 .reswarn b{color:var(--gold-ink);font-weight:700;}
-/* ITEM #10 — a reassign hand-off reads differently from a plain transfer, so it
-   is tinted differently. Colour is the SECOND signal; the word is the first. */
+
 .fromtag.reassigned{background:var(--gold-soft);color:var(--gold-ink);border-color:#f0dcbb;}
-/* ITEM #10 — the route line on a Master card. Sits under the stage, above the
-   pipeline badge: it explains how the card arrived, so it reads before "where
-   it is now". */
-/* WRAPS, never truncates. The Sent out column is narrow and an ellipsis ate the
-   source ("…from OLTL Enrollmen") — which is the one fact this line exists to
-   carry. Two short lines beat one clipped one. */
+
 .mcard .mfrom{font-size:10px;font-weight:600;line-height:1.35;color:var(--ink-2);background:var(--canvas);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-top:5px;display:block;}
 .mcard .mfrom.reassigned{background:var(--gold-soft);border-color:#f0dcbb;color:var(--gold-ink);}
-/* Caregiver stage chips wrap to a second row instead of scrolling sideways:
-   ODP DSP Applicant has ten stages and a hidden chip is a filter nobody finds.
-   `overflow-x:visible` because wrapping and horizontal scrolling contradict. */
+
 .stages.wrap{flex-wrap:wrap;overflow-x:visible;row-gap:7px;}
-/* ITEM 3 — the contact-field scope line. States that these values belong to the
-   PERSON and follow them onto every case, because the edit genuinely is not
-   case-scoped and the panel must not imply otherwise. */
+
 .contactscope{font-size:11.5px;line-height:1.45;color:var(--gold-ink);background:var(--gold-soft);border:1px solid #f3e2c4;border-radius:8px;padding:9px 12px;margin:16px 22px 2px;}
 .contactscope b{font-weight:700;}
-/* ITEM 2 — collapsible panel sections. Styled to sit exactly where a plain
-   .sechead did, so an open section looks identical to before — the only new
-   thing on screen is the arrow and the field count. */
+
 .sechead.sectoggle{display:flex;align-items:center;gap:8px;width:calc(100% - 44px);margin-left:22px;margin-right:22px;background:none;border:0;cursor:pointer;font:inherit;text-align:left;}
 .sechead.sectoggle .secarrow{font-size:10px;color:var(--ink-3);width:10px;flex:none;}
 .sechead.sectoggle .seccount{margin-left:auto;font-size:10px;font-weight:600;color:var(--ink-3);background:var(--canvas);border:1px solid var(--line);border-radius:20px;padding:1px 7px;}
 .sechead.sectoggle:hover{color:var(--plum);}
-/* ITEM 1 — the contact bar. Top of the panel, never collapsible. */
+
 .contactbar{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:10px;padding:10px 13px;margin-bottom:10px;}
 .contactbar .cbname{font-size:14px;font-weight:700;color:var(--ink);}
 .contactbar .cbrow{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:5px;}
-/* ROUND 134 — `.cbitem` is gone with the two anchors it styled; the phone and
-   the email are `InlineName` controls now and wear `.inmline` / `.inmanchor`.
-   Deleting it rather than leaving it is the point: a rule with no markup is the
-   mirror image of the markup-with-no-rule that sweep rule 11 exists for, and
-   the next person to read this file would take it for something in use. */
+
 .contactbar .inmline{margin-top:0;}
 .contactbar .inmbtn{font-size:12.5px;font-weight:600;color:var(--plum);}
-/* A pipeline that failed to load — louder than a hint, quieter than an error
-   page, because the rest of the screen is still valid data. */
+
 .loadwarn{margin:0 22px 12px;padding:9px 13px;border:1px solid #f0c9c9;background:#fdf2f2;border-radius:9px;font-size:12px;color:#7a2727;}
 .loadwarn b{font-weight:700;}
 .loadwarn .linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#7a2727;text-decoration:underline;cursor:pointer;}
-/* Message — same weight as "Move this case": both leave the dashboard for GHL,
-   neither is the primary action. An <a>, not a button, so it opens in a tab. */
+
 .msgbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--plum-line);background:var(--bg);color:var(--plum);border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s,border-color .12s;}
 .msgbtn:hover{background:var(--plum-soft);border-color:var(--plum);}
-/* Source mark — the channel's OWN brand mark, in its own colours, inline AFTER
-   the record name. Full colour on purpose: a logo in the wrong colour reads as
-   a mistake, and instant recognition is the entire point of showing one. */
-/* 20px, and it sits AFTER the name — so the margin is on the LEFT. `color` is
-   only ever used by the Website globe; the three brand marks carry their own
-   fills and must not inherit anything. */
-/* The negative block margins keep a 20px mark from growing the 12.5px line it
-   sits on — without them a card that HAS a source stood 2px taller than one
-   that doesn't, and a kanban column lost its rhythm for no reason. */
+
 .srcmark{display:inline-flex;align-items:center;vertical-align:-5px;margin:-4px 0 -4px 7px;color:var(--ink-3);flex:none;}
 .srcmark svg{width:20px;height:20px;display:block;}
-/* The stat tile's line is 10.5px — a 20px logo there would dwarf its own
-   count, so the tile (and only the tile) asks for the small one. */
+
 .srcmark.sm{vertical-align:-3px;margin-left:5px;}
 .srcmark.sm svg{width:14px;height:14px;}
-/* "By source" tile entries are the filter control. They have to keep reading as
-   the count line they already were — same size, same colour — so the tile does
-   not suddenly look like a button bar; the hover/active states are what say
-   they are clickable. */
+
 .srcpick{display:inline-flex;align-items:center;gap:4px;border:1px solid transparent;background:none;color:inherit;font:inherit;padding:1px 5px;margin:-1px 0;border-radius:6px;cursor:pointer;line-height:1.5;}
 .srcpick:hover{border-color:var(--plum-line);background:var(--plum-soft);}
 .srcpick.on{border-color:var(--plum);background:var(--plum-soft);color:var(--plum);font-weight:600;}
 .srcpick .srcmark{margin-left:5px;color:inherit;}
 .srcclr{margin-left:6px;border:0;background:none;padding:0;font:inherit;font-size:9.5px;letter-spacing:.05em;color:var(--plum);text-decoration:underline;cursor:pointer;text-transform:uppercase;}
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   REFERRAL PARTNERS — Sources · Touch queue · Events · Overview.
-
-   ⚠️ EVERY CLASS IS `rf`-PREFIXED. Round 88 shipped an `.iskip` that collided
-   with a pre-existing pill, and round 98 found a duplicate `.addsec` that had
-   sat in two components since round 33. A whole section's worth of generic
-   names (.kpi, .box, .bars, .drawer, .badge) would have been the third time,
-   so none of them are used: rfkpi, rfbox, rfbars, rfdrawer, rfbadge.
-   ═══════════════════════════════════════════════════════════════════════════ */
-/* 🔴 FULL WIDTH — round 115c, item 2. `max-width:1180px` made the Referrals
-   section a reading column on a screen that is not reading material: the
-   sources table has EIGHT columns (organisation, category, tier, owner, last
-   touch, refs, clients, revenue) and crushed them into half the window while
-   the other half sat empty. The client board uses the whole width for fewer
-   columns. Nothing here is prose. */
 .rfwrap{padding:18px 22px 40px}
 
-/* The heading IS the division control. Styled as heading text, not as a
-   control: no border, no background, no select chrome — a chevron and a hover
-   underline are the only things that say it can be pressed. */
 .rfhead{position:relative;margin:0 0 16px}
 .rfdiv{display:inline-flex;align-items:center;gap:9px;background:none;border:0;padding:0;
   cursor:pointer;color:var(--ink);font:inherit}
@@ -1328,10 +997,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfdiv:hover .rfdivname{text-decoration:underline;text-decoration-color:var(--plum-line);
   text-underline-offset:5px;text-decoration-thickness:2px}
 .rfdiv:focus-visible{outline:2px solid var(--plum);outline-offset:4px;border-radius:4px}
-/* TASK 2 · §3 — the heading when there is nothing to switch between. It keeps
-   .rfdiv's typography and gives up every affordance that promises a control:
-   a pointer cursor and a hover underline on a plain heading are the same lie
-   as an "All divisions" label over a single division. */
+
 .rfdivstatic{cursor:default}
 .rfdivstatic:hover .rfdivname{text-decoration:none}
 .rfcar{width:11px;height:7px;color:var(--ink-3);flex:none;transition:transform .14s}
@@ -1364,25 +1030,19 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfkpi .v.warn{color:var(--blk)}
 .rfkpi .d{font-size:11.5px;color:var(--ink-2);line-height:1.45}
 
-/* What the numbers do not include. Gold, not red: this is a caveat about
-   coverage, not an error — the round-97 "142 stalled · 8 no date" rule with
-   room to say all of it. */
 .rfcaveat{background:var(--gold-soft);border:1px solid #f0dbb4;border-radius:var(--radius);
   padding:12px 15px;margin-bottom:15px}
 .rfcaveat b{display:block;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
   color:var(--gold-ink);margin-bottom:6px}
 .rfcaveat ul{margin:0;padding-left:18px}
 .rfcaveat li{font-size:12.5px;color:#7a5405;line-height:1.6}
-/* 🔴 ROUND 123 · ITEM 20 — THE SECOND SCOPE'S HEADING. `.rfcaveat b` already
-   carries the block/uppercase/colour; this adds only the separation from the
-   list above it, so the two headings cannot drift apart. */
+
 .rfcaveat .rfcavsub{margin-top:11px}
 .rfdivnote{padding:9px 12px;font-size:11.5px;line-height:1.55;color:#7a5405;
   background:var(--gold-soft);border-top:1px solid #f0dbb4;list-style:none}
 .rfcavacts{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-top:10px}
 .rfcavnote{font-size:12px;color:#7a5405}
 
-/* Something this screen genuinely cannot compute, and why. */
 .rfgap{background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:var(--radius);
   padding:13px 16px;margin-bottom:15px}
 .rfgap b{display:block;font-size:13.5px;color:var(--plum-deep);margin-bottom:5px}
@@ -1436,10 +1096,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 
 .rfev{padding:15px;border-bottom:1px solid var(--line-soft)}
 .rfev:last-child{border-bottom:0}
-/* 🔴 ROUND 124 · ITEM 4 — the event's delete, under its date. `.rfev .dt` is
-   right-aligned in a flex header, so the button needs its own line rather than
-   sitting on the end of "no date · $0 cost". A class used and never defined is
-   the round-120 fault; this is the definition. */
+
 .rfevdel{margin-top:7px;display:flex;justify-content:flex-end}
 .rfev .hd{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
 .rfev .nm{font-weight:700;font-size:14.5px;color:var(--ink)}
@@ -1477,8 +1134,6 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfqr{text-align:right;flex:none}
 .rfqr .d{font-weight:800;color:var(--blk);font-size:15px}
 
-/* The drawer. Its own name, because .drawer does not exist in this stylesheet
-   and inventing a generic one is how the collisions above happened. */
 .rfdrawer{position:fixed;top:0;right:0;bottom:0;width:min(470px,94vw);z-index:60;
   background:var(--bg);border-left:1px solid var(--line);box-shadow:var(--shadow);
   display:flex;flex-direction:column}
@@ -1488,16 +1143,9 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
   font-size:21px;line-height:1;color:var(--ink-3)}
 .rfdmeta{font-size:12.5px;color:var(--ink-2);margin-top:3px;display:flex;align-items:center;
   gap:8px;flex-wrap:wrap}
-/* ⚠️ min-height:0 IS NOT DECORATION. `.rfdrawer` is a column flex container and
-   this is its scrolling child; without an explicit 0 minimum a flex item will
-   not shrink below its content in every engine, and the last attributed row
-   ends up below the fold with no way to reach it. Same family as the `.rfhits`
-   collapse in item 6 — flex minimums decide whether content is reachable.
-   The bottom padding is generous for the same reason: the final row now carries
-   an edit control, and a row you can see but not click is not reachable. */
+
 .rfdbd{flex:1 1 0%;min-height:0;overflow-y:auto;padding:4px 20px 40px}
 
-/* ── ITEMS 2-4 · a named, correctable attributed case ────────────────────── */
 .rfopps{display:flex;flex-direction:column;gap:6px}
 .rfopp{border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:var(--bg)}
 .rfoppmain{display:flex;align-items:center;gap:8px;min-width:0}
@@ -1531,9 +1179,6 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rftli .t{font-size:12px;font-weight:600;color:var(--ink)}
 .rftli .n{font-size:12.5px;color:var(--ink-2);line-height:1.55;white-space:pre-wrap;margin-top:2px}
 
-/* ITEM 2 — the label banner. The question is "what does GoHighLevel call this",
-   so the evidence (every field name) is laid out to be read, and the ask sits
-   under it rather than beside a truncated list. */
 .pfunknownlbl{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#9a7340;margin-bottom:4px;}
 .pfunknownfields{margin:0 0 7px;padding-left:17px;}
 .pfunknownfields li{font-size:12px;line-height:1.55;color:#5c3d1c;}
@@ -1542,16 +1187,10 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .pfunknownask > label{display:block;font-size:11.5px;font-weight:600;color:#5c3d1c;margin-bottom:5px;}
 .pfunknownacts{display:flex;gap:7px;flex-wrap:wrap;}
 .pfunknownacts input{flex:1 1 170px;min-width:0;}
-/* Withheld sections — a quiet line, not a second banner competing with the one
-   that actually needs an answer. */
+
 .pfinert{margin:-6px 0 14px;font-size:11.5px;line-height:1.6;color:var(--ink-3);}
 .pfinertwhich{color:var(--ink-2);}
 
-/* ── Referrals, round 103 — the drawer's boundary note, the event host button,
-   the per-attendee outcome control, and the referral value input. ── */
-
-/* The PHI boundary. Stated, not styled as a warning: it is how the system is
-   designed, not a problem with it. */
 .rflive{background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:8px;
   padding:10px 12px;font-size:12px;line-height:1.6;color:var(--ink-2)}
 .rflive b{color:var(--plum-deep)}
@@ -1559,7 +1198,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 
 .rfevhost{font-size:12px;color:var(--ink-2);margin-top:3px}
 .rfevnohost{font-size:12px;color:var(--ink-3);margin-top:3px}
-/* A partner's name inside an event card is a WAY IN, so it looks like one. */
+
 .rfhostbtn{background:none;border:0;padding:0;font:inherit;font-size:12px;font-weight:600;
   color:var(--plum);cursor:pointer;text-decoration:underline;
   text-decoration-color:var(--plum-line);text-underline-offset:3px}
@@ -1572,10 +1211,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfoc{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
   padding:8px 0;border-bottom:1px solid var(--line-soft)}
 .rfoc:last-child{border-bottom:0}
-/* 🔴 ROUND 124 — remove one person from an event. `.rfoc` is a flex row whose
-   last child was the outcome select; this sits beside it rather than wrapping
-   onto its own line, which is what an unstyled <button> would have done in a
-   row with `align-items:flex-start`. */
+
 .rfocx{flex:none;width:26px;height:26px;border:1px solid var(--line);border-radius:7px;
   background:var(--bg);color:var(--ink-3);font-size:15px;line-height:1;cursor:pointer;
   display:flex;align-items:center;justify-content:center}
@@ -1584,16 +1220,12 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfoc .n{flex:1;min-width:0}
 .rfocname{font-size:12.5px;font-weight:600;color:var(--ink)}
 .rfoc .pf{font-size:11.5px;color:var(--ink-3);margin-top:2px;line-height:1.5}
-/* ⚠️ ON THE ROW, NAMING THE PERSON — a banner above thirty rows says something
-   failed and not which one. */
+
 .rfocerr{font-size:11.5px;color:var(--blk);margin-top:4px;line-height:1.5}
 .rfoc select{flex:0 0 auto;max-width:190px;padding:5px 8px;border:1px solid var(--line);
   border-radius:7px;background:var(--bg);font:inherit;font-size:12px;color:var(--ink)}
 .rfoc select:disabled{opacity:.55;cursor:progress}
 
-/* 🔴 A REP INPUT WITH WEIGHT, NOT A THIN BOX AMONG FOUR OTHERS. The brief is
-   explicit that the estimated monthly value is typed by the rep and must not
-   read as a system number. */
 .rfvalue{margin:13px 0;padding:12px 13px;background:var(--canvas);border-radius:9px}
 .rfvalue > label{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;
   text-transform:uppercase;color:var(--ink-2);margin-bottom:7px}
@@ -1605,19 +1237,13 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfvaluemo{font-size:14px;font-weight:700;color:var(--ink-3)}
 .rfvalue .rfdhint{margin-top:7px}
 
-/* Referrals — the Touch queue's scope control and the drawer's disclosure. */
 .rfscope{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:13px}
 .rfscopenote{font-size:11.5px;color:var(--ink-3);line-height:1.5}
-/* 🔴 The one place this screen withholds anything, so it is stated plainly —
-   quiet, not alarming: nothing is wrong, the totals above are still whole. */
+
 .rfwithheld{margin-top:10px;padding:8px 11px;background:var(--canvas);border-radius:7px;
   font-size:11.5px;line-height:1.6;color:var(--ink-2)}
 .rfwithheld b{color:var(--ink)}
 
-/* ── Round 107 — Referred by, the add-partner modes, the event dialog ── */
-
-/* "Referred by" on a client record. First thing in the panel body, because
-   attribution set after the fact is the common case and had no home at all. */
 .refby{border:1px solid var(--plum-line);background:var(--plum-soft);border-radius:9px;
   padding:9px 12px;margin-bottom:12px;position:relative}
 .refbyhd{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -1645,30 +1271,17 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .refbyclear:hover{color:var(--blk)}
 .refbyerr{font-size:11.5px;color:var(--blk);margin-top:6px}
 
-/* "+ Add partner" — new organisation vs an existing contact. */
 .rfmode{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:11px;
   border-bottom:1px solid var(--line-soft)}
 .rfmode label{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);
   cursor:pointer}
-/* 🔴 flex:0 0 auto IS LOAD-BEARING — round 112, item 6.
-   .movebody is `display:flex;flex-direction:column` inside `.movebox{max-height:90vh}`.
-   A flex ITEM that scrolls has its `min-height:auto` computed to 0, so under any
-   space pressure this collapsed to HEIGHT ZERO — the three matching contacts were
-   in the DOM, correct, and 0px tall. Same class as the round-100 `.panel` bug:
-   rendered perfectly, impossible to see. Measured, not guessed:
-   scripts/partner-picker-proof.mjs reported {"w":484,"h":0} with hitCount 3. */
+
 .rfdbad{color:var(--bad,#7a2727)}
-/* 🔴 ROUND 125 — A SCROLLING BOX CANNOT PAINT ABOVE ITS OWN CONTENT BOX, and
-   `.rfmodal .rfdhint` carries margin-top:-8px. Measured: the search-failure
-   message rendered at y=532 inside a container starting at y=540, so the top
-   of its first line was simply cut off. The states moved OUT of here (see
-   ReferralsSection); this belt-and-braces rule means a hint that ever lands
-   back inside cannot be clipped by the same -8px again. */
+
 .rfhits{flex:0 0 auto;display:flex;flex-direction:column;gap:2px;max-height:210px;
   overflow-y:auto;margin-bottom:10px}
 .rfhits > *{margin-top:0}
-/* The failure message is the one that stops somebody creating a duplicate, so
-   it gets the room it needs and never scrolls. */
+
 .rfmodal .rfsearchfail{margin:2px 0 14px}
 .rfhit{display:flex;flex-direction:column;gap:1px;text-align:left;background:none;
   border:1px solid var(--line);border-radius:7px;padding:7px 10px;cursor:pointer;font:inherit}
@@ -1679,55 +1292,17 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
   font-size:12px;line-height:1.6;color:var(--ink-2)}
 .rfpicked b{color:var(--ink)}
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   🔴 .rfpanel — AND WHY IT IS NOT CALLED .panel.
-
-   Every list in the Referrals section was wrapped in `<div class="panel">`,
-   copied from the prototype's markup, where `.panel` is an ordinary card.
-   In THIS stylesheet `.panel` is the record slide-over:
-
-       .panel { position:fixed; top:0; right:0; height:100%;
-                transform:translateX(100%); z-index:5; }
-       .panel.on { transform:none; }
-
-   So from round 100 to round 109 the Sources table, the Touch queue, the event
-   cards, the attendee list and the drawer's inner lists were all
-   position-fixed and translated 100% off the right edge of the window. They
-   rendered perfectly and were parked off-screen. Every count was right because
-   counts are computed, not drawn — which is exactly why nine rounds of
-   arithmetic proofs never caught it.
-
-   ⚠️ THE THIRD COLLISION: .iskip (round 88), .addsec (round 98), .panel. The
-   round-100 comment above boasts that every class here is rf-prefixed to avoid
-   a third one — while this very name sat unprefixed in the markup. A list of
-   names I remembered to avoid is not a check; scripts/class-collision-proof.mjs
-   now is one.
-   ═══════════════════════════════════════════════════════════════════════════ */
 .rfpanel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
   overflow:hidden}
 .rfpanel + .rffoot{margin-top:11px}
 
-/* ═══════════════════════════════════════════════════════════════════════
-   ROUND 116 — THE PIPELINE SCREEN'S MISSING CONTROLS
-   ═══════════════════════════════════════════════════════════════════════ */
-
-/* ITEM Q — per-field exclusions inside a ticked folder.
-
-   🔴 `flex:0 0 auto` IS LOAD-BEARING, and round 112's sweep rule 5 is why.
-   `.irow input{width:100%}` once stretched every control to its row and a
-   tickbox with it; the mirror mistake here is a flex child with no basis,
-   which lets the box shrink to nothing when a field name is long. A tickbox
-   has ONE correct size. */
 .pffbox{flex:0 0 auto;width:13px;height:13px;margin:0;accent-color:var(--accent);cursor:pointer;}
 .pffbox:disabled{cursor:not-allowed;opacity:.45;}
-/* ⚠️ STRUCK THROUGH, NOT JUST FADED. Opacity alone reads as "loading", and a
-   hidden field has to read as a DECISION somebody made. */
+
 .pffieldlist li.pffoff .pffname{text-decoration:line-through;color:var(--ink-3);}
 .pffieldlist li.pffoff .pfftype{opacity:.55;}
 .pffnote{margin:7px 0 0;font-size:10.5px;line-height:1.5;}
 
-/* ITEM L — the delete control and its refusal, in the same place so the
-   refusal is read where the button would have been. */
 .pfdelete{flex:1 1 100%;margin-top:6px;display:flex;align-items:center;gap:9px;}
 .pfdelete .ihint{margin:0;font-size:11px;}
 .pfdangerbtn{padding:4px 11px;border:1px solid #e5c3bd;background:var(--bg);color:#8c2f22;
@@ -1735,11 +1310,8 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .pfdangerbtn:hover:not(:disabled){background:#fdeeec;border-color:#c0392b;}
 .pfdangerbtn:disabled{opacity:.5;cursor:not-allowed;}
 
-/* ITEM L — the record count on the face of a row. `.pfcount` already takes
-   margin-left:auto, so this sits after it rather than fighting it. */
 .pfreccount{flex:0 0 auto;font-size:11px;color:var(--ink-3);white-space:nowrap;}
 
-/* ITEM O — contact sections, read-only, both names. */
 .pfcontacts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
 .pfcgroup{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg);}
 .pfchead{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
@@ -1748,101 +1320,39 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
   border-bottom:1px solid var(--line-soft);font-size:12px;}
 .pfcrow:last-child{border-bottom:0;}
 .pfcname{flex:1 1 auto;min-width:0;color:var(--ink);overflow-wrap:anywhere;}
-/* 🔴 THE GOHIGHLEVEL NAME IS THE SEARCHABLE ONE, so it is not styled as an
-   aside. An admin hunting for "Form | Form 6" needs to be able to find it on
-   this row at a glance. */
+
 .pfcghl{flex:0 0 auto;font-size:10.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   color:#7a5227;background:#fdf8f2;border:1px solid #f0dcc9;border-radius:5px;padding:0 5px;}
 .pfcsame{flex:0 0 auto;font-size:10.5px;color:var(--ink-3);}
 .pfcfields{flex:0 0 auto;font-size:10.5px;font-weight:600;color:var(--ink-3);}
 .pfcid{flex:1 1 100%;font-size:10px;color:var(--ink-3);overflow-wrap:anywhere;}
 
-/* 🔴 THE ROWS WERE NEVER ACTUALLY CLOSED — round 116, measured not assumed.
-
-   `<details open={false}>` renders collapsed because the UA hides its
-   non-summary children. `.pfseclist{display:grid}` (line 408) is an AUTHOR
-   rule on one of those children and it WINS, so the grid drew whether or not
-   the row was open: `pipeline rows: 4 · OPEN at load: 0 · chips VISIBLE: 8`.
-
-   ⚠️ SO THE CHEVRON DID NOTHING AND THE SCREEN WAS ONE LONG WALL — ten
-   pipelines, each with its own fourteen-chip grid, all on screen at once,
-   which is exactly what the brief described and what reading the JSX denied.
-   Scoped to `.pfrow` on purpose: `.sysinfo` and `.unfiled` collapse correctly
-   because nothing overrides display on their children, and a blanket rule
-   would be a fix aimed at a bug they do not have. */
 .pfrow:not([open]) > :not(summary){display:none;}
 
-/* 🔴 AND THE SWEEP FOUND TWO MORE OF THE SAME, IN THE RECORD PANEL.
-   `.sysinfo` ("Set automatically") and `.unfiled` ("not yet assigned") each
-   hold a direct `<div className="grid">`, and `.grid{display:grid}` beat the
-   collapse exactly as `.pfseclist` did on the Pipelines screen. Both carry a
-   chevron that rotates on [open], so both were built to collapse and neither
-   did — the rotation was the only thing the click changed. */
 .sysinfo:not([open]) > :not(summary){display:none;}
 .unfiled:not([open]) > :not(summary){display:none;}
 
-/* ═══════════════════════════════════════════════════════════════════════
-   ROUND 117 · ITEM 1 — ONE SHAPE FOR ALL FOUR REFERRAL MODALS
-
-   115c gave "Log a referral" 760px and `.irow2`; the other three never got
-   either, so four dialogs doing the same kind of work looked like four
-   different applications. These are the shared parts: a labelled GROUP, and
-   one rhythm for label / input / hint.
-   ═══════════════════════════════════════════════════════════════════════ */
-
-/* 🔴 GROUPING IS THE FAULT THE OTHERS SHARE. A dialog that asks eleven
-   questions in one undifferentiated column reads as a wall, and the eye has
-   nothing to step down. A heading every three or four fields is what lets
-   somebody scan for the part they are changing. */
-/* ⚠️ THE SEPARATOR IS ON THE HEADING, NOT ON A WRAPPER. Put on `.rfgroup` it
-   would force every dialog to re-nest its JSX to gain a heading — and "Log a
-   referral" is a mode-switching form whose blocks are conditional, so wrapping
-   it was the one change with a real chance of breaking it. A heading that
-   separates itself can be dropped in beside the fields it names. */
 .rfgroup{margin:0;}
 .rfglab{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
   color:var(--ink-3);margin:14px 0 2px;padding-top:12px;
   border-top:1px solid var(--line-soft);}
-/* The first heading in a dialog has nothing above it to be separated from. */
+
 .movebody > .rfglab:first-child,
 .movebody > .rfgroup:first-child .rfglab,
 .movebody > .rfgroup:first-child > .rfglab{margin-top:0;padding-top:0;border-top:0;}
-/* ⚠️ THE GROUP'S OWN HINT sits under the heading, not under the last input —
-   it explains what is about to be asked, which is only useful before. */
+
 .rfglab + .rfdhint{margin-top:2px;margin-bottom:4px;}
 
-/* One rhythm. `.movebody .irow label{margin-top:6px}` already sets the step
-   between a control and the next label; `.irow2` matched it (line 873) and
-   these make the hint match too, so the vertical spacing is the same whether a
-   field is paired or full width. */
 .movebody .rfdhint{margin-top:6px;}
 .movebody .irow2 + .rfdhint,.movebody .irow + .rfdhint{margin-top:6px;}
 
-/* ⚠️ A SIDE NOTE IN A PAIR CELL. "Log a touch" has ONE short field and no
-   partner for it, so rather than invent a field to pair it with, the second
-   cell carries what the first one means. It is not a control, so it does not
-   get a control's top margin. */
 .irow2 .rfpaircell{font-size:11.5px;color:var(--ink-3);line-height:1.5;
   align-self:end;padding-bottom:9px;}
 
-/* 🔴 ROUND 117 · ITEM 1 — THE ONE MISALIGNMENT IN THE MODAL 115c "FIXED".
-   `.rfvalue` is a padded card (margin 13px, padding 12px) and it sits in an
-   `.irow2` beside a plain phone input, so the two inputs on that line were
-   ~25px apart vertically. Measured: 6 controls in 5 rows, only ONE paired —
-   the pair was in the markup and not on the screen.
-
-   ⚠️ THE EMPHASIS IS KEPT, THE BOX IS NOT. 115c gave this field weight because
-   the rep TYPES it and it must not read as a system number — and what actually
-   says that is the `$` and the `/mo` affixes and the hint, all still here. The
-   grey card was decoration, and it was the half that broke the rhythm. */
 .irow2 > .rfvalue{margin:0;padding:0;background:transparent;}
 .irow2 > .rfvalue > label{margin-top:6px;margin-bottom:0;}
 .irow2 > .rfvalue .rfvaluebox input{flex:1 1 auto;}
 
-/* ROUND 118 · ITEM 3 — the attribution move, with its per-step log.
-   ⚠️ THE STEPS ARE THE POINT, not the button. Round 93's orphan was invisible
-   because a failure said only "it failed"; a list that says which step got how
-   far is what makes a partial run recoverable. */
 .pfattrib{margin-top:10px;}
 .pfsteps{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;}
 .pfsteps li{display:flex;align-items:baseline;gap:10px;font-size:12px;padding:5px 0;
@@ -1854,105 +1364,32 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .pfsteps li.bad .pfstepwhat{color:#8c2f22;}
 .pfstepdetail{flex:1 1 auto;min-width:0;color:var(--ink-2);overflow-wrap:anywhere;}
 
-/* ROUND 118 · ITEM 4 — "created, but nobody is assigned yet".
-   ⚠️ AMBER, NOT RED. Nothing failed: the record exists and the workflow simply
-   did not name an owner. An error card would send somebody looking for a fault
-   that is not there — but silence is what leaves 185 applicants ownerless, so
-   it is not quiet either. */
 .savemsg.warn{color:var(--gold-ink);background:var(--gold-soft);
   border:1px solid #f3e2c4;border-radius:8px;padding:7px 10px;font-size:11px;
   line-height:1.5;font-weight:500;}
 
-/* ROUND 119 · ITEM 4 — the row says it is working, where the work is.
-   ⚠️ A SPINNER IS NOT THE IMPORTANT HALF — the disabled controls are. This is
-   here so "disabled" reads as "busy" rather than as "broken". */
 .pfrowbusy{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-3);}
 .pfspin{width:11px;height:11px;flex:0 0 auto;border-radius:50%;
   border:2px solid var(--line);border-top-color:var(--plum);
   animation:pfspin .7s linear infinite;}
 @keyframes pfspin{to{transform:rotate(360deg)}}
 
-/* ═══════════════════════════════════════════════════════════════════════
-   ROUND 120 · ITEM 6 — .savemsg.ok WAS NEVER DEFINED.
-
-   Used across the app since it was written; every success message has been
-   rendering with the base `.savemsg` rule — 10.5px grey — which is the
-   dashboard's voice for a HINT. 119 put tick outcomes in rows, so the thing
-   that says "that worked" has to read as a result, not as a footnote.
-
-   🔴 THE RULE ONLY. `.savemsg` itself is untouched, so nothing that does not
-   carry `.ok` moves.
-   ═══════════════════════════════════════════════════════════════════════ */
 .savemsg.ok{color:var(--ok-ink,#2d7a4f);background:var(--ok-soft,#eef7f1);
   border:1px solid var(--ok-line,#cfe6d8);border-radius:8px;padding:7px 10px;
   font-size:11px;line-height:1.5;font-weight:500;}
 
-/* ═══════════════════════════════════════════════════════════════════════
-   ROUND 120 · ITEM 2 — THE FOUR REFERRAL MODALS, ON THE PANEL'S SCALE.
-
-   🔴 .moveacts WAS NEVER DEFINED EITHER. Six dialogs render a footer under
-   that class and it has no padding, no border, no background — so the
-   buttons sat hard against the body's own padding with nothing separating
-   them from the last field. That is most of "the footer does not share an
-   alignment", and no geometry assertion about INPUTS could ever have caught
-   it, because it is not about the inputs.
-
-   ⚠️ IT IS DEFINED FOR EVERY DIALOG, not just the four. A footer with no
-   styling is a defect wherever it renders, and leaving five of six broken to
-   keep a diff small would be the wrong call. It adds spacing that was absent;
-   it changes no control.
-   ═══════════════════════════════════════════════════════════════════════ */
 .moveacts{flex:none;display:flex;align-items:center;justify-content:flex-end;
   gap:10px;padding:14px 18px;border-top:1px solid var(--line);
   background:var(--canvas);}
 
-/* 🔴 SCOPED TO EXACTLY THE FOUR, BY THEIR OWN CLASS.
-   `.addbox` would also catch Add Client, and `.cgadd` would catch the
-   attendee dialog and miss Log a touch. The brief names four modals and 596
-   live records sit behind everything else, so the scope is spelled out rather
-   than inferred from a class that happens to be nearby. */
-
-/* ── THE SCALE, READ OFF THE RECORD PANEL — NOT INVENTED ────────────────
-   The panel's `.f` primitive and `.grid` are a coherent system that has been
-   on screen for months:
-
-     label     11px / 600 / var(--ink-2) / margin-bottom 5px
-     control   padding 9px 11px · 12.5px · radius 8 · MIN-HEIGHT 36px
-     pairs     grid 1fr 1fr · gap 14px 16px
-     full      grid-column 1 / -1
-     section   .sechead, margin 24px 0 12px
-
-   The modals were a NEAR-MISS of every one of those, which is what reads as
-   badly made:
-
-     label     700, not 600           — a different weight, same size
-     control   padding 8px 10px       — 1px narrower on both axes
-     control   no min-height          — a select and an input differ in height
-                                        on the same row, so a "pair" measured
-                                        at the same TOP still has two bottoms
-     pairs     gap 4px 14px           — a 14px gutter beside the panel's 16
-     body      padding 16px 18px 20px — an 18px left edge under a 16px header
-
-   🔴 THAT LAST ONE IS THE "EDGES" COMPLAINT, exactly. `.previewhead` pads
-   16px and `.movebody` pads 18px, so the title and the first label have never
-   started at the same x. Nothing about the inputs could reveal it. */
 .rfmodal .movebody{padding:18px 22px 22px;gap:0;}
 .rfmodal .previewhead{padding:14px 22px;}
 .rfmodal .moveacts{padding:14px 22px;}
 
-/* ── ROUND 132 · cross-account transfer ─────────────────────────────────────
-   ⚠️ THE SHELL IS BORROWED AND THE CONTENT IS NOT. `.previewmodal`,
-   `.movebox`, `.previewhead`, `.movebody`, `.moveacts`, `.ighost` and
-   `.cgsave` are the six dialogs' existing furniture — the first draft of this
-   file invented `.moveback` and `.movego`, which is round 120's and round
-   130's fault exactly, and they were caught by grepping the stylesheet before
-   shipping rather than by the sweep. */
 .tfnote{font-size:12px;line-height:1.55;color:var(--ink-2);background:var(--plum-soft);border:1px solid var(--plum-line);border-radius:9px;padding:9px 12px;margin-bottom:12px;}
 .tfroute{border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:12px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--ink);}
 .tflabel{display:inline-block;min-width:96px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);}
-/* 🔴 A REFUSAL IS NOT A FAULT. Same rule as ApiError.refusal: this is the app
-   declining on purpose and saying what to do, so it must not be dressed as a
-   crash the way round 119 found "choose a scope" dressed. */
+
 .tfrefuse{font-size:12.5px;line-height:1.55;color:var(--ink);background:var(--wait-soft);border:1px solid #f0dcae;border-radius:9px;padding:10px 12px;margin-bottom:12px;}
 .tfrefuse b{display:block;margin-bottom:4px;}
 .tfcount{font-size:12.5px;color:var(--ink-2);margin-bottom:8px;}
@@ -1967,12 +1404,9 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .tfbad{font-size:12.5px;font-weight:700;color:var(--blk);background:var(--blk-soft);border:1px solid #f3c9c9;border-radius:9px;padding:9px 12px;margin-bottom:10px;}
 .tfsteps{margin:0 0 12px;padding-left:20px;font-size:12px;line-height:1.6;color:var(--ink);display:flex;flex-direction:column;gap:4px;}
 .tfsteps li{overflow-wrap:anywhere;}
-/* ROUND 133 — the short reason beside a disabled Send. `margin-right:auto`
-   pushes it to the left of the button pair rather than letting a long sentence
-   shove Cancel off the row; `.moveacts` is `justify-content:flex-end`. */
+
 .tfwhynot{flex:1 1 auto;margin-right:auto;font-size:11.5px;line-height:1.4;color:var(--wait);text-align:left;}
 
-/* Label, control and hint on ONE left edge, with the panel's own numbers. */
 .rfmodal .movebody .irow{display:block;}
 .rfmodal .movebody .irow label,
 .rfmodal .irow2 label,
@@ -1985,43 +1419,25 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfmodal .irow2 input:not([type="checkbox"]):not([type="radio"]),
 .rfmodal .rfvaluebox input{width:100%;min-width:0;box-sizing:border-box;
   padding:9px 11px;font-size:12.5px;border-radius:8px;min-height:36px;}
-/* ⚠️ A TEXTAREA IS THE ONE CONTROL min-height MUST NOT PIN — `rows` decides
-   its height, and 36px would fight it. It keeps the padding and the radius. */
+
 .rfmodal .movebody .irow textarea{min-height:0;}
 
-/* The panel's pair geometry, to the pixel. */
 .rfmodal .irow2{gap:14px 16px;}
-/* One rhythm between blocks: the gap that `.movebody` used to provide is now
-   carried by the rows themselves, so a paired row and a full-width row sit the
-   same distance apart. */
+
 .rfmodal .movebody > .irow,
 .rfmodal .movebody > .irow2,
 .rfmodal .movebody > .rfgroup > .irow,
 .rfmodal .movebody > .rfgroup > .irow2{margin-bottom:14px;}
 .rfmodal .movebody > *:last-child{margin-bottom:0;}
-/* Hints hang off the control above them, not float between blocks. */
+
 .rfmodal .rfdhint{margin:-8px 0 14px;}
 .rfmodal .rfglab + .rfdhint{margin:2px 0 10px;}
 .rfmodal .pffnote,.rfmodal .rfvalue .rfdhint{margin:5px 0 0;}
-/* Section headings on the panel's own rhythm. */
+
 .rfmodal .rfglab{margin:18px 0 10px;padding-top:14px;}
 .rfmodal .movebody > .rfgroup:first-child > .rfglab,
 .rfmodal .movebody > .rfglab:first-child{margin-top:0;padding-top:0;border-top:0;}
 
-/* 🔴 AND THE SCREENSHOT FOUND WHAT THE MEASUREMENTS COULD NOT:
-   THE PAIRED INPUTS HAVE NO BORDER. Not a subtle one — none at all.
-
-   `.irow select,.irow input{border:1px solid var(--line);background:…}` is the
-   rule that makes a control look like a control, and `.irow2` is a SIBLING
-   class, not a child of `.irow` (globals.css:874 sets only width and
-   min-width). So every short field 115c paired — first name, last name,
-   phone, category, tier, division, owner, venue, date, cost — has rendered as
-   naked placeholder text on the modal's own background since the day it was
-   built.
-
-   ⚠️ 117 COUNTED THOSE CONTROLS AND MEASURED THEIR TOPS. Every number was
-   right. "6 controls in 4 rows, 2 paired" is true of an invisible box. That is
-   the whole argument for the screenshot. */
 .rfmodal .movebody .irow2 input:not([type="checkbox"]):not([type="radio"]),
 .rfmodal .movebody .irow2 select,
 .rfmodal .movebody .irow2 textarea,
@@ -2034,29 +1450,15 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfmodal .movebody textarea:focus{border-color:var(--plum);
   box-shadow:0 0 0 3px var(--plum-soft);}
 
-/* ⚠️ AND ONE LABEL SHOUTED WHILE THE OTHERS SPOKE. `.rfvalue > label` is
-   uppercase and letter-spaced — so "ESTIMATED MONTHLY VALUE" sat beside
-   "Phone" on the same row in a different voice. The emphasis this field is
-   owed is the `$` and the `/mo`, which it keeps; its LABEL matches its
-   neighbour. */
 .rfmodal .rfvalue > label{text-transform:none;letter-spacing:0;font-weight:600;
   margin-bottom:5px;}
-/* 🔴 AND THE NUMBER ITSELF COMES DOWN TO THE ROW'S HEIGHT. At 22px/800 inside
-   a flex box, the value control ended 12px below the phone input beside it —
-   the "ragged row" the screenshot proof measures. It stays visibly the money
-   field through the affixes and its own weight, at the height of every other
-   control on the screen. */
+
 .rfmodal .rfvaluebox{gap:8px;}
 .rfmodal .rfvaluebox input{flex:1 1 auto;font-size:14px;font-weight:700;
   padding:9px 11px;min-height:36px;box-sizing:border-box;letter-spacing:0;}
 .rfmodal .rfvaluecur{font-size:14px;}
 .rfmodal .rfvaluemo{font-size:12px;}
 
-/* ⚠️ min-height IS NOT ENOUGH FOR EVERY CONTROL. A native `input[type=date]`
-   carries a calendar button and a `select` its own chrome, so at the same
-   padding they render 2px taller than a text input — which is the "ragged
-   row" the screenshot proof measures on Venue/Date and Cost/Division. A fixed
-   height with border-box pins all three to the panel's 36px. */
 .rfmodal .movebody .irow input:not([type="checkbox"]):not([type="radio"]),
 .rfmodal .movebody .irow select,
 .rfmodal .movebody .irow2 input:not([type="checkbox"]):not([type="radio"]),
@@ -2064,21 +1466,11 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfmodal .rfvaluebox input{height:36px;box-sizing:border-box;}
 .rfmodal .movebody textarea{height:auto;}
 
-/* ROUND 120 · ITEM 1 — the Recruiting heading-as-control.
-   ⚠️ IT BORROWS .rfhead / .rfdiv / .rfdivpop rather than copying them, so the
-   two switchers in the app cannot drift apart. These are the only differences:
-   it sits in the page header rather than a section body, so it loses the
-   bottom margin the Referrals one needs, and its options carry a hint. */
-/* ⚠️ NOT `.cghead` — THAT NAME WAS TAKEN, and the sweep caught it within the
-   round. CaregiversSection uses `.sechead cghead` for the linked-caregivers
-   heading inside the record panel; borrowing the same class would have given
-   one class two meanings and moved a heading nobody asked me to touch. */
 .rechead{margin:0;}
 .rechead .rfdivname{display:inline-flex;align-items:center;gap:8px;}
 .rechead > small{display:block;margin-top:2px;}
 .cghint{display:block;font-size:11px;font-weight:400;color:var(--ink-3);margin-top:1px;}
 
-/* ROUND 120 · ITEM 1 — the recruiting-group control, on the scope row's rhythm. */
 .pfgroupedit{flex:1 1 100%;display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:8px;}
 .pfgroupedit label{font-size:10.5px;font-weight:700;letter-spacing:.05em;
   text-transform:uppercase;color:var(--ink-3);}
@@ -2086,16 +1478,11 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
   font:inherit;font-size:12.5px;background:var(--bg);color:var(--ink);}
 .pfgroupedit .ihint{margin:0;font-size:11px;color:var(--ink-3);}
 
-/* ROUND 120 · ITEM 3 — an attributed case's name, when the record is loaded. */
 .rfoppopen{background:none;border:0;padding:0;font:inherit;text-align:left;
   color:var(--plum);cursor:pointer;text-decoration:underline;
   text-decoration-color:transparent;transition:text-decoration-color .12s;}
 .rfoppopen:hover{text-decoration-color:currentColor;}
 
-/* ROUND 121 · ITEM 5 — the contact listing, collapsed.
-   ⚠️ THE GUARD IS REQUIRED. `.pfcontacts` is display:grid, and round 119
-   measured that an author `display` on a direct child beats the browser's
-   collapse — three <details> on this page were rendering open. */
 .pfcontacts-wrap{margin-top:20px;border:1px solid var(--line);border-radius:10px;
   background:var(--bg);overflow:hidden;}
 .pfcontacts-wrap:not([open]) > :not(summary){display:none;}
@@ -2110,27 +1497,15 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .pfcwcount{margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-3);}
 .pfcontacts-wrap .pfgovern,.pfcontacts-wrap .pfcontacts{margin:0 13px 13px;}
 
-/* ROUND 121 — the Recruiting heading is an <h1> again, with the control inside
-   it. ⚠️ The h1 carries no box of its own: the button is the visible heading,
-   so the wrapper must not add margin or a second font size. */
 .rechead-h{margin:0;font:inherit;display:block;}
 
-/* ROUND 121b · ITEM 3 — "the pipelines are empty", said once, above the board. */
 .cgempty{margin:6px 0 0;font-size:11.5px;color:var(--ink-3);}
 
-/* ANALYSIS 104 · 19 — a focus ring on the controls that just became reachable.
-   ⚠️ A CONTROL THAT CAN BE FOCUSED AND DOES NOT SAY SO is only half-reachable:
-   a keyboard user can operate it and cannot see where they are. */
 .rftable th[tabindex]:focus-visible,
 .rftable tr[role="button"]:focus-visible,
 .rfdrawer:focus-visible{outline:2px solid var(--plum);outline-offset:-2px;}
 .rftable th[tabindex]{cursor:pointer;}
 
-/* ── TASK 1 · case managers, the Access tab's second section ─────────────────
-   🔴 THE TWO COUNTS ARE CONTROLS AND MUST NOT READ AS THE GRID'S OWN COUNT
-   LINE. A number that filters and a number that is just a number looking the
-   same is the whole reason this has a pressed state, a border and a pointer —
-   `.pacount` above is the plain kind and deliberately shares nothing with it. */
 .cmhead{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;margin:26px 0 4px;padding-top:18px;border-top:1px solid var(--line);}
 .cmtitle{font-size:14px;font-weight:800;color:var(--plum-deep);letter-spacing:-.01em;}
 .cmcounts{display:flex;align-items:baseline;gap:6px;}
@@ -2140,10 +1515,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .cmcount.on{background:var(--plum-deep);border-color:var(--plum-deep);color:#fff;}
 .cmdot{color:var(--ink-3);}
 .cmintro{margin-bottom:12px;}
-/* 🔴 ROUND 171 · ITEM 5 — COLUMN HEADINGS AND A PER-ROW PREVIEW.
-   Round 162's rule: distinct class names per section. These are `cmcol*` and
-   `cmpreview`, used nowhere else, so restyling the case-manager list cannot
-   reach the pipeline grid or the referral-access list beneath it. */
+
 .cmcolhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px;padding:0 12px 5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
 .cmcolwho{flex:0 0 190px;}
 .cmcolwhat{flex:1 1 240px;}
@@ -2169,11 +1541,6 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .cmpicknone{font-size:12px;color:var(--ink-3);padding:8px 9px;}
 .cmpickclose{margin-top:7px;font-size:11.5px;}
 
-/* ROUND 162 — referral access. Three states per user, on the Access tab.
-   🔴 ITS OWN CLASSES, NOT `.cmlist`/`.cmrow`/`.cmchip`. Reusing those for their
-   layout broke task1-tab, which addresses case-manager rows by class across the
-   whole document: `.cmrow:not(.cmnew)` started returning 17 rows instead of 5.
-   A class a proof selects on carries identity, not just style. */
 .rfalist{display:flex;flex-direction:column;gap:6px;margin-top:14px;}
 .rfarow{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px;padding:7px 0;
   border-top:1px solid var(--line);}
@@ -2183,28 +1550,12 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfalevel,.rfachip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
   font-weight:600;color:var(--ink-soft);background:var(--paper);
   border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;}
-/* 🔴 THE SELECTED STATE IS NOT COLOUR ALONE — the label text carries it
-   ("Derived" / "Divisions" / "Agency — all") and the control is a real radio or
-   checkbox, so a screen reader and a colour-blind reader both get the answer. */
+
 .rfalevel.on,.rfachip.on{color:var(--plum);background:var(--plum-soft);border-color:var(--plum-line);}
 .rfalevel input,.rfachip input{margin:0;}
-/* A granted division whose pipeline is gone: visible, removable, and marked. */
+
 .rfachip.orphan{border-style:dashed;color:var(--ink-soft);}
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   MOVES — stage-log KPI, round 165.
-
-   ⚠️ EVERY CLASS IS `mv`-PREFIXED, for the reason spelled out at the Referrals
-   block above: round 88 shipped a colliding `.iskip`, round 98 found a
-   duplicate `.addsec`, and round 162 broke task1-tab by reusing `.cmlist` and
-   `.cmrow` for a second list. A whole section of generic names (.notes, .cols,
-   .bar, .row, .who) would have been the fourth. `.mv` is not used anywhere
-   else — swept before writing this.
-   ═══════════════════════════════════════════════════════════════════════════ */
-/* ⚠️ PADDING ONLY — the scrolling comes from `.scroll` beside it in the JSX,
-   which is the same pairing the admin screens use (`.scroll adminscroll`).
-   Written here because `.mvwrap` alone looks complete and is not: without a
-   scrolling ancestor this view is clipped by `.main`'s overflow:hidden. */
 .mvwrap{padding:18px 22px 40px}
 .mvhead{display:flex;align-items:center;gap:16px;margin:0 0 14px}
 .mvtitle{margin:0;font-size:19px;font-weight:700;color:var(--ink)}
@@ -2214,9 +1565,6 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .mvseg button+button{border-left:1px solid var(--line)}
 .mvseg button.on{background:var(--plum-soft);color:var(--plum);font-weight:700}
 
-/* 🔴 THE CAVEATS ARE NOT SMALL PRINT. Every sentence here exists because the
-   number above it is wrong without it, so they are set at reading size in the
-   normal ink — not greyed out at 9px where they would be decoration. */
 .mvnotes{max-width:820px;margin:0 0 20px;padding:12px 14px;background:var(--plum-soft);
   border:1px solid var(--plum-line);border-radius:var(--radius)}
 .mvnotes p{margin:0 0 7px;font-size:12px;line-height:1.55;color:var(--ink-2)}
@@ -2230,9 +1578,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
   align-items:start}
 .mvcol h3{margin:0 0 10px;font-size:12px;font-weight:700;text-transform:uppercase;
   letter-spacing:.06em;color:var(--plum);display:flex;flex-direction:column;gap:3px}
-/* The disclaimer belongs IN the heading, not under the table: it changes what
-   the column means, and a reader who scrolls past the bottom has already
-   misread it. */
+
 .mvsub{font-size:10.5px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--ink-3)}
 
 .mvlist{list-style:none;margin:0;padding:0}
@@ -2253,20 +1599,9 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .mvclust ul{margin:0;padding-left:18px}
 .mvclust li{font-size:12px;color:var(--ink);margin-bottom:3px}
 
-/* 🔴 A DAYS-IN-STAGE THAT CAME FROM GOHIGHLEVEL'S DATE RATHER THAN THE STAGE
-   LOG. Same pill, lighter, prefixed "~" in the markup — a bulk edit can move
-   that date without the record moving, so the number is approximate and must
-   not sit beside a recorded one looking identical. */
 .mage.approx{border-style:dashed;color:var(--ink-3)}
 .mage.stale.approx{color:var(--blk);border-color:#f3c6bf;border-style:dashed}
 
-/* ═══ ROUND 167 · B8 — WHY YOU CAN SEE THIS PARTNER OR EVENT ════════════════
-   ⚠️ `rf`-PREFIXED like everything else in the Referrals section, for the
-   reason at the top of that block. Swept before writing: no `.rfdivtag` existed.
-   🔴 THE ORDINARY CASE IS QUIET AND THE TWO LEAKS ARE NOT. "ODP" is a fact and
-   reads as one; "No division · visible to everyone" is a thing somebody should
-   fix, so it carries the same warning colour the withheld note uses. A tag that
-   looked identical in all four states would be decoration. */
 .rfdivtag{display:inline-block;margin:3px 0 0;padding:1px 7px;border-radius:20px;
   font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   background:var(--plum-soft);color:var(--plum);border:1px solid var(--plum-line)}
@@ -2276,10 +1611,6 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .rfdivtag-mine{background:var(--gold-soft);color:var(--gold-ink);border-color:#f0dcb4;
   text-transform:none;letter-spacing:0;font-size:10px}
 
-/* ═══ ROUND 168 — THE RECORD FOOTER AND THE CREATED COLUMN ══════════════════
-   ⚠️ Swept before writing: no `.recfoot*` or `.createdcell` existed. The
-   footer is `rec`-prefixed rather than reusing `.sysinfo`, which is a
-   <details> with its own summary chrome — the footer must not collapse. */
 .recfoot{margin-top:18px;padding:12px 14px;background:var(--canvas);
   border:1px solid var(--line);border-radius:var(--radius)}
 .recfootrow{display:flex;gap:10px;align-items:baseline;padding:2px 0;font-size:11.5px}
@@ -2291,32 +1622,18 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .recfootcopy{border:1px solid var(--plum-line);background:var(--plum-soft);color:var(--plum);
   font:inherit;font-size:10px;font-weight:700;padding:1px 7px;border-radius:5px;cursor:pointer}
 .recfootcopy:hover{background:var(--plum);color:#fff;border-color:var(--plum)}
-/* One line for the whole block, not a zone label on every row. */
+
 .recfoothint{margin-top:7px;font-size:10.5px;color:var(--ink-3)}
 .recfootbad{color:var(--blk)}
 
-/* A timestamp must not wrap mid-value — "Sep 30 2026," on one line and
-   "11:34pm" on the next reads as two dates. */
 .createdcell{white-space:nowrap;font-size:11.5px;color:var(--ink-2)}
 
-/* ═══ ROUND 169 — "SAVED, BUT DIFFERENTLY" ══════════════════════════════════
-   🔴 NOT `.savemsg` AND NOT <ErrorMessage>'s STYLING. The first is "Saving…",
-   ephemeral grey chrome; the second is red and says the save failed. This one
-   says the save WORKED and the result differs from what was typed — amber, the
-   same language `.rfdivtag-none` uses for "this is worth a look, nothing is
-   broken". Swept: no `.savewarn` existed. */
 .savewarn{margin-top:5px;font-size:11px;line-height:1.5;color:var(--gold-ink);
   background:var(--gold-soft);border:1px solid #f0dcb4;border-radius:6px;padding:5px 8px}
 .savewarn b{color:var(--gold-ink)}
 
-/* ROUND 170 — the rename hint. Quieter than the scope line above it: that one
-   says what the field IS, this one warns about a normalisation. Swept: no
-   `.renamehint` existed. */
 .renamehint{display:block;margin-top:4px;color:var(--ink-3)}
 
-/* ═══ ROUND 171 · ITEM 4 — "new person" vs "someone already here" ═════════
-   🔴 OWN PREFIX, round 162's rule. `pm*` (person met) appears nowhere else,
-   so restyling this dialog cannot reach the partner forms beside it. */
 .pmmodes{display:flex;gap:6px;margin:0 0 12px;}
 .pmmode{flex:1 1 auto;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;}
 .pmmode.on{background:var(--ink);border-color:var(--ink);color:#fff;}
@@ -2327,26 +1644,19 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .pmmeta{font-size:11.5px;color:var(--muted);}
 .pmpicked{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 10px;margin-bottom:10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
 .pmpicked>b{font-size:12.5px;}
-/* 🔴 A REFUSAL, NOT A FAULT — round 119 item 3. It reads as a question with
-   two answers, which is what it is, rather than as an error. */
+
 .pmconflict{margin:10px 0 0;padding:10px 12px;border:1px solid var(--warn-line,#e3c08a);border-radius:9px;background:var(--warn-bg,#fdf7ec);font-size:12.5px;color:var(--ink);}
 .pmconflictacts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:9px;}
 
-/* ═══ ROUND 174 · THE MOVES KPIs ══════════════════════════════════════════
-   🔴 OWN PREFIX, round 162's rule. `kpi*` appears nowhere else, so restyling
-   these tables cannot reach the `mv*` blocks above them or the master tiles. */
 .kpifilters{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;font-size:12px;}
 .kpifilters label{font-weight:600;color:var(--muted);}
 .kpifilters select,.kpifilters input{padding:5px 8px;border:1px solid var(--line);border-radius:7px;font-size:12px;background:#fff;}
-/* 🔴 THE DENOMINATOR TRAVELS WITH THE FILTERS, not in a footnote. A metric
-   owes its reader the same disclosure a filtered list does. */
+
 .kpiden{margin-left:auto;font-size:11.5px;color:var(--muted);}
 .kpiblock{margin:18px 0 0;padding-top:14px;border-top:1px solid var(--line);}
 .kpiblock h3{margin:0 0 4px;font-size:13px;font-weight:700;color:var(--ink);}
 .kpiblock h4{margin:12px 0 4px;font-size:12px;font-weight:700;color:var(--muted);}
-/* 🔴 CAUGHT BY loader-sweep: used in JSX and defined nowhere, which renders as
-   an unstyled element and reads like a layout bug rather than a missing class.
-   One pipeline's funnel per block, separated so two tables do not run together. */
+
 .kpifunnel{margin-bottom:14px;}
 .kpifunnel:last-child{margin-bottom:0;}
 .kpinote{margin:0 0 10px;font-size:11.5px;line-height:1.5;color:var(--muted);}
@@ -2354,9 +1664,7 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .kpitable th{text-align:left;padding:4px 8px;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);}
 .kpitable td{padding:5px 8px;border-bottom:1px solid var(--line);}
 .kpitable td:first-child{color:var(--ink);}
-/* ⚠️ THE APPROXIMATE ROW IS VISIBLY NOT ONE OF THE OTHERS. It sits in the same
-   table because it answers the same question, and it must never read as a
-   measured figure. */
+
 .kpiapprox td{background:var(--wash,#f7f8fa);color:var(--muted);font-style:italic;}
 .kpinum{border:0;background:transparent;padding:0;font:inherit;font-weight:700;color:var(--link,#1a56b8);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}
 .kpinum:disabled{color:var(--muted);cursor:default;text-decoration:none;font-weight:400;}
@@ -2367,26 +1675,16 @@ html:not([data-rail="expanded"]) .rail .railopenlabel{display:none;}
 .kpicase{display:block;width:100%;padding:6px 4px;border:0;background:transparent;text-align:left;font:inherit;font-size:12px;color:var(--ink);cursor:pointer;}
 .kpicase:hover{background:var(--wash,#f4f5f7);}
 
-/* ═══ ROUND 175 · ITEM 3 — "Saved: {org}" beside the list ═════════════════
-   🔴 OWN PREFIX, round 162's rule. `rfsaved*` appears nowhere else. */
 .rfsaved{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px;margin:8px 0 0;padding:7px 10px;border:1px solid var(--ok-line,#bcd9c0);border-radius:8px;background:var(--ok-bg,#f2f9f3);font-size:12.5px;font-weight:700;color:var(--ink);}
 .rfsavedwhy{font-weight:400;font-size:11.5px;color:var(--muted);}
 .rfsavedx{margin-left:auto;border:0;background:transparent;font-size:14px;line-height:1;color:var(--muted);cursor:pointer;padding:0 2px;}
 
-/* ROUND 185 — "Show N empty sections", under the last contact section.
-   Same quiet text button as "Show N empty fields"; a little more room above so
-   it reads as closing the Contact block rather than belonging to the section
-   just before it. */
 .addfield.emptysections{margin:12px 0 4px;}
 
-/* ROUND 185 — a partner field shows the partner's name, not their id. */
 .partnername{font-weight:600;color:var(--ink);}
 
-/* ROUND 185 — a caregiver section with every field filled in. Green, quietly,
-   so a complete section is recognisable at a glance without shouting. */
 .sechead.sectoggle .seccount.complete{color:#1f7a4d;background:#eaf6ef;border-color:#bfe3cf;}
 
-/* ROUND 188 — the "Created" filter: date boxes sized like the selects beside them. */
 .createdfilter input[type="date"]{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);box-shadow:var(--shadow-sm);}
 .createdfilter input[type="date"]:focus{border-color:var(--plum);outline:none;box-shadow:0 0 0 3px var(--plum-soft);}
 .createdfilter .createdto{color:var(--ink-3);}

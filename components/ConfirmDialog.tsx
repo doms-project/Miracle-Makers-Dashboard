@@ -2,22 +2,6 @@
 
 import ErrorMessage from "./ErrorMessage";
 
-// ITEM 2 — an in-app confirmation, same shape as the Move dialog.
-//
-// This replaces `window.confirm()`, which was wrong here for three reasons, the
-// third of which was breaking the feature outright:
-//
-//   1. it can't be styled, so it reads as a browser warning rather than part of
-//      the app;
-//   2. it blocks the whole tab and can only show one line of plain text — no
-//      room to say what "removed" actually means;
-//   3. THE DASHBOARD RUNS INSIDE AN IFRAME in GoHighLevel (lib/useGhlSession.ts
-//      talks to `window.parent` over postMessage). A sandboxed iframe without
-//      `allow-modals` makes `confirm()` return FALSE without ever prompting —
-//      so the caller bails out and NOTHING HAPPENS, silently. That is the
-//      reported symptom exactly.
-//
-// Never use window.confirm / alert / prompt in this app. Use this.
 export default function ConfirmDialog({
   title,
   body,

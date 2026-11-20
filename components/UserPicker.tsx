@@ -8,24 +8,6 @@ export interface PickableUser {
   divisions?: string[];
 }
 
-// ITEM 2 — replaces the native <select> for owner / follower.
-//
-// The problem: a native <option> is one line of unstyleable text, so a GHL name
-// that already carries a role suffix plus the division ran together as
-//
-//     "Jhune Manalaysay - Onboarding — —"
-//
-// Option (b) was chosen: name on its own line, division as a muted chip below.
-// Same shape as the caregiver typeahead already in the panel, so it reuses that
-// visual language (and most of its CSS).
-//
-// The role suffix is deliberately KEPT rather than stripped: it disambiguates
-// two people who share a first name, and it is no longer competing for the same
-// line as the division, which was the actual complaint.
-//
-// Expect a lot of "No division" — only a handful of the location's users are
-// mapped in the access map. That is accurate, not a bug, so it reads as a quiet
-// muted label rather than an em dash that looks like a rendering fault.
 export default function UserPicker({
   users,
   value,
@@ -43,8 +25,7 @@ export default function UserPicker({
   placeholder?: string;
   allowUnassigned?: boolean;
   emptyLabel?: string;
-  // When set, the button always shows this instead of the selection — used by
-  // the "+ Add follower…" case, which is an action rather than a value.
+
   triggerLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -62,8 +43,7 @@ export default function UserPicker({
         setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      // Stop Escape here — the panel also listens for it, and closing the whole
-      // record because you dismissed a dropdown would be its own bug.
+
       if (e.key === "Escape") {
         e.stopPropagation();
         setOpen(false);

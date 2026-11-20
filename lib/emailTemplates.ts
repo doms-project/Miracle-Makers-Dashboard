@@ -1,21 +1,8 @@
-// Task 5 — the reusable email templates ("~10 rotating emails" per Lamarr).
-//
-// These live in config because GHL template listing via the PIT is not
-// confirmed API-listable (see scripts/email-probe.mjs). If Step 0 shows GHL
-// templates ARE listable, the email route can merge them in; until then this is
-// the single source of truth. Jack/Lamarr supply the real copy — replace the
-// placeholder subject/body below, keeping the {{tokens}}.
-//
-// Supported tokens (substituted at populate time, client-side):
-//   {{clientFirst}} {{clientLast}} {{clientName}} {{caregiverName}}
-//   {{office}} {{stage}}
-// Unknown/empty tokens render as an empty string.
-
 export interface EmailTemplate {
   id: string;
   name: string;
   subject: string;
-  body: string; // HTML or plain text; newlines are converted to <br> on send
+  body: string;
 }
 
 export const EMAIL_TEMPLATES: EmailTemplate[] = [

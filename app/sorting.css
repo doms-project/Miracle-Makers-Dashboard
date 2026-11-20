@@ -1,16 +1,3 @@
-/* ROUND 197 — its own stylesheet, so spacing.css stays scoped to round 195
-   (round195-proof checks that). */
-/* ═══ ROUND 197 — New Leads (to sort), Staffing needed lead, Sort / Assign ═══
-   One text size (12px) and 28px controls throughout, as agreed. */
-/* ═══ ROUND 198 — the sorting tabs, redesigned ════════════════════════════
-   Bigger, plainer labels (13px body, 15px title); lighter weights (500/600,
-   no 800s); a search box of normal width; columns the width of every other
-   board's (.col = 264px). */
-/* 🔴 ROUND 198 — IT MUST SCROLL. .main is a flex column with overflow:hidden,
-   so the tab has to TAKE the remaining height (flex:1 + min-height:0) to own a
-   scrollbar; and its children must not shrink — the list box has
-   overflow:hidden (for its rounded corners), so a shrinking list was clipped
-   to the screen and the rows below simply disappeared. */
 .sorttab{flex:1 1 auto;display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 22px 28px;}
 .sorttab > *{flex-shrink:0;}
 .sorthead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px 24px;flex-wrap:wrap;}
@@ -20,7 +7,7 @@
 .sortkey li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--bg);white-space:nowrap;}
 .sortkey b{font-weight:600;color:var(--plum-deep);}
 .sortmuted{color:var(--ink-3);font-weight:400;font-size:12px;}
-/* the numbers */
+
 .sortstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;}
 .sortstat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg);min-width:0;}
 .sortstat.wide{grid-column:span 2;}
@@ -34,7 +21,7 @@
 .sortsplit b{color:var(--plum);font-weight:600;margin-left:3px;}
 .sortsplit span.staff{background:var(--gold-soft);color:var(--gold-ink);}
 .sortsplit span.staff b{color:var(--gold-ink);}
-/* search, pipelines, show / sort / group */
+
 .sorttools{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;}
 .sortsearchwrap{flex:0 1 340px;min-width:220px;}
 .sortsearchwrap .search{position:relative;gap:6px;height:34px;padding:0 10px 0 12px;box-sizing:border-box;min-width:0;width:100%;}
@@ -56,7 +43,7 @@
 .sortsel select{height:32px;font-size:12.5px;border:1px solid var(--line);border-radius:8px;padding:0 28px 0 10px;color:var(--ink);
   -webkit-appearance:none;-moz-appearance:none;appearance:none;
   background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23948aa6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center/10px 6px;}
-/* list */
+
 .sortdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold);flex:0 0 8px;}
 .sortpill{display:inline-block;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;white-space:nowrap;color:var(--ink-2);background:var(--bg);max-width:100%;overflow:hidden;text-overflow:ellipsis;}
 .sortpill.pipe{background:var(--canvas);border-color:transparent;}
@@ -75,7 +62,7 @@
 .sortgrouphead{display:flex;gap:8px;align-items:center;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--plum-deep);background:var(--plum-soft);border-top:1px solid var(--plum-line);}
 .sortgrouphead span{font-weight:500;color:var(--ink-3);}
 .sortfootline{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--line-soft);font-size:12px;color:var(--ink-3);}
-/* the Sort-to buttons: icon above label */
+
 .sortseg{display:flex;border:1px solid var(--plum-line);border-radius:9px;overflow:hidden;min-width:0;background:var(--bg);}
 .sortseg button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 0 4px;font-size:12px;font-weight:500;line-height:1.1;color:var(--ink-2);background:var(--bg);border:0;border-right:1px solid var(--line-soft);cursor:pointer;min-width:0;font-family:inherit;}
 .sortseg button:last-child{border-right:0;}
@@ -83,7 +70,7 @@
 .sortseg button:hover:not(:disabled){background:var(--plum-soft);color:var(--plum);}
 .sortseg button.soft{color:var(--ink-3);}
 .sortseg button:disabled{opacity:.4;cursor:not-allowed;}
-/* board: the same column as every other board */
+
 .sortlanes{display:flex;gap:14px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;}
 .sortlane{flex:0 0 264px;width:264px;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);border-radius:12px;max-height:72vh;box-shadow:var(--shadow-sm);}
 .sortlanehead{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;}
@@ -97,7 +84,7 @@
 .sortempty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 20px;text-align:center;color:var(--ink-2);font-size:13px;border:1px dashed var(--line);border-radius:12px;background:var(--bg);}
 .sortempty b{font-weight:500;}
 .sortclear{height:30px;padding:0 12px;border:1px solid var(--plum-line);border-radius:8px;background:var(--plum-soft);color:var(--plum-deep);font-size:12.5px;font-weight:500;cursor:pointer;}
-/* on a pipeline tab: the leads waiting elsewhere — a pill with a pulsing dot */
+
 .sortwaiting{display:flex;flex-wrap:wrap;gap:8px;margin:10px 22px 0;}
 .sortwait{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 14px 0 12px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;}
 .sortwait b{font-weight:700;}
@@ -110,7 +97,7 @@
 .sortwait.new .pulse::after{border-color:var(--gold);}
 @keyframes sortpulse{0%{transform:scale(.5);opacity:.8;}100%{transform:scale(1.6);opacity:0;}}
 @media (prefers-reduced-motion:reduce){.sortwait .pulse::after{animation:none;}}
-/* a pipeline board with nothing on it: one message, no empty columns */
+
 .boardempty{align-items:flex-start;justify-content:center;}
 .boardemptymsg{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:40px;padding:36px 40px;max-width:520px;text-align:center;font-size:13px;color:var(--ink-2);background:var(--bg);border:1px dashed var(--line);border-radius:12px;}
 .boardemptymsg b{font-size:14px;font-weight:600;color:var(--ink);}
@@ -123,7 +110,7 @@
   .sortlanes{flex-direction:column;}
   .sortlane{width:100%;flex:1 1 auto;max-height:none;}
 }
-/* the dialog */
+
 .sortbox,.sortbox input,.sortbox select{font-size:12px;}
 .sortbox .movebody{gap:6px;}
 .sortsub{font-size:11px;color:var(--ink-3);margin-bottom:4px;}
@@ -146,15 +133,13 @@
 .sortbtn{height:28px;padding:0 10px;font-size:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink-2);cursor:pointer;}
 .sortbtn.primary{background:var(--plum);border-color:var(--plum);color:#fff;font-weight:600;}
 .sortbtn:disabled{opacity:.5;cursor:not-allowed;}
-/* ROUND 198 — the sidebar rename box is gone: tabs are renamed on the
-   Pipelines screen (.pfname below). */
-/* ROUND 198 — the source logos on the sorting tabs (the boards' .srcmark) */
+
 .sortname .srcmark{margin:-4px 0 -4px 2px;}
 .sortsrc{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:visible;}
 .sortsrc .srcmark{margin:0;}
 .sortname .srcmark{margin:0 0 0 auto;}
 .sortnosrc{color:var(--ink-3);}
-/* a source with no logo: its initial in a neutral square, the logos' size */
+
 .srcmark.srcunk{width:20px;height:20px;box-sizing:border-box;border-radius:6px;background:var(--canvas);border:1px solid var(--line);
   color:var(--ink-2);font-size:11px;font-weight:600;justify-content:center;vertical-align:middle;}
 .srcmark.srcunk.sm{width:14px;height:14px;font-size:9px;border-radius:4px;}
@@ -163,7 +148,7 @@
 .sortsrcs .srcpick b{color:var(--ink);font-weight:600;}
 .sortsrcs .srcpick .srcmark{margin:0;}
 .sortsrcs .srcpick.on{background:var(--plum-soft);border-color:var(--plum-line);color:var(--plum-deep);}
-/* ROUND 198 — tab names, edited on the Pipelines screen */
+
 .pfnames{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:6px 14px;}
 .pfname{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:8px 0;}
 .pfnames .pfname + .pfname{border-top:1px solid var(--line-soft);}
@@ -177,8 +162,7 @@
 .pfghlname{font-size:11.5px;color:var(--ink-3);}
 .pfrow .pfname{padding:8px 0 4px;}
 @media (max-width:720px){.pfname label{flex-basis:100%;}.pfname .ihint{margin-left:0;}}
-/* ROUND 198 — renaming in the sidebar (admins, double-click): the sidebar's
-   own colours, white text and a white blinking caret. */
+
 .railrenamebox{display:flex;flex-direction:column;gap:3px;padding:2px 0 4px;}
 .rail .railrename{width:100%;height:32px;box-sizing:border-box;font:inherit;font-size:12.5px;font-weight:600;
   color:#fff;caret-color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.45);

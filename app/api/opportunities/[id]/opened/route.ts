@@ -13,25 +13,10 @@ import type { ApiError } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/**
- * 🔴 ROUND 181 — POST: "this person just opened this case."
- *
- * Writes the "First Opened" field ONCE per case (lib/ghl.ts markFirstOpened),
- * which ends the "New lead" label for everybody. Called by the record panel
- * the moment it opens a case that is still a new lead.
- *
- * ⚠️ THE OPENER IS THE SIGNED-IN PERSON, from the SSO blob — never a userId the
- * browser sends. And they must be able to SEE the case (canSeeRecord, the same
- * rule as the panel itself): a rep cannot clear another division's label by
- * posting an id they were never shown.
- *
- * ⚠️ "Nothing to do" is 200 with recorded:false — no field on the account, or
- * somebody opened it first. Only a refusal or a GoHighLevel failure is an error.
- */
 async function handler(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   let body: Record<string, unknown> = {};
-  try { body = (await request.json()) as Record<string, unknown>; } catch { /* no body */ }
+  try { body = (await request.json()) as Record<string, unknown>; } catch {  }
   const blob =
     request.headers.get("x-ghl-sso-key") ||
     (typeof body.ssoKey === "string" ? body.ssoKey : "") ||

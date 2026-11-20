@@ -5,18 +5,6 @@ import ErrorMessage from "./ErrorMessage";
 import { apiError } from "@/lib/apiFetch";
 import type { OpportunityRecord, EditableFieldDef } from "@/lib/types";
 
-// ITEM 3 — SENT OUT.
-//
-// This is deliberately NOT the Move dialog. Dropping on SENT OUT changes no
-// pipeline and no owner: it sets the STAGE to LOST on the record where it
-// already is. Routing that through Move would mean showing a pipeline selector
-// for a thing that isn't a move, and the server's move path stamps
-// Transferred From / Transferred Date and writes a transfer note — none of
-// which is true of a rejection.
-//
-// ⬜ "SENT OUT" is being treated as REJECTED, per the brief. If it turns out to
-// mean something else, this dialog and the column's predicate are the only two
-// places that change.
 export default function MarkLostDialog({
   record,
   stagesByPipeline,
@@ -36,9 +24,6 @@ export default function MarkLostDialog({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
 
-  // The LOST stage of THIS record's own pipeline. Resolved live from the stage
-  // list, never a hardcoded id — and if the pipeline hasn't got one we say so
-  // instead of guessing at a stage and writing the wrong one.
   const lost = useMemo(
     () =>
       (stagesByPipeline[record.pipelineId] || []).find(
@@ -47,20 +32,6 @@ export default function MarkLostDialog({
     [stagesByPipeline, record.pipelineId],
   );
 
-  // ⚠️ THE LOST REASON FIELD IS PER PIPELINE — five of them, and they all live
-  // in the SAME custom-field folder, so folder scoping cannot tell them apart.
-  // They are therefore matched by NAME: among every field whose name looks like
-  // a lost reason, take the one whose name also names this record's pipeline
-  // (or one of its distinguishing words, so "OLTL Enrollment Lost Reason" is
-  // found for the OLTL Enrollment pipeline).
-  //
-  // The ids in the brief are reference only and appear nowhere here — a field
-  // rebuilt in GoHighLevel keeps working, a hardcoded id does not.
-  //
-  // If exactly one lost-reason field exists overall, it is used as-is. If
-  // several exist and none matches this pipeline, NOTHING is written to a field
-  // rather than writing to a neighbouring pipeline's — the reason still goes on
-  // the record as a note, and the dialog says which happened.
   const reasonField = useMemo(() => {
     const lost = fieldDefs.filter(
       (d) => /lost\s*reason/i.test(d.name || "") && d.editable,
@@ -104,9 +75,6 @@ export default function MarkLostDialog({
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) throw apiError(res, j);
 
-      // The note is written AFTER the stage change lands, and its failure is not
-      // allowed to report the whole action as failed — the record IS lost at
-      // this point, and saying otherwise would be worse than a missing note.
       if (reason.trim()) {
         try {
           await fetch(`/api/opportunities/${record.id}/notes`, {
@@ -118,7 +86,7 @@ export default function MarkLostDialog({
             }),
           });
         } catch {
-          /* the stage change is the action; the note is the record of it */
+
         }
       }
       onDone((j.record as OpportunityRecord) || record);
